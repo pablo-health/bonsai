@@ -83,6 +83,17 @@ Once the stack is up:
 
 For the full setup details, configuration options,  see [`compose/README.md`](./compose/README.md).
 
+### Deploy to Google Cloud
+
+To deploy a dev/staging instance on GCP (~$10–15/month):
+
+```bash
+# Using Claude Code? Just run:
+/deploy-gcp
+```
+
+Or follow the step-by-step guide: [Deploy to GCP (Cloud Run + Cloud SQL)](./docs/guide/deployment-gcp.md)
+
 ## Who is Bonsai for?
 
 ### For brands
@@ -226,6 +237,7 @@ Use it to authenticate sessions, start or resume conversations, stream user voic
 ## Documentation
 
 - [Compose quick start](./compose/README.md)
+- [Deploy to GCP](./docs/guide/deployment-gcp.md)
 - [Guide](./docs/guide/index.md)
 - [API reference](./docs/api/index.md)
 - [Contributing](./CONTRIBUTING.md)
