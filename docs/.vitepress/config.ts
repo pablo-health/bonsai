@@ -79,6 +79,7 @@ export default withMermaid({
           text: 'Security',
           items: [
             { text: 'Authentication', link: '/guide/authentication' },
+            { text: 'Secrets Management', link: '/guide/secrets' },
           ],
         },
       ],
@@ -127,6 +128,7 @@ export default withMermaid({
             { text: 'Providers', link: '/api/providers' },
             { text: 'Provider Catalog', link: '/api/provider-catalog' },
             { text: 'API Keys', link: '/api/api-keys' },
+            { text: 'Secrets', link: '/api/secrets' },
             { text: 'Environments', link: '/api/environments' },
             { text: 'Migration', link: '/api/migration' },
             { text: 'Audit Logs', link: '/api/audit-logs' },
