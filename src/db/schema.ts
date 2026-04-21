@@ -499,6 +499,17 @@ export const savedFunnelQueries = pgTable('saved_funnel_queries', {
 
 export type ArtifactType = 'user_voice' | 'user_transcript' | 'ai_voice' | 'ai_transcript' | 'tool_input' | 'tool_output' | 'other';
 
+// Secrets table — stores AES-256-GCM encrypted secret values
+// Each row holds a single encrypted value; the ID is embedded in `@sec:name:id` references
+export const secrets = pgTable('secrets', {
+  id: text('id').primaryKey(),
+  encryptedValue: text('encrypted_value').notNull(),
+  iv: text('iv').notNull(),
+  tag: text('tag').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 // ConversationArtifact table
 export const conversationArtifacts = pgTable('conversation_artifacts', {
   id: text('id').notNull(),

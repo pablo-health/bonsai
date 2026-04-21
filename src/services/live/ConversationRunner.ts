@@ -302,7 +302,7 @@ export class ConversationRunner {
     if (stage.llmProviderId) {
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, stage.llmProviderId) });
       if (llmProviderEntity) {
-        stageData.completionLlmProvider = this.llmProviderFactory.createProvider(llmProviderEntity, stage.llmSettings);
+        stageData.completionLlmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, stage.llmSettings);
         stageData.completionLlmProviderInfo = { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType };
       }
     }
@@ -339,7 +339,7 @@ export class ConversationRunner {
         throw new NotFoundError(`Classifier with ID ${classifierId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, classifier.llmProviderId) });
-      const llmProvider = this.llmProviderFactory.createProvider(llmProviderEntity, classifier.llmSettings);
+      const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, classifier.llmSettings);
       stageData.classifiers.push({ classifier, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
 
@@ -352,7 +352,7 @@ export class ConversationRunner {
         throw new NotFoundError(`Transformer with ID ${transformerId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, transformer.llmProviderId) });
-      const llmProvider = this.llmProviderFactory.createProvider(llmProviderEntity, transformer.llmSettings);
+      const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, transformer.llmSettings);
       stageData.transformers.push({ transformer, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
 
@@ -416,7 +416,7 @@ export class ConversationRunner {
         const guardrailLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, guardrailClassifierEntity.llmProviderId) });
         stageData.guardrailClassifier = {
           classifier: guardrailClassifierEntity,
-          llmProvider: this.llmProviderFactory.createProvider(guardrailLlmProviderEntity, guardrailClassifierEntity.llmSettings),
+          llmProvider: await this.llmProviderFactory.createProvider(guardrailLlmProviderEntity, guardrailClassifierEntity.llmSettings),
           llmProviderInfo: { id: guardrailLlmProviderEntity.id, apiType: guardrailLlmProviderEntity.apiType },
         };
       } else {
@@ -445,7 +445,7 @@ export class ConversationRunner {
           const sampleCopyLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, sampleCopyClassifierEntity.llmProviderId) });
           stageData.sampleCopyClassifier = {
             classifier: sampleCopyClassifierEntity,
-            llmProvider: this.llmProviderFactory.createProvider(sampleCopyLlmProviderEntity, sampleCopyClassifierEntity.llmSettings),
+            llmProvider: await this.llmProviderFactory.createProvider(sampleCopyLlmProviderEntity, sampleCopyClassifierEntity.llmSettings),
             llmProviderInfo: { id: sampleCopyLlmProviderEntity.id, apiType: sampleCopyLlmProviderEntity.apiType },
           };
         } else {
@@ -467,7 +467,7 @@ export class ConversationRunner {
     if (agent.fillerSettings?.llmProviderId) {
       const fillerLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, agent.fillerSettings.llmProviderId) });
       if (fillerLlmProviderEntity) {
-        stageData.fillerLlmProvider = this.llmProviderFactory.createProvider(fillerLlmProviderEntity, agent.fillerSettings.llmSettings);
+        stageData.fillerLlmProvider = await this.llmProviderFactory.createProvider(fillerLlmProviderEntity, agent.fillerSettings.llmSettings);
         stageData.fillerLlmProviderInfo = { id: fillerLlmProviderEntity.id, apiType: fillerLlmProviderEntity.apiType };
       } else {
         logger.warn({ agentId: agent.id, llmProviderId: agent.fillerSettings.llmProviderId }, 'Filler LLM provider not found, filler responses will be skipped');
@@ -478,7 +478,7 @@ export class ConversationRunner {
     if (project.generateVoice && agent.ttsProviderId && this.session.sessionSettings.receiveVoiceOutput) {
       const voiceProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, agent.ttsProviderId) });
       if (voiceProviderEntity && ttsSettings) {
-        stageData.ttsProvider = this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
+        stageData.ttsProvider = await this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
       }
     }
 
@@ -488,7 +488,7 @@ export class ConversationRunner {
     if (project.acceptVoice && project.asrConfig?.asrProviderId && this.session.sessionSettings.sendVoiceInput) {
       const asrProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, project.asrConfig.asrProviderId) });
       if (asrProviderEntity) {
-        stageData.asrProvider = this.asrProviderFactory.createProvider(asrProviderEntity, project.asrConfig.settings ?? {});
+        stageData.asrProvider = await this.asrProviderFactory.createProvider(asrProviderEntity, project.asrConfig.settings ?? {});
       } else {
         throw new NotFoundError(`ASR Provider with ID ${project.asrConfig.asrProviderId} not found`);
       }
