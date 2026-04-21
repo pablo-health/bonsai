@@ -5,9 +5,7 @@
  * plain-text values at known sensitive keys and encrypts them using the local secrets manager.
  * It is idempotent — already-encrypted values (those matching @sec:*) are skipped.
  *
- * Usage:
- *   npm run secrets:migrate             # dry run (no changes)
- *   npm run secrets:migrate -- --apply  # apply changes
+ * Also exported as `migrateSecretsToEncrypted` for use during application startup.
  *
  * Prerequisites:
  *   - MASTER_ENCRYPTION_KEY env var must be set
@@ -22,69 +20,78 @@ import { providers, environments } from '../db/schema';
 import { SecretsManagerRegistry } from '../services/secrets/SecretsManagerRegistry';
 import { LocalSecretsManager, LOCAL_SECRETS_MANAGER_NAME } from '../services/secrets/LocalSecretsManager';
 import { SENSITIVE_PROVIDER_CONFIG_FIELDS } from '../services/secrets/SecretRefUtils';
+import { logger } from '../utils/logger';
 
-const isDryRun = !process.argv.includes('--apply');
-
-if (isDryRun) {
-  console.log('[dry-run] Pass --apply to apply changes.');
-}
-
-/** Secretizes sensitive string fields in an object, returning the modified copy and change count. */
-async function secretizeObject(obj: Record<string, unknown>, registry: SecretsManagerRegistry, managerName: string): Promise<{ updated: Record<string, unknown>; changes: number }> {
-  const result = { ...obj };
-  let changes = 0;
+/** Scans sensitive fields in an object and returns plain-text field names (no DB writes). */
+function scanObject(obj: Record<string, unknown>, registry: SecretsManagerRegistry): string[] {
+  const fields: string[] = [];
   for (const key of SENSITIVE_PROVIDER_CONFIG_FIELDS) {
-    const value = result[key];
+    const value = obj[key];
     if (typeof value === 'string' && value.length > 0 && !registry.isSecretReference(value)) {
-      if (!isDryRun) {
-        result[key] = await registry.storeSecret(managerName, value);
-      }
-      changes++;
+      fields.push(key);
     }
   }
-  return { updated: result, changes };
+  return fields;
 }
 
-async function run(): Promise<void> {
-  // Bootstrap registry
-  const registry = container.resolve(SecretsManagerRegistry);
-  const localManager = container.resolve(LocalSecretsManager);
-  registry.register(LOCAL_SECRETS_MANAGER_NAME, localManager);
+/**
+ * Scans all provider configs and environment passwords for plain-text sensitive values
+ * and encrypts them using the provided secrets registry. Idempotent — already-encrypted
+ * values are skipped. Intended to be called both from the standalone CLI script and
+ * automatically on application startup.
+ */
+export async function migrateSecretsToEncrypted(registry: SecretsManagerRegistry): Promise<void> {
+  const pendingProviders: Array<{ id: string; name: string; config: Record<string, unknown>; fields: string[] }> = [];
+  const pendingEnvs: Array<{ id: string; description: string; password: string }> = [];
 
-  let totalProviderChanges = 0;
-  let totalEnvChanges = 0;
-
-  // Migrate providers
   const allProviders = await db.select({ id: providers.id, name: providers.name, config: providers.config }).from(providers);
   for (const row of allProviders) {
     const config = (row.config ?? {}) as Record<string, unknown>;
-    const { updated, changes } = await secretizeObject(config, registry, LOCAL_SECRETS_MANAGER_NAME);
-    if (changes > 0) {
-      console.log(`[provider] ${row.id} (${row.name}): ${changes} field(s) ${isDryRun ? 'would be' : 'were'} encrypted`);
-      if (!isDryRun) {
-        await db.update(providers).set({ config: updated }).where(eq(providers.id, row.id));
-      }
-      totalProviderChanges += changes;
+    const fields = scanObject(config, registry);
+    if (fields.length > 0) {
+      pendingProviders.push({ id: row.id, name: row.name, config, fields });
     }
   }
 
-  // Migrate environment passwords
   const allEnvs = await db.select({ id: environments.id, description: environments.description, password: environments.password }).from(environments);
   for (const row of allEnvs) {
     if (row.password && typeof row.password === 'string' && !registry.isSecretReference(row.password)) {
-      console.log(`[environment] ${row.id} (${row.description}): password ${isDryRun ? 'would be' : 'was'} encrypted`);
-      if (!isDryRun) {
-        const ref = await registry.storeSecret(LOCAL_SECRETS_MANAGER_NAME, row.password);
-        await db.update(environments).set({ password: ref }).where(eq(environments.id, row.id));
-      }
-      totalEnvChanges++;
+      pendingEnvs.push({ id: row.id, description: row.description, password: row.password });
     }
   }
 
-  console.log(`\nDone. ${totalProviderChanges} provider field(s), ${totalEnvChanges} environment password(s) ${isDryRun ? 'would be' : 'were'} encrypted.`);
-  if (isDryRun && (totalProviderChanges > 0 || totalEnvChanges > 0)) {
-    console.log('Run with --apply to apply changes.');
+  const totalChanges = pendingProviders.reduce((s, p) => s + p.fields.length, 0) + pendingEnvs.length;
+
+  if (totalChanges === 0) {
+    logger.info('Secrets migration: nothing to migrate — all secrets are already encrypted');
+    return;
   }
+
+  logger.info({ providers: pendingProviders.length, environments: pendingEnvs.length, totalFields: totalChanges }, 'Secrets migration: encrypting plain-text secrets');
+
+  for (const p of pendingProviders) {
+    const updated = { ...p.config };
+    for (const key of p.fields) {
+      updated[key] = await registry.storeSecret(LOCAL_SECRETS_MANAGER_NAME, updated[key] as string);
+    }
+    await db.update(providers).set({ config: updated }).where(eq(providers.id, p.id));
+    logger.info({ providerId: p.id, providerName: p.name, fields: p.fields }, 'Secrets migration: provider fields encrypted');
+  }
+
+  for (const e of pendingEnvs) {
+    const ref = await registry.storeSecret(LOCAL_SECRETS_MANAGER_NAME, e.password);
+    await db.update(environments).set({ password: ref }).where(eq(environments.id, e.id));
+    logger.info({ environmentId: e.id, description: e.description }, 'Secrets migration: environment password encrypted');
+  }
+
+  logger.info({ totalFields: totalChanges }, 'Secrets migration complete');
+}
+
+async function run(): Promise<void> {
+  const registry = container.resolve(SecretsManagerRegistry);
+  const localManager = container.resolve(LocalSecretsManager);
+  registry.register(LOCAL_SECRETS_MANAGER_NAME, localManager);
+  await migrateSecretsToEncrypted(registry);
 }
 
 run().catch(err => {
