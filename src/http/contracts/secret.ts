@@ -26,6 +26,16 @@ export const secretListResponseSchema = z
   .openapi('SecretListResponse');
 
 /**
+ * Response schema for the reveal endpoint — returns the decrypted plaintext value.
+ */
+export const secretValueResponseSchema = z
+  .object({
+    id: z.string().describe('Secret identifier'),
+    value: z.string().describe('Decrypted plaintext secret value'),
+  })
+  .openapi('SecretValueResponse');
+
+/**
  * Route params schema for operations targeting a specific secret by ref ID.
  */
 export const secretRouteParamsSchema = z.object({
@@ -34,3 +44,4 @@ export const secretRouteParamsSchema = z.object({
 
 export type SecretResponse = z.infer<typeof secretResponseSchema>;
 export type SecretListResponse = z.infer<typeof secretListResponseSchema>;
+export type SecretValueResponse = z.infer<typeof secretValueResponseSchema>;

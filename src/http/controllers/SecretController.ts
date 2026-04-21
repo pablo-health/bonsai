@@ -3,7 +3,7 @@ import type { Request, Response, Router } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { eq } from 'drizzle-orm';
 import { PERMISSIONS } from '../../permissions';
-import { secretResponseSchema, secretListResponseSchema, secretRouteParamsSchema } from '../contracts/secret';
+import { secretResponseSchema, secretListResponseSchema, secretRouteParamsSchema, secretValueResponseSchema } from '../contracts/secret';
 import { checkPermissions } from '../../utils/permissions';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { SecretsManagerRegistry } from '../../services/secrets/SecretsManagerRegistry';
@@ -14,8 +14,8 @@ import { ConflictError, NotFoundError } from '../../errors';
 
 /**
  * Controller for secrets management.
- * Provides read-only listing (with orphan detection) and deletion of stored secrets.
- * Secret values are never returned — only opaque references.
+ * Provides read-only listing (with orphan detection), single-value reveal (super_admin only),
+ * and deletion of stored secrets.
  */
 @singleton()
 export class SecretController {
@@ -42,6 +42,28 @@ export class SecretController {
         },
       },
       {
+        method: 'get',
+        path: '/api/secrets/{id}/value',
+        tags: ['Secrets'],
+        summary: 'Reveal secret value',
+        description: 'Returns the decrypted plaintext value of a secret. Restricted to super_admin only. Use only in emergency situations.',
+        request: {
+          params: secretRouteParamsSchema,
+        },
+        responses: {
+          200: {
+            description: 'Secret value revealed',
+            content: {
+              'application/json': {
+                schema: secretValueResponseSchema,
+              },
+            },
+          },
+          403: { description: 'Insufficient permissions' },
+          404: { description: 'Secret not found' },
+        },
+      },
+      {
         method: 'delete',
         path: '/api/secrets/{id}',
         tags: ['Secrets'],
@@ -62,6 +84,7 @@ export class SecretController {
   /** Register all routes for this controller */
   registerRoutes(router: Router): void {
     router.get('/api/secrets', asyncHandler(this.listSecrets.bind(this)));
+    router.get('/api/secrets/:id/value', asyncHandler(this.revealSecret.bind(this)));
     router.delete('/api/secrets/:id', asyncHandler(this.deleteSecret.bind(this)));
   }
 
@@ -80,6 +103,15 @@ export class SecretController {
     const orphans = allRefs.filter(ref => !referencedRefs.has(ref));
 
     res.status(200).json({ items, orphans });
+  }
+
+  private async revealSecret(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.SECRETS_REVEAL]);
+
+    const { id } = secretRouteParamsSchema.parse(req.params);
+    const ref = `@sec:${LOCAL_SECRETS_MANAGER_NAME}:${id}`;
+    const value = await this.registry.resolveSecret(ref);
+    res.status(200).json({ id, value });
   }
 
   private async deleteSecret(req: Request, res: Response): Promise<void> {

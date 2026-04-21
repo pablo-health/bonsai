@@ -102,6 +102,7 @@ export const PERMISSIONS = {
   // Secrets permissions
   SECRETS_READ: 'secrets:read',
   SECRETS_DELETE: 'secrets:delete',
+  SECRETS_REVEAL: 'secrets:reveal',
 
   // System permissions
   SYSTEM_CONFIG: 'system:config',
