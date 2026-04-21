@@ -13,6 +13,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "schemas:generate": "tsx src/scripts/generateWebSocketSchemas.ts",
+    "secrets:migrate": "tsx src/scripts/migrateSecretsToEncrypted.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "utter.one",

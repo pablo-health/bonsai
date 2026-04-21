@@ -1,4 +1,4 @@
-import { singleton } from 'tsyringe';
+import { singleton, inject } from 'tsyringe';
 import { logger } from '../../../utils/logger';
 import type { Provider } from '../../../types/models';
 import type { ILlmProvider } from './ILlmProvider';
@@ -16,6 +16,7 @@ import { PerplexityLlmProvider, PerplexityLlmProviderConfig, perplexityLlmProvid
 import { CohereLlmProvider, CohereLlmProviderConfig, cohereLlmProviderConfigSchema, CohereLlmSettings } from './CohereLlmProvider';
 import { XAILlmProvider, XAILlmProviderConfig, xAILlmProviderConfigSchema, XAILlmSettings } from './XAILlmProvider';
 import { OllamaLlmProvider, OllamaLlmProviderConfig, ollamaLlmProviderConfigSchema, OllamaLlmSettings } from './OllamaLlmProvider';
+import { SecretRefUtils } from '../../secrets/SecretRefUtils';
 
 /**
  * Supported LLM provider API types
@@ -38,6 +39,8 @@ export type LlmProviderConfig = OpenAILlmProviderConfig | OpenAILegacyLlmProvide
  */
 @singleton()
 export class LlmProviderFactory {
+  constructor(@inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils) {}
+
   /**
    * Creates an LLM provider instance from a provider entity
    * @param provider - Provider entity from database containing configuration
@@ -45,7 +48,7 @@ export class LlmProviderFactory {
    * @returns Configured and initialized LLM provider instance
    * @throws {Error} When provider type is not 'llm', API type is not supported, or model is missing
    */
-  createProvider(provider: Provider, settings: LlmSettings): ILlmProvider {
+  async createProvider(provider: Provider, settings: LlmSettings): Promise<ILlmProvider> {
     if (provider.providerType !== 'llm') {
       const errorMessage = `Provider ${provider.id} is not an LLM provider. Expected providerType 'llm', got '${provider.providerType}'`;
       logger.error(errorMessage);
@@ -59,7 +62,8 @@ export class LlmProviderFactory {
     }
 
     logger.info(`Creating ${provider.apiType} LLM provider for provider ${provider.id} with model ${settings.model}`);
-    const instance = this.instantiateProvider(provider, settings);
+    const resolvedConfig = await this.secretRefUtils.resolveObject(provider.config as Record<string, unknown>);
+    const instance = this.instantiateProvider({ ...provider, config: resolvedConfig as typeof provider.config }, settings);
     instance.init();
     return instance;
   }
@@ -71,14 +75,15 @@ export class LlmProviderFactory {
    * @returns LLM provider instance suitable for calling enumerateModels()
    * @throws {Error} When provider type is not 'llm' or API type is not supported
    */
-  createProviderForEnumeration(provider: Provider): ILlmProvider {
+  async createProviderForEnumeration(provider: Provider): Promise<ILlmProvider> {
     if (provider.providerType !== 'llm') {
       const errorMessage = `Provider ${provider.id} is not an LLM provider. Expected providerType 'llm', got '${provider.providerType}'`;
       logger.error(errorMessage);
       throw new Error(errorMessage);
     }
 
-    return this.instantiateProvider(provider, { model: '' } as LlmSettings);
+    const resolvedConfig = await this.secretRefUtils.resolveObject(provider.config as Record<string, unknown>);
+    return this.instantiateProvider({ ...provider, config: resolvedConfig as typeof provider.config }, { model: '' } as LlmSettings);
   }
 
   /**

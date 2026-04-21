@@ -351,6 +351,13 @@
       "when": 1776241475984,
       "tag": "0049_slow_excalibur",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1776759328395,
+      "tag": "0050_cloudy_terrax",
+      "breakpoints": true
     }
   ]
 }
