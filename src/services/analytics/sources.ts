@@ -277,9 +277,9 @@ const stageVisitsSource: SourceDef = {
   requiresCte: true,
   dimensions: [
     { id: 'conversationId', label: 'Conversation', sqlExpr: 'sv.conversation_id', requiresConversationJoin: false, requiresUserJoin: false },
-    { id: 'stageId', label: 'Stage ID', sqlExpr: 'sv.stage_id', requiresConversationJoin: false, requiresUserJoin: false },
+    { id: 'stageName', label: 'Stage Name', sqlExpr: 's.name', requiresConversationJoin: false, requiresUserJoin: false, lateralJoinSql: 'LEFT JOIN stages s ON s.id = sv.stage_id' },
     { id: 'stageSource', label: 'Stage Source', sqlExpr: 'sv.source_type', requiresConversationJoin: false, requiresUserJoin: false, values: ['starting_stage', 'transition'] },
-    { id: 'fromStageId', label: 'From Stage', sqlExpr: 'sv.from_stage_id', requiresConversationJoin: false, requiresUserJoin: false },
+    { id: 'fromStageName', label: 'From Stage Name', sqlExpr: 'fs.name', requiresConversationJoin: false, requiresUserJoin: false, lateralJoinSql: 'LEFT JOIN stages fs ON fs.id = sv.from_stage_id' },
   ],
   metrics: [
     { id: 'timeOnStageMs', label: 'Time on Stage', sqlExpr: `EXTRACT(EPOCH FROM (sv.next_ts - sv.timestamp)) * 1000`, unit: 'ms' },
