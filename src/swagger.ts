@@ -98,6 +98,9 @@ import { ProjectExchangeController } from './http/controllers/ProjectExchangeCon
 import { SecretController } from './http/controllers/SecretController';
 import { secretResponseSchema, secretListResponseSchema, secretValueResponseSchema } from './http/contracts/secret';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
+import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
+import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
+import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
 import { providerHintSchema, providerHintResolutionTargetSchema, providerHintResolutionSchema, asrConfigExchangeV1Schema, storageConfigExchangeV1Schema, moderationConfigExchangeV1Schema, fillerSettingsExchangeV1Schema, projectExchangeV1Schema, agentExchangeV1Schema, stageExchangeV1Schema, classifierExchangeV1Schema, contextTransformerExchangeV1Schema, toolExchangeV1Schema, globalActionExchangeV1Schema, guardrailExchangeV1Schema, knowledgeCategoryExchangeV1Schema, knowledgeItemExchangeV1Schema, projectExchangeBundleV1Schema, projectExchangeImportResultSchema } from './http/contracts/projectExchange';
 
 extendZodWithOpenApi(z);
@@ -552,6 +555,24 @@ export function getOpenAPISpec(): any {
   // Register WebRTC signaling routes
   const webRTCPaths = WebRTCChannelHost.getOpenAPIPaths();
   for (const path of webRTCPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Twilio Voice outgoing call route
+  const twilioVoicePaths = TwilioVoiceChannelHost.getOpenAPIPaths();
+  for (const path of twilioVoicePaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Twilio Messaging outgoing send route
+  const twilioMessagingPaths = TwilioMessagingChannelHost.getOpenAPIPaths();
+  for (const path of twilioMessagingPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register WhatsApp outgoing send route
+  const whatsAppPaths = WhatsAppChannelHost.getOpenAPIPaths();
+  for (const path of whatsAppPaths) {
     registry.registerPath(path);
   }
 

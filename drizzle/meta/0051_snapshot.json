@@ -1,6 +1,6 @@
 {
-  "id": "9b74a85a-c99a-4d6c-9e02-7be3d9197021",
-  "prevId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "id": "3b31f2f7-130a-4d76-8764-dddc7d06e6ce",
+  "prevId": "9b74a85a-c99a-4d6c-9e02-7be3d9197021",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -939,6 +939,13 @@
           "primaryKey": false,
           "notNull": false,
           "default": null
+        },
+        "direction": {
+          "name": "direction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'incoming'"
         },
         "metadata": {
           "name": "metadata",

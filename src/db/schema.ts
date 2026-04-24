@@ -39,6 +39,7 @@ export const conversations = pgTable('conversations', {
   stageVars: jsonb('stage_vars').$type<Record<string, Record<string, any>>>(),
   status: text('status').notNull().$type<ConversationState>().default('initialized'),
   statusDetails: text('status_reason').default(null),
+  direction: text('direction').notNull().$type<'incoming' | 'outgoing'>().default('incoming'),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   lastActivityAt: timestamp('last_activity_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
