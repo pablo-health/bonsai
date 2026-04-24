@@ -19,6 +19,8 @@ import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
 import { ProjectService } from '../../services/ProjectService';
+import { UserService } from '../../services/UserService';
+import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
 import { whatsAppSendBodySchema, whatsAppSendResponseSchema } from '../../http/contracts/whatsapp-outgoing';
 import type { WhatsAppSendResponse } from '../../http/contracts/whatsapp-outgoing';
 
@@ -96,6 +98,8 @@ export class WhatsAppChannelHost {
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
     @inject(ConversationService) private readonly conversationService: ConversationService,
     @inject(ProjectService) private readonly projectService: ProjectService,
+    @inject(UserService) private readonly userService: UserService,
+    @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
   ) {}
 
   /**
@@ -166,7 +170,8 @@ export class WhatsAppChannelHost {
       return;
     }
 
-    const configResult = whatsAppChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = whatsAppChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'WhatsApp webhook verification: channel provider config is invalid');
       res.status(500).send();
@@ -235,7 +240,8 @@ export class WhatsAppChannelHost {
       return;
     }
 
-    const configResult = whatsAppChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = whatsAppChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'WhatsApp webhook: channel provider config is invalid');
       return;
@@ -363,7 +369,8 @@ export class WhatsAppChannelHost {
       return;
     }
 
-    const configResult = whatsAppChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = whatsAppChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'WhatsApp outgoing: channel provider config is invalid');
       res.status(500).json({ error: 'Channel provider config is invalid' });
@@ -381,6 +388,9 @@ export class WhatsAppChannelHost {
         return;
       }
     }
+
+    // Ensure the user exists (create if not)
+    await this.userService.ensureUserExists(projectId, body.to);
 
     // Pre-create the conversation
     const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;

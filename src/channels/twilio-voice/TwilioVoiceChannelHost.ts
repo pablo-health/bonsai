@@ -22,6 +22,8 @@ import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
 import { ProjectService } from '../../services/ProjectService';
+import { UserService } from '../../services/UserService';
+import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
 import { twilioVoiceCallBodySchema, twilioVoiceCallResponseSchema } from '../../http/contracts/twilio-voice-outgoing';
 import type { TwilioVoiceCallResponse } from '../../http/contracts/twilio-voice-outgoing';
 import * as _twilio from 'twilio';
@@ -124,6 +126,8 @@ export class TwilioVoiceChannelHost {
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
     @inject(ConversationService) private readonly conversationService: ConversationService,
     @inject(ProjectService) private readonly projectService: ProjectService,
+    @inject(UserService) private readonly userService: UserService,
+    @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
   ) {}
 
   /**
@@ -239,7 +243,8 @@ export class TwilioVoiceChannelHost {
       return;
     }
 
-    const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'TwilioVoice webhook: channel provider config is invalid');
       res.status(500).send();
@@ -382,7 +387,8 @@ export class TwilioVoiceChannelHost {
               return;
             }
 
-            const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(providerRecord.config);
+            const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+            const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(rawConfig);
             if (!configResult.success) {
               logger.error({ channelProviderId }, 'TwilioVoice stream: channel provider config is invalid');
               ws.close();
@@ -513,7 +519,8 @@ export class TwilioVoiceChannelHost {
       return;
     }
 
-    const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = twilioVoiceChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'TwilioVoice outgoing: channel provider config is invalid');
       res.status(500).json({ error: 'Channel provider config is invalid' });
@@ -536,6 +543,9 @@ export class TwilioVoiceChannelHost {
         return;
       }
     }
+
+    // Ensure the user exists (create if not)
+    await this.userService.ensureUserExists(projectId, body.to);
 
     // Pre-create the conversation so we have a record regardless of whether the callee answers
     const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
