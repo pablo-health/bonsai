@@ -40,9 +40,19 @@ The `MASTER_ENCRYPTION_KEY` is required for the server to start. Without it, any
 Keep the master key secret and backed up. If it is lost, all stored secrets become unrecoverable and every provider must be reconfigured. Never commit the key to version control.
 :::
 
-### 3. Start the server
+### 3. Migrate existing plaintext credentials (optional)
 
-On startup, the server automatically runs a migration that scans all existing provider configs and environment passwords for any remaining plaintext values and encrypts them. This migration is idempotent — it is safe to run repeatedly and skips already-encrypted values.
+If you have an existing deployment with provider credentials stored in plaintext, run the migration script to encrypt them in-place:
+
+```bash
+npm run secrets:migrate
+```
+
+This scans all provider configs and environment passwords for any remaining plaintext values and encrypts them using the current `MASTER_ENCRYPTION_KEY`. The script is idempotent — it is safe to run repeatedly and skips values that are already encrypted.
+
+### 4. Start the server
+
+On startup, the server verifies that `MASTER_ENCRYPTION_KEY` is configured and the secrets subsystem is ready.
 
 ## Secret References
 

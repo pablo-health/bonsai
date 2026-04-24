@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.4.0] - 2026-04-24
 
+### Breaking Changes
+
+- **`MASTER_ENCRYPTION_KEY` is now required** — the secrets subsystem is always active. The server will refuse to start if `MASTER_ENCRYPTION_KEY` is not set in the environment. Generate a 32-byte key with `openssl rand -hex 32` and add it to your environment before upgrading. See the [Secrets Management guide](docs/guide/secrets.md) for details.
+
 ### Added
 
 - **Secrets management** — a new first-class secrets subsystem that stores sensitive values encrypted at rest:
