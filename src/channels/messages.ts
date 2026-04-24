@@ -48,6 +48,8 @@ export const calStartConversationRequestSchema = calBaseInputMessageSchema.omit(
   agentId: z.string().optional().describe('Optional agent identifier to use for the conversation'),
   stageId: z.string().optional().describe('Stage ID to initiate the conversation at a specific stage. When omitted, falls back to the project-level default starting stage.'),
   timezone: z.string().optional().describe('IANA timezone identifier for this conversation (e.g. America/New_York, Europe/Warsaw). Overrides user profile and project timezone settings. Defaults to UTC when not provided by any source.'),
+  direction: z.enum(['incoming', 'outgoing']).optional().describe('Direction of the conversation. Defaults to incoming when not specified.'),
+  existingConversationId: z.string().optional().describe('When set, the handler attaches to this pre-created conversation instead of creating a new one. Used for outgoing call flows where the conversation record is created at call initiation time.'),
 });
 
 /**

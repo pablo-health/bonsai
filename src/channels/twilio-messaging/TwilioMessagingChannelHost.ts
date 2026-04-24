@@ -1,5 +1,6 @@
 import { inject, singleton } from 'tsyringe';
 import type { Request, Response, Router } from 'express';
+import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/index';
@@ -14,6 +15,12 @@ import { logger } from '../../utils/logger';
 import { asyncHandler } from '../../utils/asyncHandler';
 import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
+import { ConversationService } from '../../services/ConversationService';
+import { ProjectService } from '../../services/ProjectService';
+import { UserService } from '../../services/UserService';
+import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
+import { twilioMessagingSendBodySchema, twilioMessagingSendResponseSchema } from '../../http/contracts/twilio-messaging-outgoing';
+import type { TwilioMessagingSendResponse } from '../../http/contracts/twilio-messaging-outgoing';
 import * as _twilio from 'twilio';
 const _twilioModule = (_twilio as any).default ?? _twilio;
 const validateRequest = _twilioModule.validateRequest as typeof import('twilio').validateRequest;
@@ -61,7 +68,39 @@ export class TwilioMessagingChannelHost {
     @inject(SessionManager) private readonly sessionManager: SessionManager,
     @inject(ChannelHandlerDispatcher) private readonly dispatcher: ChannelHandlerDispatcher,
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
+    @inject(ConversationService) private readonly conversationService: ConversationService,
+    @inject(ProjectService) private readonly projectService: ProjectService,
+    @inject(UserService) private readonly userService: UserService,
+    @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
   ) {}
+
+  /**
+   * Returns OpenAPI path definitions for the outgoing messaging endpoint.
+   */
+  static getOpenAPIPaths(): RouteConfig[] {
+    return [
+      {
+        method: 'post',
+        path: '/api/twilio/messaging/send',
+        tags: ['Twilio Messaging'],
+        summary: 'Initiate an outgoing Twilio Messaging conversation',
+        description: 'Sends an outbound SMS message to the specified phone number and pre-creates a conversation record. Future inbound replies from the recipient will be attached to the same virtual session.',
+        security: [],
+        request: {
+          query: webhookQuerySchema,
+          body: { content: { 'application/json': { schema: twilioMessagingSendBodySchema } } },
+        },
+        responses: {
+          201: { description: 'Message sent and conversation pre-created', content: { 'application/json': { schema: twilioMessagingSendResponseSchema } } },
+          400: { description: 'Missing or invalid parameters' },
+          401: { description: 'Invalid or inactive API key' },
+          403: { description: 'API key does not permit twilio_messaging channel' },
+          422: { description: 'No default stage available' },
+          502: { description: 'Twilio REST message creation failed' },
+        },
+      },
+    ];
+  }
 
   /**
    * Registers the Twilio Messaging webhook route on the Express router.
@@ -69,6 +108,7 @@ export class TwilioMessagingChannelHost {
    */
   registerRoutes(router: Router): void {
     router.post('/api/twilio/messaging/webhook', asyncHandler(this.handleWebhook.bind(this)));
+    router.post('/api/twilio/messaging/send', asyncHandler(this.handleOutgoingMessage.bind(this)));
   }
 
   /**
@@ -128,7 +168,8 @@ export class TwilioMessagingChannelHost {
       return;
     }
 
-    const configResult = twilioMessagingChannelProviderConfigSchema.safeParse(providerRecord.config);
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = twilioMessagingChannelProviderConfigSchema.safeParse(rawConfig);
     if (!configResult.success) {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'Twilio webhook: channel provider config is invalid');
       res.status(500).send();
@@ -183,6 +224,110 @@ export class TwilioMessagingChannelHost {
     }
 
     res.set('Content-Type', 'text/xml').send('<Response/>');
+  }
+
+  /**
+   * Handles a request to send an outgoing Twilio Messaging SMS.
+   *
+   * Flow:
+   * 1. Validate query params (apiKey, channelProviderId) and request body.
+   * 2. Load channel provider config and resolve stageId.
+   * 3. Pre-create a conversation record with direction 'outgoing'.
+   * 4. Send the message via Twilio REST API.
+   * 5. Return 201 with messageSid and conversationId.
+   *
+   * Inbound replies from the recipient will arrive via the webhook and be matched
+   * to the existing virtual session using the phoneSessionMap.
+   */
+  private async handleOutgoingMessage(req: Request, res: Response): Promise<void> {
+    const queryResult = webhookQuerySchema.safeParse(req.query);
+    if (!queryResult.success) {
+      res.status(400).json({ error: 'Missing or invalid query parameters' });
+      return;
+    }
+    const { apiKey: rawApiKey, stageId: queryStageId, agentId: queryAgentId, channelProviderId } = queryResult.data;
+
+    const apiKeyRecord = await db.query.apiKeys.findFirst({ where: eq(apiKeys.key, rawApiKey) });
+    if (!apiKeyRecord || !apiKeyRecord.isActive) {
+      res.status(401).json({ error: 'Invalid or inactive API key' });
+      return;
+    }
+    const { projectId, keySettings } = apiKeyRecord;
+
+    if (keySettings?.allowedChannels && !keySettings.allowedChannels.includes('twilio_messaging')) {
+      res.status(403).json({ error: 'API key does not permit twilio_messaging channel' });
+      return;
+    }
+
+    const bodyResult = twilioMessagingSendBodySchema.safeParse(req.body);
+    if (!bodyResult.success) {
+      res.status(400).json({ error: 'Invalid request body', issues: bodyResult.error.issues });
+      return;
+    }
+    const body = bodyResult.data;
+
+    const providerRecord = await db.query.providers.findFirst({ where: eq(providers.id, channelProviderId) });
+    if (!providerRecord || providerRecord.providerType !== 'channel') {
+      res.status(400).json({ error: 'Channel provider not found or wrong type' });
+      return;
+    }
+
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = twilioMessagingChannelProviderConfigSchema.safeParse(rawConfig);
+    if (!configResult.success) {
+      logger.error({ channelProviderId, issues: configResult.error.issues }, 'TwilioMessaging outgoing: channel provider config is invalid');
+      res.status(500).json({ error: 'Channel provider config is invalid' });
+      return;
+    }
+    const { accountSid, authToken, fromNumber } = configResult.data;
+
+    // Resolve stageId: body overrides query param, then project default
+    let resolvedStageId = body.stageId ?? queryStageId;
+    if (!resolvedStageId) {
+      const project = await this.projectService.getProjectById(projectId);
+      resolvedStageId = project.startingStageId ?? undefined;
+      if (!resolvedStageId) {
+        res.status(422).json({ error: 'No stageId provided and project has no default starting stage' });
+        return;
+      }
+    }
+    const resolvedAgentId = body.agentId ?? queryAgentId;
+
+    // Ensure the user exists (create if not)
+    await this.userService.ensureUserExists(projectId, body.to);
+
+    // Pre-create the conversation
+    const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
+    const conversation = await this.conversationService.createConversation({
+      projectId,
+      userId: body.to,
+      sessionId,
+      stageId: resolvedStageId,
+      status: 'initialized',
+      direction: 'outgoing',
+      metadata: body.metadata ?? null,
+    });
+
+    // Send the outbound message via Twilio REST API
+    const TwilioConstructor = _twilioModule.Twilio ?? _twilioModule;
+    const twilioClient = new TwilioConstructor(accountSid, authToken);
+    let messageSid: string;
+    try {
+      const message = await twilioClient.messages.create({ to: body.to, from: fromNumber, body: body.body });
+      messageSid = message.sid;
+    } catch (error) {
+      logger.error({ error, projectId, to: body.to }, 'TwilioMessaging: failed to send outbound message');
+      try {
+        await this.conversationService.failConversation(projectId, conversation.id, 'Failed to send outbound message');
+      } catch { /* best effort */ }
+      res.status(502).json({ error: 'Failed to send outbound message via Twilio' });
+      return;
+    }
+
+    logger.info({ projectId, conversationId: conversation.id, messageSid, to: body.to }, 'TwilioMessaging: outbound message sent');
+
+    const response: TwilioMessagingSendResponse = { messageSid, conversationId: conversation.id };
+    res.status(201).json(response);
   }
 
   /**
