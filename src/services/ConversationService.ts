@@ -299,6 +299,7 @@ export class ConversationService extends BaseService {
         statusDetails: conversations.statusDetails,
         createdAt: conversations.createdAt,
         updatedAt: conversations.updatedAt,
+        direction: conversations.direction,
       };
 
       // Apply filters
