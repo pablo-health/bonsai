@@ -61,11 +61,6 @@ export class TwilioMessagingChannelHost {
   private readonly phoneSessionMap = new Map<string, string>();
   /** Maps sessionId → active inactivity timer handle. */
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
-  /**
-   * Maps sessionId → pre-created conversationId for outgoing sessions that still need
-   * `start_conversation` (with `existingConversationId`) dispatched on the first inbound reply.
-   */
-  private readonly pendingStartSessions = new Map<string, string>();
 
   private readonly timeoutMs = parseInt(process.env.TWILIO_MESSAGING_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
 
@@ -89,19 +84,18 @@ export class TwilioMessagingChannelHost {
         path: '/api/twilio/messaging/send',
         tags: ['Twilio Messaging'],
         summary: 'Initiate an outgoing Twilio Messaging conversation',
-        description: 'Sends an outbound SMS message to the specified phone number and pre-creates a conversation record. Future inbound replies from the recipient will be attached to the same virtual session.',
+        description: 'Starts a conversation for the specified recipient. The AI generates and sends the opening message automatically. Future inbound replies from the recipient will be attached to the same virtual session.',
         security: [],
         request: {
           query: webhookQuerySchema,
           body: { content: { 'application/json': { schema: twilioMessagingSendBodySchema } } },
         },
         responses: {
-          201: { description: 'Message sent and conversation pre-created', content: { 'application/json': { schema: twilioMessagingSendResponseSchema } } },
+          201: { description: 'Conversation started and opening message sent by AI', content: { 'application/json': { schema: twilioMessagingSendResponseSchema } } },
           400: { description: 'Missing or invalid parameters' },
           401: { description: 'Invalid or inactive API key' },
           403: { description: 'API key does not permit twilio_messaging channel' },
           422: { description: 'No default stage available' },
-          502: { description: 'Twilio REST message creation failed' },
         },
       },
     ];
@@ -208,12 +202,6 @@ export class TwilioMessagingChannelHost {
 
     if (existingSessionId) {
       this.scheduleTimeout(existingSessionId, phoneKey);
-      const pendingConversationId = this.pendingStartSessions.get(existingSessionId);
-      if (pendingConversationId) {
-        this.pendingStartSessions.delete(existingSessionId);
-        const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderNumber, stageId, agentId, correlationId: undefined, existingConversationId: pendingConversationId };
-        await this.dispatcher.dispatch(startMsg, this.buildContext(existingSessionId));
-      }
       await this.dispatchTextInput(existingSessionId, messageText);
     } else {
       const connection = new TwilioMessagingConnection(senderNumber, recipientNumber, accountSid, authToken, this.sessionManager);
@@ -243,9 +231,9 @@ export class TwilioMessagingChannelHost {
    * Flow:
    * 1. Validate query params (apiKey, channelProviderId) and request body.
    * 2. Load channel provider config and resolve stageId.
-   * 3. Pre-create a conversation record with direction 'outgoing'.
-   * 4. Send the message via Twilio REST API.
-   * 5. Return 201 with messageSid and conversationId.
+   * 3. Create a virtual session and pre-create a conversation record with direction 'outgoing'.
+   * 4. Dispatch `start_conversation` — the AI generates and sends the opening message automatically.
+   * 5. Return 201 with conversationId.
    *
    * Inbound replies from the recipient will arrive via the webhook and be matched
    * to the existing virtual session using the phoneSessionMap.
@@ -321,9 +309,8 @@ export class TwilioMessagingChannelHost {
 
     logger.info({ sessionId, projectId, to: body.to }, 'TwilioMessaging: outgoing virtual session created');
 
-    // Pre-create the conversation record with direction 'outgoing'.
-    // Attachment to the session is deferred to the first inbound reply via
-    // `start_conversation` with `existingConversationId`, matching the outgoing call flow.
+    // Pre-create the conversation record with direction 'outgoing', then dispatch
+    // `start_conversation` so the AI generates and sends the opening message.
     const conversation = await this.conversationService.createConversation({
       projectId,
       userId: body.to,
@@ -333,27 +320,13 @@ export class TwilioMessagingChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     });
-    this.pendingStartSessions.set(sessionId, conversation.id);
 
-    // Send the outbound message via Twilio REST API
-    const TwilioConstructor = _twilioModule.Twilio ?? _twilioModule;
-    const twilioClient = new TwilioConstructor(accountSid, authToken);
-    let messageSid: string;
-    try {
-      const message = await twilioClient.messages.create({ to: body.to, from: fromNumber, body: body.body });
-      messageSid = message.sid;
-    } catch (error) {
-      logger.error({ error, projectId, to: body.to }, 'TwilioMessaging: failed to send outbound message');
-      try {
-        await this.conversationService.failConversation(projectId, conversation.id, 'Failed to send outbound message');
-      } catch { /* best effort */ }
-      res.status(502).json({ error: 'Failed to send outbound message via Twilio' });
-      return;
-    }
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
-    logger.info({ projectId, conversationId: conversation.id, messageSid, to: body.to }, 'TwilioMessaging: outbound message sent');
+    logger.info({ projectId, conversationId: conversation.id, to: body.to }, 'TwilioMessaging: outgoing conversation started');
 
-    const response: TwilioMessagingSendResponse = { messageSid, conversationId: conversation.id };
+    const response: TwilioMessagingSendResponse = { conversationId: conversation.id };
     res.status(201).json(response);
   }
 
@@ -400,7 +373,6 @@ export class TwilioMessagingChannelHost {
       logger.info({ sessionId }, 'Twilio Messaging: session timed out due to inactivity');
       this.phoneSessionMap.delete(phoneKey);
       this.sessionTimeoutMap.delete(sessionId);
-      this.pendingStartSessions.delete(sessionId);
       await this.sessionManager.unregisterSession(sessionId);
     }, this.timeoutMs);
 

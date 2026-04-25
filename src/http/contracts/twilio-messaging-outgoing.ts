@@ -12,10 +12,10 @@ export const twilioMessagingSendRouteParamsSchema = z.object({
 
 /**
  * Request body for initiating an outgoing Twilio Messaging conversation.
+ * The opening message text is generated automatically by the project's AI.
  */
 export const twilioMessagingSendBodySchema = z.object({
   to: z.string().min(1).describe('Destination phone number in E.164 format (e.g. +15551234567)'),
-  body: z.string().min(1).describe('Text content of the opening message to send'),
   stageId: z.string().optional().describe('Stage ID to start the conversation at. When omitted, falls back to the project-level default starting stage.'),
   agentId: z.string().optional().describe('Optional agent ID override for this conversation'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Optional metadata to attach to the conversation record'),
@@ -25,8 +25,7 @@ export const twilioMessagingSendBodySchema = z.object({
  * Response for a successfully initiated outgoing Twilio Messaging conversation.
  */
 export const twilioMessagingSendResponseSchema = z.object({
-  messageSid: z.string().describe('Twilio Message SID of the sent outbound message'),
-  conversationId: z.string().describe('ID of the pre-created conversation record'),
+  conversationId: z.string().describe('ID of the conversation record created for this outgoing conversation'),
 });
 
 export type TwilioMessagingSendRouteParams = z.infer<typeof twilioMessagingSendRouteParamsSchema>;
