@@ -62,10 +62,10 @@ export class TwilioMessagingChannelHost {
   /** Maps sessionId → active inactivity timer handle. */
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
   /**
-   * Session IDs that were pre-created for outgoing conversations and still need
-   * `start_conversation` to be dispatched on the first inbound reply.
+   * Maps sessionId → pre-created conversationId for outgoing sessions that still need
+   * `start_conversation` (with `existingConversationId`) dispatched on the first inbound reply.
    */
-  private readonly pendingStartSessions = new Set<string>();
+  private readonly pendingStartSessions = new Map<string, string>();
 
   private readonly timeoutMs = parseInt(process.env.TWILIO_MESSAGING_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
 
@@ -208,9 +208,10 @@ export class TwilioMessagingChannelHost {
 
     if (existingSessionId) {
       this.scheduleTimeout(existingSessionId, phoneKey);
-      if (this.pendingStartSessions.has(existingSessionId)) {
+      const pendingConversationId = this.pendingStartSessions.get(existingSessionId);
+      if (pendingConversationId) {
         this.pendingStartSessions.delete(existingSessionId);
-        const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderNumber, stageId, agentId, correlationId: undefined };
+        const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderNumber, stageId, agentId, correlationId: undefined, existingConversationId: pendingConversationId };
         await this.dispatcher.dispatch(startMsg, this.buildContext(existingSessionId));
       }
       await this.dispatchTextInput(existingSessionId, messageText);
@@ -316,13 +317,13 @@ export class TwilioMessagingChannelHost {
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
     this.phoneSessionMap.set(phoneKey, sessionId);
-    this.pendingStartSessions.add(sessionId);
     this.scheduleTimeout(sessionId, phoneKey);
 
     logger.info({ sessionId, projectId, to: body.to }, 'TwilioMessaging: outgoing virtual session created');
 
-    // Pre-create the conversation record with direction 'outgoing' and attach it
-    // to the session so dispatchTextInput works when the recipient replies.
+    // Pre-create the conversation record with direction 'outgoing'.
+    // Attachment to the session is deferred to the first inbound reply via
+    // `start_conversation` with `existingConversationId`, matching the outgoing call flow.
     const conversation = await this.conversationService.createConversation({
       projectId,
       userId: body.to,
@@ -332,7 +333,7 @@ export class TwilioMessagingChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     });
-    await this.sessionManager.attachConversationToSession(sessionId, conversation.id);
+    this.pendingStartSessions.set(sessionId, conversation.id);
 
     // Send the outbound message via Twilio REST API
     const TwilioConstructor = _twilioModule.Twilio ?? _twilioModule;
