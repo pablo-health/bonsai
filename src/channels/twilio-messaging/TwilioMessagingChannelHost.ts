@@ -61,6 +61,11 @@ export class TwilioMessagingChannelHost {
   private readonly phoneSessionMap = new Map<string, string>();
   /** Maps sessionId → active inactivity timer handle. */
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
+  /**
+   * Session IDs that were pre-created for outgoing conversations and still need
+   * `start_conversation` to be dispatched on the first inbound reply.
+   */
+  private readonly pendingStartSessions = new Set<string>();
 
   private readonly timeoutMs = parseInt(process.env.TWILIO_MESSAGING_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
 
@@ -203,6 +208,11 @@ export class TwilioMessagingChannelHost {
 
     if (existingSessionId) {
       this.scheduleTimeout(existingSessionId, phoneKey);
+      if (this.pendingStartSessions.has(existingSessionId)) {
+        this.pendingStartSessions.delete(existingSessionId);
+        const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderNumber, stageId, agentId, correlationId: undefined };
+        await this.dispatcher.dispatch(startMsg, this.buildContext(existingSessionId));
+      }
       await this.dispatchTextInput(existingSessionId, messageText);
     } else {
       const connection = new TwilioMessagingConnection(senderNumber, recipientNumber, accountSid, authToken, this.sessionManager);
@@ -306,6 +316,7 @@ export class TwilioMessagingChannelHost {
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
     this.phoneSessionMap.set(phoneKey, sessionId);
+    this.pendingStartSessions.add(sessionId);
     this.scheduleTimeout(sessionId, phoneKey);
 
     logger.info({ sessionId, projectId, to: body.to }, 'TwilioMessaging: outgoing virtual session created');
@@ -388,6 +399,7 @@ export class TwilioMessagingChannelHost {
       logger.info({ sessionId }, 'Twilio Messaging: session timed out due to inactivity');
       this.phoneSessionMap.delete(phoneKey);
       this.sessionTimeoutMap.delete(sessionId);
+      this.pendingStartSessions.delete(sessionId);
       await this.sessionManager.unregisterSession(sessionId);
     }, this.timeoutMs);
 
