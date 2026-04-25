@@ -296,8 +296,22 @@ export class TwilioMessagingChannelHost {
     // Ensure the user exists (create if not)
     await this.userService.ensureUserExists(projectId, body.to);
 
-    // Pre-create the conversation
-    const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
+    // Create virtual connection and register a real session so inbound replies
+    // are routed to this conversation instead of spawning a new session.
+    const phoneKey = `${projectId}:${body.to}`;
+    const connection = new TwilioMessagingConnection(body.to, fromNumber, accountSid, authToken, this.sessionManager);
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    this.phoneSessionMap.set(phoneKey, sessionId);
+    this.scheduleTimeout(sessionId, phoneKey);
+
+    logger.info({ sessionId, projectId, to: body.to }, 'TwilioMessaging: outgoing virtual session created');
+
+    // Pre-create the conversation record with direction 'outgoing' and attach it
+    // to the session so dispatchTextInput works when the recipient replies.
     const conversation = await this.conversationService.createConversation({
       projectId,
       userId: body.to,
@@ -307,6 +321,7 @@ export class TwilioMessagingChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     });
+    await this.sessionManager.attachConversationToSession(sessionId, conversation.id);
 
     // Send the outbound message via Twilio REST API
     const TwilioConstructor = _twilioModule.Twilio ?? _twilioModule;
