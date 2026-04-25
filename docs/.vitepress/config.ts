@@ -44,6 +44,7 @@ export default withMermaid({
             { text: 'Agents', link: '/guide/agents' },
             { text: 'Classifiers', link: '/guide/classifiers' },
             { text: 'Context Transformers', link: '/guide/context-transformers' },
+            { text: 'Classifiers vs Transformers', link: '/guide/classifiers-vs-transformers' },
             { text: 'Tools', link: '/guide/tools' },
             { text: 'Knowledge Base', link: '/guide/knowledge' },
             { text: 'Global Actions', link: '/guide/global-actions' },
