@@ -528,10 +528,10 @@ export class TwilioVoiceChannelHost {
     }
     const config = configResult.data;
 
-    if (!config.applicationSid) {
-      res.status(422).json({ error: 'Provider has no applicationSid configured — required for outgoing calls' });
-      return;
-    }
+    // if (!config.applicationSid) {
+    //   res.status(422).json({ error: 'Provider has no applicationSid configured — required for outgoing calls' });
+    //   return;
+    // }
 
     // Resolve stageId: body overrides project default
     let resolvedStageId = body.stageId;
@@ -564,7 +564,7 @@ export class TwilioVoiceChannelHost {
     const twilioClient = new TwilioConstructor(config.accountSid, config.authToken);
     let callSid: string;
     try {
-      const call = await twilioClient.calls.create({ to: body.to, from: config.phoneNumber, applicationSid: config.applicationSid });
+      const call = await twilioClient.calls.create({ to: body.to, from: config.phoneNumber, applicationSid: config.applicationSid ?? undefined });
       callSid = call.sid;
     } catch (error) {
       logger.error({ error, projectId, to: body.to }, 'TwilioVoice: failed to create outbound call');
