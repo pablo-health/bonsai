@@ -140,7 +140,7 @@ export class TwilioVoiceChannelHost {
         path: '/api/twilio/voice/call',
         tags: ['Twilio Voice'],
         summary: 'Initiate an outgoing Twilio Voice call',
-        description: 'Places an outbound call to the specified phone number using the given Twilio Voice channel provider. A conversation record is created immediately. The call session is established asynchronously when the callee answers and Twilio fires the voice webhook.',
+        description: 'Places an outbound call to the specified phone number using the given Twilio Voice channel provider. A conversation record is created immediately. The call session is established asynchronously when the callee answers and Twilio fires the voice webhook. The voice webhook URL is passed directly as the `url` parameter unless the provider has an `applicationSid` configured.',  
         security: [],
         request: {
           query: voiceQuerySchema,
@@ -151,7 +151,7 @@ export class TwilioVoiceChannelHost {
           400: { description: 'Missing or invalid parameters' },
           401: { description: 'Invalid or inactive API key' },
           403: { description: 'API key does not permit twilio_voice channel' },
-          422: { description: 'applicationSid not configured or no default stage available' },
+          422: { description: 'No default stage available' },
           502: { description: 'Twilio REST call creation failed' },
         },
       },
@@ -478,10 +478,11 @@ export class TwilioVoiceChannelHost {
    *
    * Flow:
    * 1. Validate query params (apiKey, channelProviderId) and request body.
-   * 2. Load channel provider config — requires applicationSid to be set.
+   * 2. Load channel provider config.
    * 3. Resolve the target stageId (body value or project default).
    * 4. Pre-create a conversation record with direction 'outgoing'.
-   * 5. Place the outbound call via Twilio REST API using applicationSid.
+   * 5. Place the outbound call via Twilio REST API using the webhook URL as the `url`
+   *    parameter (or `applicationSid` if configured in the provider).
    * 6. Track callSid → conversationId for webhook correlation.
    * 7. Persist callSid into conversation metadata.
    * 8. Return 201 with callSid and conversationId.
@@ -528,11 +529,6 @@ export class TwilioVoiceChannelHost {
     }
     const config = configResult.data;
 
-    // if (!config.applicationSid) {
-    //   res.status(422).json({ error: 'Provider has no applicationSid configured — required for outgoing calls' });
-    //   return;
-    // }
-
     // Resolve stageId: body overrides project default
     let resolvedStageId = body.stageId;
     if (!resolvedStageId) {
@@ -560,11 +556,31 @@ export class TwilioVoiceChannelHost {
     });
 
     // Place the outbound call via Twilio REST API
+    // Build the webhook URL from the incoming request so Twilio can reach our handler when
+    // the callee answers. applicationSid is used instead only when explicitly configured.
+    const { apiKey: rawApiKeyForUrl, channelProviderId: channelProviderIdForUrl, stageId: stageIdForUrl, agentId: agentIdForUrl } = queryResult.data;
+    const webhookParams = new URLSearchParams({ apiKey: rawApiKeyForUrl, channelProviderId: channelProviderIdForUrl });
+    if (stageIdForUrl) webhookParams.set('stageId', stageIdForUrl);
+    if (agentIdForUrl) webhookParams.set('agentId', agentIdForUrl);
+    // Use req.hostname (respects X-Forwarded-Host set by Traefik/nginx) and
+    // X-Forwarded-Port so the URL is publicly reachable, not an internal address.
+    const forwardedPort = req.headers['x-forwarded-port'] as string | undefined;
+    const defaultPort = req.protocol === 'https' ? '443' : '80';
+    const port = forwardedPort ?? defaultPort;
+    const isStandardPort = (req.protocol === 'https' && port === '443') || (req.protocol === 'http' && port === '80');
+    const host = isStandardPort ? req.hostname : `${req.hostname}:${port}`;
+    const webhookUrl = `${req.protocol}://${host}/api/twilio/voice/webhook?${webhookParams.toString()}`;
     const TwilioConstructor = _twilioModule.Twilio ?? _twilioModule;
     const twilioClient = new TwilioConstructor(config.accountSid, config.authToken);
     let callSid: string;
     try {
-      const call = await twilioClient.calls.create({ to: body.to, from: config.phoneNumber, applicationSid: config.applicationSid ?? undefined });
+      const callCreateParams: Record<string, string> = { to: body.to, from: config.phoneNumber };
+      if (config.applicationSid) {
+        callCreateParams.applicationSid = config.applicationSid;
+      } else {
+        callCreateParams.url = webhookUrl;
+      }
+      const call = await twilioClient.calls.create(callCreateParams);
       callSid = call.sid;
     } catch (error) {
       logger.error({ error, projectId, to: body.to }, 'TwilioVoice: failed to create outbound call');
