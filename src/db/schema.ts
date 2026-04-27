@@ -550,6 +550,7 @@ export const testers = pgTable('testers', {
   name: text('name').notNull(),
   description: text('description'),
   prompt: text('prompt').notNull(),
+  hangUpPrompt: text('hang_up_prompt'),
   llmProviderId: text('llm_provider_id'),
   llmSettings: jsonb('llm_settings').$type<LlmSettings>(),
   userProfile: jsonb('user_profile').$type<Record<string, unknown>>(),

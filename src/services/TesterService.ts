@@ -40,7 +40,7 @@ export class TesterService extends BaseService {
     logger.info({ testerId, projectId, name: input.name, operatorId: context?.operatorId }, 'Creating tester');
 
     try {
-      const tester = await db.insert(testers).values({ id: testerId, projectId, name: input.name, description: input.description ?? null, prompt: input.prompt, llmProviderId: input.llmProviderId ?? null, llmSettings: input.llmSettings ?? null, userProfile: input.userProfile ?? null, tags: input.tags ?? [], metadata: input.metadata ?? null, version: 1 }).returning();
+      const tester = await db.insert(testers).values({ id: testerId, projectId, name: input.name, description: input.description ?? null, prompt: input.prompt, hangUpPrompt: input.hangUpPrompt ?? null, llmProviderId: input.llmProviderId ?? null, llmSettings: input.llmSettings ?? null, userProfile: input.userProfile ?? null, tags: input.tags ?? [], metadata: input.metadata ?? null, version: 1 }).returning();
 
       const created = tester[0];
 
@@ -165,6 +165,7 @@ export class TesterService extends BaseService {
       if (updateData.name !== undefined) updatePayload.name = updateData.name;
       if (updateData.description !== undefined) updatePayload.description = updateData.description;
       if (updateData.prompt !== undefined) updatePayload.prompt = updateData.prompt;
+      if (updateData.hangUpPrompt !== undefined) updatePayload.hangUpPrompt = updateData.hangUpPrompt;
       if (updateData.llmProviderId !== undefined) updatePayload.llmProviderId = updateData.llmProviderId;
       if (updateData.llmSettings !== undefined) updatePayload.llmSettings = updateData.llmSettings;
       if (updateData.userProfile !== undefined) updatePayload.userProfile = updateData.userProfile;
