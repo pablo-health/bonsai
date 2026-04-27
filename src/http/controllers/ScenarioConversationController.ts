@@ -65,7 +65,7 @@ export class ScenarioConversationController {
   }
 
   private async listScenarioConversations(req: Request, res: Response): Promise<void> {
-    checkPermissions(req, [PERMISSIONS.SCENARIO_CONVERSATION_READ]);
+    checkPermissions(req, [PERMISSIONS.SCENARIO_RUN_READ]);
     const { projectId } = projectScopedParamsSchema.parse(req.params);
     const query = scenarioConversationListParamsSchema.parse(req.query);
     const conversations = await this.scenarioConversationService.listScenarioConversations(projectId, query);
@@ -73,7 +73,7 @@ export class ScenarioConversationController {
   }
 
   private async getScenarioConversationById(req: Request, res: Response): Promise<void> {
-    checkPermissions(req, [PERMISSIONS.SCENARIO_CONVERSATION_READ]);
+    checkPermissions(req, [PERMISSIONS.SCENARIO_RUN_READ]);
     const params = scenarioConversationRouteParamsSchema.parse(req.params);
     const conversation = await this.scenarioConversationService.getScenarioConversationById(params.projectId, params.id);
     res.status(200).json(conversation);
