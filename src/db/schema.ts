@@ -541,7 +541,7 @@ export type DataExtractionEntry = {
 };
 
 /** Status of a scenario run or scenario conversation */
-export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed';
+export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed' | 'cancelled';
 
 // Tester table — persona that acts as a user in scenario testing
 export const testers = pgTable('testers', {
@@ -591,7 +591,7 @@ export const scenarioRuns = pgTable('scenario_runs', {
   id: text('id').notNull(),
   projectId: text('project_id').notNull().references(() => projects.id),
   scenarioId: text('scenario_id').notNull(),
-  testerIds: jsonb('tester_ids').notNull().default([]).$type<string[]>(),
+  testers: jsonb('testers').notNull().default({}).$type<Record<string, number>>(),
   totalConversations: integer('total_conversations').notNull(),
   status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
   metadata: jsonb('metadata').$type<Record<string, any>>(),

@@ -2,6 +2,7 @@ import { injectable } from 'tsyringe';
 import { eq, and, SQL, desc } from 'drizzle-orm';
 import { db } from '../../db/index';
 import { scenarioConversations } from '../../db/schema';
+import type { ScenarioRunStatus } from '../../db/schema';
 import type { ScenarioConversationResponse, ScenarioConversationListResponse, ScenarioConversationListParams } from '../../http/contracts/scenarioConversation';
 import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from '../../http/contracts/scenarioConversation';
 import { NotFoundError } from '../../errors';
@@ -9,10 +10,26 @@ import { buildFilterCondition, buildOrderBy } from '../../utils/queryBuilder';
 import { countRows, normalizeListLimit } from '../../utils/pagination';
 import { logger } from '../../utils/logger';
 import { BaseService } from '../BaseService';
+import { generateId, ID_PREFIXES } from '../../utils/idGenerator';
+
+/** Input for creating a scenario conversation (execution engine only) */
+export type CreateScenarioConversationInput = {
+  scenarioRunId: string;
+  projectId: string;
+  scenarioId: string;
+  testerId: string;
+  conversationId?: string;
+};
+
+/** Results to write when updating a scenario conversation status */
+export type ScenarioConversationResults = {
+  dataExtractionResults?: Record<string, unknown>;
+  dataTransformationResults?: Record<string, unknown>;
+};
 
 /**
- * Service for reading scenario conversations.
- * Scenario conversations are system-generated and read-only via the API.
+ * Service for reading and writing scenario conversations.
+ * Write operations are for the execution engine only.
  */
 @injectable()
 export class ScenarioConversationService extends BaseService {
@@ -93,6 +110,58 @@ export class ScenarioConversationService extends BaseService {
       return scenarioConversationListResponseSchema.parse({ items: conversationList, total, offset, limit });
     } catch (error) {
       logger.error({ error, params }, 'Failed to list scenario conversations');
+      throw error;
+    }
+  }
+
+  /**
+   * Creates a new scenario conversation record for an execution slot
+   * @param input - Scenario conversation creation data
+   * @returns The created scenario conversation
+   */
+  async createScenarioConversation(input: CreateScenarioConversationInput): Promise<ScenarioConversationResponse> {
+    const id = generateId(ID_PREFIXES.SCENARIO_CONVERSATION);
+    logger.info({ id, scenarioRunId: input.scenarioRunId, testerId: input.testerId }, 'Creating scenario conversation');
+    try {
+      const result = await db.insert(scenarioConversations).values({ id, projectId: input.projectId, scenarioRunId: input.scenarioRunId, scenarioId: input.scenarioId, testerId: input.testerId, conversationId: input.conversationId ?? null, status: 'queued', version: 1 }).returning();
+      return scenarioConversationResponseSchema.parse(result[0]);
+    } catch (error) {
+      logger.error({ error, id }, 'Failed to create scenario conversation');
+      throw error;
+    }
+  }
+
+  /**
+   * Updates the status and optional results of a scenario conversation
+   * @param id - The scenario conversation ID
+   * @param projectId - The project the conversation belongs to
+   * @param status - The new status to set
+   * @param results - Optional extraction and transformation results to persist
+   */
+  async updateScenarioConversationStatus(id: string, projectId: string, status: ScenarioRunStatus, results?: ScenarioConversationResults): Promise<void> {
+    try {
+      const updateData: Record<string, unknown> = { status, updatedAt: new Date() };
+      if (results?.dataExtractionResults !== undefined) updateData.dataExtractionResults = results.dataExtractionResults;
+      if (results?.dataTransformationResults !== undefined) updateData.dataTransformationResults = results.dataTransformationResults;
+      await db.update(scenarioConversations).set(updateData).where(and(eq(scenarioConversations.id, id), eq(scenarioConversations.projectId, projectId)));
+      logger.info({ id, status }, 'Scenario conversation status updated');
+    } catch (error) {
+      logger.error({ error, id, status }, 'Failed to update scenario conversation status');
+      throw error;
+    }
+  }
+
+  /**
+   * Links a conversation ID to a scenario conversation record
+   * @param id - The scenario conversation ID
+   * @param projectId - The project the conversation belongs to
+   * @param conversationId - The conversation ID to link
+   */
+  async linkConversation(id: string, projectId: string, conversationId: string): Promise<void> {
+    try {
+      await db.update(scenarioConversations).set({ conversationId, updatedAt: new Date() }).where(and(eq(scenarioConversations.id, id), eq(scenarioConversations.projectId, projectId)));
+    } catch (error) {
+      logger.error({ error, id, conversationId }, 'Failed to link conversation to scenario conversation');
       throw error;
     }
   }

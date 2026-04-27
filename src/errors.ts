@@ -120,6 +120,20 @@ export class UserBannedError extends Error {
 }
 
 /**
+ * Error thrown when a conversation terminates (ends, is aborted, or fails) during automated test execution
+ */
+export class ConversationTerminatedError extends Error {
+  /** The conversation event type that caused termination (e.g. 'conversation_end', 'conversation_aborted', 'conversation_failed') */
+  readonly terminalEvent: string;
+
+  constructor(terminalEvent: string) {
+    super(`Conversation terminated with event: ${terminalEvent}`);
+    this.name = 'ConversationTerminatedError';
+    this.terminalEvent = terminalEvent;
+  }
+}
+
+/**
  * Error thrown when a resource with the same unique identifier already exists
  */
 export class ConflictError extends Error {
