@@ -70,6 +70,12 @@ export default withMermaid({
           ],
         },
         {
+          text: 'Testing',
+          items: [
+            { text: 'Automated Testing', link: '/guide/testing' },
+          ],
+        },
+        {
           text: 'Operations',
           items: [
             { text: 'Issues', link: '/guide/issues' },
@@ -136,6 +142,14 @@ export default withMermaid({
             { text: 'Analytics', link: '/api/analytics' },
             { text: 'Analytics Query Engine', link: '/api/analytics-query' },
             { text: 'Analytics Funnel Engine', link: '/api/analytics-funnels' },
+          ],
+        },
+        {
+          text: 'Testing',
+          items: [
+            { text: 'Testers', link: '/api/testers' },
+            { text: 'Scenarios', link: '/api/scenarios' },
+            { text: 'Scenario Runs', link: '/api/scenario-runs' },
           ],
         },
         {

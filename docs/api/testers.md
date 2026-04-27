@@ -21,6 +21,7 @@ Content-Type: application/json
 | `name` | `string` (min 1) | Yes | Display name |
 | `description` | `string` | No | Detailed description |
 | `prompt` | `string` (min 1) | Yes | Prompt that drives the tester's conversational behaviour |
+| `hangUpPrompt` | `string` | No | Mini-prompt evaluated each turn to decide whether the tester should hang up (used when `personaCanHangUp` is enabled on the scenario); must return `true` to continue or `false` to hang up |
 | `llmProviderId` | `string` | No | LLM provider ID |
 | `llmSettings` | `LlmSettings` | No | LLM provider-specific settings |
 | `userProfile` | `object` | No | Key-value profile variables injected as context (same format as conversation user profile) |
@@ -98,6 +99,7 @@ Content-Type: application/json
 | `name` | `string` | No | Display name |
 | `description` | `string` | Yes | Description |
 | `prompt` | `string` | No | Persona prompt |
+| `hangUpPrompt` | `string` | Yes | Hang-up decision mini-prompt |
 | `llmProviderId` | `string` | Yes | LLM provider ID |
 | `llmSettings` | `object` | Yes | LLM settings |
 | `userProfile` | `object` | Yes | User profile key-value pairs |
