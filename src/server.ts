@@ -51,6 +51,10 @@ import { fileURLToPath } from 'url';
 import { SecretsManagerRegistry } from './services/secrets/SecretsManagerRegistry';
 import { LocalSecretsManager, LOCAL_SECRETS_MANAGER_NAME } from './services/secrets/LocalSecretsManager';
 import { SecretController } from './http/controllers/SecretController';
+import { TesterController } from './http/controllers/TesterController';
+import { ScenarioController } from './http/controllers/ScenarioController';
+import { ScenarioRunController } from './http/controllers/ScenarioRunController';
+import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
 
 // Register the OpenAPI spec provider before the IoC container is used.
 // This breaks the circular module dependency that would arise from VersionService
@@ -231,6 +235,18 @@ export function createApp(): express.Application {
 
   const secretController = container.resolve(SecretController);
   secretController.registerRoutes(app);
+
+  const testerController = container.resolve(TesterController);
+  testerController.registerRoutes(app);
+
+  const scenarioController = container.resolve(ScenarioController);
+  scenarioController.registerRoutes(app);
+
+  const scenarioRunController = container.resolve(ScenarioRunController);
+  scenarioRunController.registerRoutes(app);
+
+  const scenarioConversationController = container.resolve(ScenarioConversationController);
+  scenarioConversationController.registerRoutes(app);
 
   container.resolve(WebRTCChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);

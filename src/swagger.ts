@@ -97,6 +97,14 @@ import { exportBundleSchema, migrationResultSchema, migrationJobSchema, migratio
 import { ProjectExchangeController } from './http/controllers/ProjectExchangeController';
 import { SecretController } from './http/controllers/SecretController';
 import { secretResponseSchema, secretListResponseSchema, secretValueResponseSchema } from './http/contracts/secret';
+import { TesterController } from './http/controllers/TesterController';
+import { createTesterSchema, updateTesterBodySchema, deleteTesterBodySchema, testerResponseSchema, testerListResponseSchema } from './http/contracts/tester';
+import { ScenarioController } from './http/controllers/ScenarioController';
+import { dataExtractionEntrySchema, createScenarioSchema, updateScenarioBodySchema, deleteScenarioBodySchema, scenarioResponseSchema, scenarioListResponseSchema } from './http/contracts/scenario';
+import { ScenarioRunController } from './http/controllers/ScenarioRunController';
+import { scenarioRunStatusSchema, createScenarioRunSchema, scenarioRunResponseSchema, scenarioRunListResponseSchema } from './http/contracts/scenarioRun';
+import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
+import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from './http/contracts/scenarioConversation';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
@@ -549,6 +557,47 @@ export function getOpenAPISpec(): any {
   registry.register('SecretValueResponse', secretValueResponseSchema);
   const secretPaths = SecretController.getOpenAPIPaths();
   for (const path of secretPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Tester schemas and routes
+  registry.register('DataExtractionEntry', dataExtractionEntrySchema);
+  registry.register('ScenarioRunStatus', scenarioRunStatusSchema);
+  registry.register('CreateTesterRequest', createTesterSchema);
+  registry.register('UpdateTesterRequest', updateTesterBodySchema);
+  registry.register('DeleteTesterRequest', deleteTesterBodySchema);
+  registry.register('TesterResponse', testerResponseSchema);
+  registry.register('TesterListResponse', testerListResponseSchema);
+  const testerPaths = TesterController.getOpenAPIPaths();
+  for (const path of testerPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Scenario schemas and routes
+  registry.register('CreateScenarioRequest', createScenarioSchema);
+  registry.register('UpdateScenarioRequest', updateScenarioBodySchema);
+  registry.register('DeleteScenarioRequest', deleteScenarioBodySchema);
+  registry.register('ScenarioResponse', scenarioResponseSchema);
+  registry.register('ScenarioListResponse', scenarioListResponseSchema);
+  const scenarioPaths = ScenarioController.getOpenAPIPaths();
+  for (const path of scenarioPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Scenario Run schemas and routes
+  registry.register('CreateScenarioRunRequest', createScenarioRunSchema);
+  registry.register('ScenarioRunResponse', scenarioRunResponseSchema);
+  registry.register('ScenarioRunListResponse', scenarioRunListResponseSchema);
+  const scenarioRunPaths = ScenarioRunController.getOpenAPIPaths();
+  for (const path of scenarioRunPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Scenario Conversation schemas and routes
+  registry.register('ScenarioConversationResponse', scenarioConversationResponseSchema);
+  registry.register('ScenarioConversationListResponse', scenarioConversationListResponseSchema);
+  const scenarioConversationPaths = ScenarioConversationController.getOpenAPIPaths();
+  for (const path of scenarioConversationPaths) {
     registry.registerPath(path);
   }
 

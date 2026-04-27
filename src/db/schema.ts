@@ -580,6 +580,10 @@ export const projectsRelations = relations(projects, ({ many }) => ({
   copyDecorators: many(copyDecorators),
   savedSliceQueries: many(savedSliceQueries),
   savedFunnelQueries: many(savedFunnelQueries),
+  testers: many(testers),
+  scenarios: many(scenarios),
+  scenarioRuns: many(scenarioRuns),
+  scenarioConversations: many(scenarioConversations),
 }));
 
 export const agentsRelations = relations(agents, ({ one, many }) => ({
@@ -733,5 +737,127 @@ export const savedFunnelQueriesRelations = relations(savedFunnelQueries, ({ one 
   operator: one(operators, {
     fields: [savedFunnelQueries.operatorId],
     references: [operators.id],
+  }),
+}));
+
+/** Entry in the data extraction configuration: a stage variable with an optional expected value */
+export type DataExtractionEntry = {
+  stageId: string;
+  varName: string;
+  expectedValue?: unknown;
+};
+
+/** Status of a scenario run or scenario conversation */
+export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed';
+
+// Tester table — persona that acts as a user in scenario testing
+export const testers = pgTable('testers', {
+  id: text('id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  name: text('name').notNull(),
+  description: text('description'),
+  prompt: text('prompt').notNull(),
+  llmProviderId: text('llm_provider_id'),
+  llmSettings: jsonb('llm_settings').$type<LlmSettings>(),
+  userProfile: jsonb('user_profile').$type<Record<string, unknown>>(),
+  tags: jsonb('tags').notNull().default([]).$type<string[]>(),
+  metadata: jsonb('metadata').$type<Record<string, any>>(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.id] }),
+]);
+
+// Scenario table — conversation scenario definition for automated testing
+export const scenarios = pgTable('scenarios', {
+  id: text('id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  name: text('name').notNull(),
+  description: text('description'),
+  language: text('language').notNull(),
+  startingStageId: text('starting_stage_id').notNull(),
+  maxTurns: integer('max_turns').notNull(),
+  endingStageIds: jsonb('ending_stage_ids').notNull().default([]).$type<string[]>(),
+  personaCanHangUp: boolean('persona_can_hang_up').notNull().default(false),
+  dataExtraction: jsonb('data_extraction').$type<DataExtractionEntry[]>(),
+  contextTransformerId: text('context_transformer_id'),
+  dataPostProcessingExpected: jsonb('data_post_processing_expected').$type<Record<string, unknown>>(),
+  tags: jsonb('tags').notNull().default([]).$type<string[]>(),
+  metadata: jsonb('metadata').$type<Record<string, any>>(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.id] }),
+]);
+
+// ScenarioRun table — an instance of running a scenario with one or more testers
+export const scenarioRuns = pgTable('scenario_runs', {
+  id: text('id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  scenarioId: text('scenario_id').notNull(),
+  testerIds: jsonb('tester_ids').notNull().default([]).$type<string[]>(),
+  totalConversations: integer('total_conversations').notNull(),
+  status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
+  metadata: jsonb('metadata').$type<Record<string, any>>(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.id] }),
+  index('idx_scenario_runs_project_scenario').on(table.projectId, table.scenarioId),
+]);
+
+// ScenarioConversation table — individual conversation executed as part of a scenario run
+export const scenarioConversations = pgTable('scenario_conversations', {
+  id: text('id').notNull(),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  scenarioRunId: text('scenario_run_id').notNull(),
+  scenarioId: text('scenario_id').notNull(),
+  testerId: text('tester_id').notNull(),
+  conversationId: text('conversation_id'),
+  status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
+  dataExtractionResults: jsonb('data_extraction_results').$type<Record<string, unknown>>(),
+  dataTransformationResults: jsonb('data_transformation_results').$type<Record<string, unknown>>(),
+  metadata: jsonb('metadata').$type<Record<string, any>>(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.id] }),
+  index('idx_scenario_conversations_project_run').on(table.projectId, table.scenarioRunId),
+]);
+
+export const testersRelations = relations(testers, ({ one }) => ({
+  project: one(projects, {
+    fields: [testers.projectId],
+    references: [projects.id],
+  }),
+}));
+
+export const scenariosRelations = relations(scenarios, ({ one }) => ({
+  project: one(projects, {
+    fields: [scenarios.projectId],
+    references: [projects.id],
+  }),
+}));
+
+export const scenarioRunsRelations = relations(scenarioRuns, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [scenarioRuns.projectId],
+    references: [projects.id],
+  }),
+  conversations: many(scenarioConversations),
+}));
+
+export const scenarioConversationsRelations = relations(scenarioConversations, ({ one }) => ({
+  project: one(projects, {
+    fields: [scenarioConversations.projectId],
+    references: [projects.id],
+  }),
+  scenarioRun: one(scenarioRuns, {
+    fields: [scenarioConversations.projectId, scenarioConversations.scenarioRunId],
+    references: [scenarioRuns.projectId, scenarioRuns.id],
   }),
 }));

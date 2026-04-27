@@ -14,6 +14,8 @@ import {
   stages,
   apiKeys,
   environments,
+  testers,
+  scenarios,
 } from '../db/schema';
 import { BaseService } from './BaseService';
 import { VersionService } from './VersionService';
@@ -90,6 +92,8 @@ export class MigrationService extends BaseService {
       knowledgeCategoryIds: query.knowledgeCategoryIds,
       providerIds: query.providerIds,
       apiKeyIds: query.apiKeyIds,
+      testerIds: query.testerIds,
+      scenarioIds: query.scenarioIds,
     };
 
     logger.info({ selection, operatorId: context.operatorId }, 'Exporting migration bundle');
@@ -142,6 +146,8 @@ export class MigrationService extends BaseService {
         upserted.push({ entity: 'knowledgeItems', count: await this.upsertKnowledgeItems(tx, bundle.knowledgeItems) });
         upserted.push({ entity: 'stages', count: await this.upsertStages(tx, bundle.stages) });
         upserted.push({ entity: 'apiKeys', count: await this.upsertApiKeys(tx, bundle.apiKeys) });
+        upserted.push({ entity: 'testers', count: await this.upsertTesters(tx, bundle.testers) });
+        upserted.push({ entity: 'scenarios', count: await this.upsertScenarios(tx, bundle.scenarios) });
       });
 
       // Log a 'migrate' audit entry per entity instance after the transaction commits
@@ -157,6 +163,8 @@ export class MigrationService extends BaseService {
         ...bundle.knowledgeItems.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'knowledgeItem', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.stages.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'stage', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.apiKeys.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'apiKey', entityId: row.id, userId: context.operatorId, newEntity: row })),
+        ...bundle.testers.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'tester', entityId: row.id, userId: context.operatorId, newEntity: row })),
+        ...bundle.scenarios.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'scenario', entityId: row.id, userId: context.operatorId, newEntity: row })),
       ]);
     } else {
       upserted.push(
@@ -171,6 +179,8 @@ export class MigrationService extends BaseService {
         { entity: 'knowledgeItems', count: bundle.knowledgeItems.length },
         { entity: 'stages', count: bundle.stages.length },
         { entity: 'apiKeys', count: bundle.apiKeys.length },
+        { entity: 'testers', count: bundle.testers.length },
+        { entity: 'scenarios', count: bundle.scenarios.length },
       );
     }
 
@@ -293,6 +303,8 @@ export class MigrationService extends BaseService {
       knowledgeCategoryIds: query.knowledgeCategoryIds,
       providerIds: query.providerIds,
       apiKeyIds: query.apiKeyIds,
+      testerIds: query.testerIds,
+      scenarioIds: query.scenarioIds,
     };
 
     const bundle = await this.resolveBundle(selection, '', selection);
@@ -312,12 +324,15 @@ export class MigrationService extends BaseService {
       knowledgeItems: bundle.knowledgeItems.map(r => ({ id: r.id as string, name: (r.question ?? r.id) as string })),
       stages: bundle.stages.map(toProjectStub),
       apiKeys: bundle.apiKeys.map(toProjectStub),
+      testers: bundle.testers.map(toProjectStub),
+      scenarios: bundle.scenarios.map(toProjectStub),
       totalCount: 0,
     };
     result.totalCount = [
       result.providers, result.projects, result.agents, result.classifiers,
       result.contextTransformers, result.tools, result.globalActions,
       result.knowledgeCategories, result.knowledgeItems, result.stages, result.apiKeys,
+      result.testers, result.scenarios,
     ].reduce((sum, arr) => sum + arr.length, 0);
 
     logger.info({ totalCount: result.totalCount, selection, operatorId: context.operatorId }, 'Migration preview computed');
@@ -353,7 +368,7 @@ export class MigrationService extends BaseService {
 
     // ── 2. Fetch explicitly selected leaf entities ────────────────────────────
 
-    const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitStageRows, explicitApiKeyRows] = await Promise.all([
+    const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitStageRows, explicitApiKeyRows, explicitTesterRows, explicitScenarioRows] = await Promise.all([
       this.fetchOrAll(selectAll || !!selection.agentIds?.length, agents, selection.agentIds, agents.id),
       this.fetchOrAll(selectAll || !!selection.classifierIds?.length, classifiers, selection.classifierIds, classifiers.id),
       this.fetchOrAll(selectAll || !!selection.contextTransformerIds?.length, contextTransformers, selection.contextTransformerIds, contextTransformers.id),
@@ -362,6 +377,8 @@ export class MigrationService extends BaseService {
       this.fetchOrAll(selectAll || !!selection.knowledgeCategoryIds?.length, knowledgeCategories, selection.knowledgeCategoryIds, knowledgeCategories.id),
       this.fetchOrAll(selectAll || !!selection.stageIds?.length, stages, selection.stageIds, stages.id),
       this.fetchOrAll(selectAll || !!selection.apiKeyIds?.length, apiKeys, selection.apiKeyIds, apiKeys.id),
+      this.fetchOrAll(selectAll || !!selection.testerIds?.length, testers, selection.testerIds, testers.id),
+      this.fetchOrAll(selectAll || !!selection.scenarioIds?.length, scenarios, selection.scenarioIds, scenarios.id),
     ]);
 
     // ── 3. Expand project selections: fetch all children for selected projects ─
@@ -378,8 +395,10 @@ export class MigrationService extends BaseService {
           db.select().from(knowledgeCategories).where(inArray(knowledgeCategories.projectId, [...expandedProjectIds])),
           db.select().from(stages).where(inArray(stages.projectId, [...expandedProjectIds])),
           db.select().from(apiKeys).where(inArray(apiKeys.projectId, [...expandedProjectIds])),
+          db.select().from(testers).where(inArray(testers.projectId, [...expandedProjectIds])),
+          db.select().from(scenarios).where(inArray(scenarios.projectId, [...expandedProjectIds])),
         ])
-      : [[], [], [], [], [], [], [], []];
+      : [[], [], [], [], [], [], [], [], [], []];
 
     // Merge explicit + project-child rows (deduplicated by ID)
     const agentRows = this.dedup([...explicitAgentRows, ...childrenOfProjects[0] as any[]], 'id');
@@ -390,6 +409,8 @@ export class MigrationService extends BaseService {
     const kcRows = this.dedup([...explicitKcRows, ...childrenOfProjects[5] as any[]], 'id');
     const stageRows = this.dedup([...explicitStageRows, ...childrenOfProjects[6] as any[]], 'id');
     const apiKeyRows = this.dedup([...explicitApiKeyRows, ...childrenOfProjects[7] as any[]], 'id');
+    const testerRows = this.dedup([...explicitTesterRows, ...childrenOfProjects[8] as any[]], 'id');
+    const scenarioRows = this.dedup([...explicitScenarioRows, ...childrenOfProjects[9] as any[]], 'id');
 
     // ── 4. Knowledge items — fetch all items for every included category ─────
 
@@ -412,6 +433,8 @@ export class MigrationService extends BaseService {
       ...allKcRows.map(r => r.projectId),
       ...stageRows.map(r => r.projectId),
       ...apiKeyRows.map(r => r.projectId),
+      ...testerRows.map(r => r.projectId),
+      ...scenarioRows.map(r => r.projectId),
     ]);
 
     const missingProjectIds = [...allEntityProjectIds].filter(id => !expandedProjectIds.has(id));
@@ -455,6 +478,9 @@ export class MigrationService extends BaseService {
     for (const row of [...allClassifierRows, ...allCtRows, ...toolRows, ...stageRows]) {
       if (row.llmProviderId) referencedProviderIds.add(row.llmProviderId);
     }
+    for (const row of testerRows) {
+      if (row.llmProviderId) referencedProviderIds.add(row.llmProviderId);
+    }
     for (const p of allProjectRows) {
       const asrId = (p.asrConfig as any)?.asrProviderId;
       const storageId = (p.storageConfig as any)?.storageProviderId;
@@ -483,6 +509,8 @@ export class MigrationService extends BaseService {
       knowledgeItems: kiRows,
       stages: stageRows,
       apiKeys: apiKeyRows,
+      testers: testerRows,
+      scenarios: scenarioRows,
     };
   }
 
@@ -850,6 +878,52 @@ export class MigrationService extends BaseService {
         isActive: sql`excluded.is_active`,
         metadata: sql`excluded.metadata`,
         version: sql`${apiKeys.version} + 1`,
+        updatedAt: sql`now()`,
+      },
+    });
+    return rows.length;
+  }
+
+  private async upsertTesters(tx: DbTx, rows: any[]): Promise<number> {
+    if (!rows.length) return 0;
+    await tx.insert(testers).values(rows.map(r => this.parseTimestamps(r))).onConflictDoUpdate({
+      target: [testers.projectId, testers.id],
+      set: {
+        projectId: sql`excluded.project_id`,
+        name: sql`excluded.name`,
+        description: sql`excluded.description`,
+        prompt: sql`excluded.prompt`,
+        llmProviderId: sql`excluded.llm_provider_id`,
+        llmSettings: sql`excluded.llm_settings`,
+        userProfile: sql`excluded.user_profile`,
+        tags: sql`excluded.tags`,
+        metadata: sql`excluded.metadata`,
+        version: sql`${testers.version} + 1`,
+        updatedAt: sql`now()`,
+      },
+    });
+    return rows.length;
+  }
+
+  private async upsertScenarios(tx: DbTx, rows: any[]): Promise<number> {
+    if (!rows.length) return 0;
+    await tx.insert(scenarios).values(rows.map(r => this.parseTimestamps(r))).onConflictDoUpdate({
+      target: [scenarios.projectId, scenarios.id],
+      set: {
+        projectId: sql`excluded.project_id`,
+        name: sql`excluded.name`,
+        description: sql`excluded.description`,
+        language: sql`excluded.language`,
+        startingStageId: sql`excluded.starting_stage_id`,
+        maxTurns: sql`excluded.max_turns`,
+        endingStageIds: sql`excluded.ending_stage_ids`,
+        personaCanHangUp: sql`excluded.persona_can_hang_up`,
+        dataExtraction: sql`excluded.data_extraction`,
+        contextTransformerId: sql`excluded.context_transformer_id`,
+        dataPostProcessingExpected: sql`excluded.data_post_processing_expected`,
+        tags: sql`excluded.tags`,
+        metadata: sql`excluded.metadata`,
+        version: sql`${scenarios.version} + 1`,
         updatedAt: sql`now()`,
       },
     });
