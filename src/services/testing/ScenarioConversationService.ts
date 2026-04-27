@@ -1,14 +1,14 @@
 import { injectable } from 'tsyringe';
 import { eq, and, SQL, desc } from 'drizzle-orm';
-import { db } from '../db/index';
-import { scenarioConversations } from '../db/schema';
-import type { ScenarioConversationResponse, ScenarioConversationListResponse, ScenarioConversationListParams } from '../http/contracts/scenarioConversation';
-import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from '../http/contracts/scenarioConversation';
-import { NotFoundError } from '../errors';
-import { buildFilterCondition, buildOrderBy } from '../utils/queryBuilder';
-import { countRows, normalizeListLimit } from '../utils/pagination';
-import { logger } from '../utils/logger';
-import { BaseService } from './BaseService';
+import { db } from '../../db/index';
+import { scenarioConversations } from '../../db/schema';
+import type { ScenarioConversationResponse, ScenarioConversationListResponse, ScenarioConversationListParams } from '../../http/contracts/scenarioConversation';
+import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from '../../http/contracts/scenarioConversation';
+import { NotFoundError } from '../../errors';
+import { buildFilterCondition, buildOrderBy } from '../../utils/queryBuilder';
+import { countRows, normalizeListLimit } from '../../utils/pagination';
+import { logger } from '../../utils/logger';
+import { BaseService } from '../BaseService';
 
 /**
  * Service for reading scenario conversations.

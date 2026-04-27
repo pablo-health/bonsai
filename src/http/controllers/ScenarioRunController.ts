@@ -2,7 +2,7 @@ import { inject, singleton } from 'tsyringe';
 import type { Request, Response, Router } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { PERMISSIONS } from '../../permissions';
-import { ScenarioRunService } from '../../services/ScenarioRunService';
+import { ScenarioRunService } from '../../services/testing/ScenarioRunService';
 import { createScenarioRunSchema, scenarioRunResponseSchema, scenarioRunListResponseSchema, scenarioRunRouteParamsSchema } from '../contracts/scenarioRun';
 import { listParamsSchema, projectScopedParamsSchema } from '../contracts/common';
 import { checkPermissions } from '../../utils/permissions';

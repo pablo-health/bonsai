@@ -2,7 +2,7 @@ import { inject, singleton } from 'tsyringe';
 import type { Request, Response, Router } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { PERMISSIONS } from '../../permissions';
-import { TesterService } from '../../services/TesterService';
+import { TesterService } from '../../services/testing/TesterService';
 import { createTesterSchema, updateTesterBodySchema, deleteTesterBodySchema, testerResponseSchema, testerListResponseSchema, testerRouteParamsSchema } from '../contracts/tester';
 import { listParamsSchema, projectScopedParamsSchema } from '../contracts/common';
 import { checkPermissions } from '../../utils/permissions';

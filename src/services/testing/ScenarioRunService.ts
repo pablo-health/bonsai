@@ -1,19 +1,19 @@
 import { injectable, inject } from 'tsyringe';
 import { eq, and, SQL, desc } from 'drizzle-orm';
-import { db } from '../db/index';
-import { scenarioRuns } from '../db/schema';
-import type { CreateScenarioRunRequest, ScenarioRunResponse, ScenarioRunListResponse } from '../http/contracts/scenarioRun';
-import type { ListParams } from '../http/contracts/common';
-import { scenarioRunResponseSchema, scenarioRunListResponseSchema } from '../http/contracts/scenarioRun';
-import { AuditService } from './AuditService';
-import { NotFoundError } from '../errors';
-import { buildFilterCondition, buildOrderBy } from '../utils/queryBuilder';
-import { countRows, normalizeListLimit } from '../utils/pagination';
-import { logger } from '../utils/logger';
-import { BaseService } from './BaseService';
-import type { RequestContext } from './RequestContext';
-import { PERMISSIONS } from '../permissions';
-import { generateId, ID_PREFIXES } from '../utils/idGenerator';
+import { db } from '../../db/index';
+import { scenarioRuns } from '../../db/schema';
+import type { CreateScenarioRunRequest, ScenarioRunResponse, ScenarioRunListResponse } from '../../http/contracts/scenarioRun';
+import type { ListParams } from '../../http/contracts/common';
+import { scenarioRunResponseSchema, scenarioRunListResponseSchema } from '../../http/contracts/scenarioRun';
+import { AuditService } from '../AuditService';
+import { NotFoundError } from '../../errors';
+import { buildFilterCondition, buildOrderBy } from '../../utils/queryBuilder';
+import { countRows, normalizeListLimit } from '../../utils/pagination';
+import { logger } from '../../utils/logger';
+import { BaseService } from '../BaseService';
+import type { RequestContext } from '../RequestContext';
+import { PERMISSIONS } from '../../permissions';
+import { generateId, ID_PREFIXES } from '../../utils/idGenerator';
 
 /**
  * Service for managing scenario runs.
