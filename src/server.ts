@@ -35,6 +35,7 @@ import { VersionController } from './http/controllers/VersionController';
 import { MigrationController } from './http/controllers/MigrationController';
 import { ProjectExchangeController } from './http/controllers/ProjectExchangeController';
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
+import { ScenarioRunExecutorService } from './services/testing/ScenarioRunExecutorService';
 import { errorHandler } from './http/middleware/errorHandler';
 import { optionalAuthMiddleware } from './http/middleware/auth';
 import { requestContextMiddleware } from './http/middleware/requestContext';
@@ -254,6 +255,7 @@ export function createApp(): express.Application {
   container.resolve(WhatsAppChannelHost).registerRoutes(app);
 
   container.resolve(ConversationTimeoutService).start();
+  container.resolve(ScenarioRunExecutorService).start();
 
   app.use(errorHandler);
 

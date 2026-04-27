@@ -2,6 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { eq, and, SQL, desc } from 'drizzle-orm';
 import { db } from '../../db/index';
 import { scenarioRuns } from '../../db/schema';
+import type { ScenarioRunStatus } from '../../db/schema';
 import type { CreateScenarioRunRequest, ScenarioRunResponse, ScenarioRunListResponse } from '../../http/contracts/scenarioRun';
 import type { ListParams } from '../../http/contracts/common';
 import { scenarioRunResponseSchema, scenarioRunListResponseSchema } from '../../http/contracts/scenarioRun';
@@ -40,7 +41,8 @@ export class ScenarioRunService extends BaseService {
     logger.info({ runId, projectId, scenarioId: input.scenarioId, operatorId: context?.operatorId }, 'Creating scenario run');
 
     try {
-      const run = await db.insert(scenarioRuns).values({ id: runId, projectId, scenarioId: input.scenarioId, testerIds: input.testerIds, totalConversations: input.totalConversations, status: 'queued', metadata: input.metadata ?? null, version: 1 }).returning();
+      const totalConversations = Object.values(input.testers).reduce((sum, count) => sum + count, 0);
+      const run = await db.insert(scenarioRuns).values({ id: runId, projectId, scenarioId: input.scenarioId, testers: input.testers, totalConversations, status: 'queued', metadata: input.metadata ?? null, version: 1 }).returning();
 
       const created = run[0];
 
@@ -125,6 +127,57 @@ export class ScenarioRunService extends BaseService {
       return scenarioRunListResponseSchema.parse({ items: runList, total, offset, limit });
     } catch (error) {
       logger.error({ error, params }, 'Failed to list scenario runs');
+      throw error;
+    }
+  }
+
+  /**
+   * Returns all scenario runs with status 'queued'
+   * @param projectId - Optional project ID to scope the query
+   * @returns Array of queued scenario runs
+   */
+  async findQueuedRuns(projectId?: string): Promise<ScenarioRunResponse[]> {
+    try {
+      const conditions: SQL[] = [eq(scenarioRuns.status, 'queued')];
+      if (projectId) conditions.push(eq(scenarioRuns.projectId, projectId));
+      const runs = await db.query.scenarioRuns.findMany({ where: and(...conditions), orderBy: [desc(scenarioRuns.createdAt)] });
+      return runs.map((r) => scenarioRunResponseSchema.parse(r));
+    } catch (error) {
+      logger.error({ error }, 'Failed to find queued scenario runs');
+      throw error;
+    }
+  }
+
+  /**
+   * Atomically transitions a scenario run from 'queued' to 'in_progress'.
+   * Returns null if the run was already claimed by another executor instance.
+   * @param runId - The scenario run ID to claim
+   * @param projectId - The project the run belongs to
+   * @returns The claimed run, or null if already claimed
+   */
+  async claimQueuedRun(runId: string, projectId: string): Promise<ScenarioRunResponse | null> {
+    try {
+      const updated = await db.update(scenarioRuns).set({ status: 'in_progress', updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId), eq(scenarioRuns.status, 'queued'))).returning();
+      if (updated.length === 0) return null;
+      return scenarioRunResponseSchema.parse(updated[0]);
+    } catch (error) {
+      logger.error({ error, runId }, 'Failed to claim scenario run');
+      throw error;
+    }
+  }
+
+  /**
+   * Updates the status of a scenario run
+   * @param runId - The scenario run ID
+   * @param projectId - The project the run belongs to
+   * @param status - The new status to set
+   */
+  async updateRunStatus(runId: string, projectId: string, status: ScenarioRunStatus): Promise<void> {
+    try {
+      await db.update(scenarioRuns).set({ status, updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)));
+      logger.info({ runId, status }, 'Scenario run status updated');
+    } catch (error) {
+      logger.error({ error, runId, status }, 'Failed to update scenario run status');
       throw error;
     }
   }

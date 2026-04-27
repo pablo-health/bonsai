@@ -1,19 +1,34 @@
 import { inject, singleton } from 'tsyringe';
 import type { Request, Response, Router } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
+import { z } from 'zod';
 import { PERMISSIONS } from '../../permissions';
 import { ScenarioRunService } from '../../services/testing/ScenarioRunService';
+import { ScenarioRunExecutorService } from '../../services/testing/ScenarioRunExecutorService';
 import { createScenarioRunSchema, scenarioRunResponseSchema, scenarioRunListResponseSchema, scenarioRunRouteParamsSchema } from '../contracts/scenarioRun';
 import { listParamsSchema, projectScopedParamsSchema } from '../contracts/common';
 import { checkPermissions } from '../../utils/permissions';
 import { asyncHandler } from '../../utils/asyncHandler';
+
+/** Schema for the scheduler status response */
+const schedulerStatusSchema = z.object({
+  enabled: z.boolean().describe('Whether the scenario run scheduler is currently enabled'),
+});
+
+/** Schema for updating the scheduler status */
+const updateSchedulerStatusSchema = z.object({
+  enabled: z.boolean().describe('Set to true to enable the scheduler, false to disable it'),
+});
 
 /**
  * Controller for scenario run management
  */
 @singleton()
 export class ScenarioRunController {
-  constructor(@inject(ScenarioRunService) private readonly scenarioRunService: ScenarioRunService) { }
+  constructor(
+    @inject(ScenarioRunService) private readonly scenarioRunService: ScenarioRunService,
+    @inject(ScenarioRunExecutorService) private readonly executorService: ScenarioRunExecutorService,
+  ) { }
 
   /**
    * Get OpenAPI path definitions for this controller
@@ -76,6 +91,42 @@ export class ScenarioRunController {
           404: { description: 'Scenario run not found' },
         },
       },
+      {
+        method: 'get',
+        path: '/api/scenario-runs/scheduler',
+        tags: ['Scenario Runs'],
+        summary: 'Get scheduler status',
+        description: 'Returns whether the scenario run scheduler (circuit breaker) is currently enabled',
+        responses: {
+          200: {
+            description: 'Scheduler status',
+            content: { 'application/json': { schema: schedulerStatusSchema } },
+          },
+        },
+      },
+      {
+        method: 'put',
+        path: '/api/scenario-runs/scheduler',
+        tags: ['Scenario Runs'],
+        summary: 'Update scheduler status',
+        description: 'Enables or disables the scenario run scheduler circuit breaker. Disabling stops new executions from starting; in-flight runs complete normally.',
+        request: {
+          body: {
+            content: {
+              'application/json': {
+                schema: updateSchedulerStatusSchema,
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Scheduler status updated',
+            content: { 'application/json': { schema: schedulerStatusSchema } },
+          },
+          400: { description: 'Invalid request body' },
+        },
+      },
     ];
   }
 
@@ -86,6 +137,8 @@ export class ScenarioRunController {
     router.post('/api/projects/:projectId/scenario-runs', asyncHandler(this.createScenarioRun.bind(this)));
     router.get('/api/projects/:projectId/scenario-runs', asyncHandler(this.listScenarioRuns.bind(this)));
     router.get('/api/projects/:projectId/scenario-runs/:id', asyncHandler(this.getScenarioRunById.bind(this)));
+    router.get('/api/scenario-runs/scheduler', asyncHandler(this.getSchedulerStatus.bind(this)));
+    router.put('/api/scenario-runs/scheduler', asyncHandler(this.updateSchedulerStatus.bind(this)));
   }
 
   private async createScenarioRun(req: Request, res: Response): Promise<void> {
@@ -93,6 +146,7 @@ export class ScenarioRunController {
     const { projectId } = projectScopedParamsSchema.parse(req.params);
     const body = createScenarioRunSchema.parse(req.body);
     const run = await this.scenarioRunService.createScenarioRun(projectId, body, req.context);
+    this.executorService.notifyNewRun();
     res.status(201).json(run);
   }
 
@@ -109,5 +163,21 @@ export class ScenarioRunController {
     const params = scenarioRunRouteParamsSchema.parse(req.params);
     const run = await this.scenarioRunService.getScenarioRunById(params.projectId, params.id);
     res.status(200).json(run);
+  }
+
+  private async getSchedulerStatus(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.SYSTEM_CONFIG]);
+    res.status(200).json(this.executorService.getStatus());
+  }
+
+  private async updateSchedulerStatus(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.SYSTEM_CONFIG]);
+    const body = updateSchedulerStatusSchema.parse(req.body);
+    if (body.enabled) {
+      this.executorService.enable();
+    } else {
+      this.executorService.disable();
+    }
+    res.status(200).json(this.executorService.getStatus());
   }
 }

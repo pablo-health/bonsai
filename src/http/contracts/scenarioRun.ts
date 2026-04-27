@@ -23,8 +23,7 @@ export const scenarioRunRouteParamsSchema = z.object({
  */
 export const createScenarioRunSchema = z.object({
   scenarioId: z.string().min(1).describe('ID of the scenario to run'),
-  testerIds: z.array(z.string().min(1)).min(1).describe('IDs of the tester personas to use in this run'),
-  totalConversations: z.number().int().min(1).describe('Total number of conversations to execute in this run'),
+  testers: z.record(z.string().min(1), z.number().int().min(1)).refine((v) => Object.keys(v).length >= 1, { message: 'At least one tester is required' }).describe('Map of tester persona ID to number of conversations to run for that tester'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Additional metadata for this run'),
 });
 
@@ -35,8 +34,8 @@ export const scenarioRunResponseSchema = z.object({
   id: z.string().describe('Unique identifier for the scenario run'),
   projectId: z.string().describe('ID of the project this run belongs to'),
   scenarioId: z.string().describe('ID of the scenario being run'),
-  testerIds: z.array(z.string()).describe('IDs of the tester personas used in this run'),
-  totalConversations: z.number().int().describe('Total number of conversations to execute'),
+  testers: z.record(z.string(), z.number().int()).describe('Map of tester persona ID to number of conversations assigned to that tester'),
+  totalConversations: z.number().int().describe('Computed total number of conversations across all testers'),
   status: scenarioRunStatusSchema.describe('Current status of the scenario run'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
   version: z.number().int().describe('Version number for optimistic locking'),
