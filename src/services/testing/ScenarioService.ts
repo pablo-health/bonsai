@@ -234,4 +234,21 @@ export class ScenarioService extends BaseService {
       throw error;
     }
   }
+
+  /**
+   * Retrieves all audit log entries for a specific scenario
+   * @param id - The unique identifier of the scenario
+   * @param projectId - The project ID the scenario belongs to
+   * @returns Array of audit log entries for the scenario
+   */
+  async getScenarioAuditLogs(id: string, projectId: string): Promise<any[]> {
+    logger.debug({ id, projectId }, 'Fetching audit logs for scenario');
+
+    try {
+      return await this.auditService.getEntityAuditLogs('scenario', id, projectId);
+    } catch (error) {
+      logger.error({ error, id, projectId }, 'Failed to fetch scenario audit logs');
+      throw error;
+    }
+  }
 }

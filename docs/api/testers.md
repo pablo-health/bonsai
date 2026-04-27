@@ -88,6 +88,18 @@ Content-Type: application/json
 
 **Errors:** `404` | `409`
 
+## Get Tester Audit Logs
+
+```http
+GET /api/projects/:projectId/testers/:id/audit-logs
+```
+
+**Required permission:** `audit:read`
+
+**Response** `200 OK` — Array of [Audit Log](./audit-logs) entries for this tester
+
+**Errors:** `404` Not found
+
 ---
 
 ## Tester Response

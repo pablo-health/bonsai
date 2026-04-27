@@ -99,6 +99,18 @@ Content-Type: application/json
 
 **Errors:** `404` | `409`
 
+## Get Scenario Audit Logs
+
+```http
+GET /api/projects/:projectId/scenarios/:id/audit-logs
+```
+
+**Required permission:** `audit:read`
+
+**Response** `200 OK` — Array of [Audit Log](./audit-logs) entries for this scenario
+
+**Errors:** `404` Not found
+
 ---
 
 ## Scenario Response

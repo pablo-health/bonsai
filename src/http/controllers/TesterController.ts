@@ -124,6 +124,20 @@ export class TesterController {
           409: { description: 'Version conflict - entity was modified' },
         },
       },
+      {
+        method: 'get',
+        path: '/api/projects/{projectId}/testers/{id}/audit-logs',
+        tags: ['Testers'],
+        summary: 'Get tester audit logs',
+        description: 'Retrieves audit logs for a specific tester',
+        request: {
+          params: testerRouteParamsSchema,
+        },
+        responses: {
+          200: { description: 'Audit logs retrieved successfully' },
+          404: { description: 'Tester not found' },
+        },
+      },
     ];
   }
 
@@ -136,6 +150,7 @@ export class TesterController {
     router.get('/api/projects/:projectId/testers/:id', asyncHandler(this.getTesterById.bind(this)));
     router.put('/api/projects/:projectId/testers/:id', asyncHandler(this.updateTester.bind(this)));
     router.delete('/api/projects/:projectId/testers/:id', asyncHandler(this.deleteTester.bind(this)));
+    router.get('/api/projects/:projectId/testers/:id/audit-logs', asyncHandler(this.getTesterAuditLogs.bind(this)));
   }
 
   private async createTester(req: Request, res: Response): Promise<void> {
@@ -175,5 +190,16 @@ export class TesterController {
     const body = deleteTesterBodySchema.parse(req.body);
     await this.testerService.deleteTester(params.projectId, params.id, body.version, req.context);
     res.status(204).send();
+  }
+
+  /**
+   * GET /api/projects/:projectId/testers/:id/audit-logs
+   * Get audit logs for a tester
+   */
+  private async getTesterAuditLogs(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.AUDIT_READ]);
+    const params = testerRouteParamsSchema.parse(req.params);
+    const logs = await this.testerService.getTesterAuditLogs(params.id, params.projectId);
+    res.status(200).json(logs);
   }
 }
