@@ -37,6 +37,7 @@ export class ScenarioRunExecutorService {
   private enabled: boolean;
   private readonly maxParallel: number;
   private activeRunIds: Set<string> = new Set();
+  private cancelledRunIds: Set<string> = new Set();
   private activeSlots: number = 0;
   private pollingTimer: NodeJS.Timeout | null = null;
   private readonly pollingIntervalMs = 30_000;
@@ -108,6 +109,15 @@ export class ScenarioRunExecutorService {
   }
 
   /**
+   * Signals that a run has been cancelled so in-flight slots can bail out early.
+   * @param runId - The ID of the scenario run that was cancelled
+   */
+  signalCancel(runId: string): void {
+    this.cancelledRunIds.add(runId);
+    logger.info({ runId }, 'Cancellation signalled to executor');
+  }
+
+  /**
    * Fetches queued runs and starts execution for any that fit within the concurrency limit.
    */
   private checkAndProcessQueue(): void {
@@ -156,15 +166,20 @@ export class ScenarioRunExecutorService {
 
       const results = await Promise.all(slots.map((slot) => this.executeSlot(slot, run, scenario, testerMap)));
 
-      const allPassed = results.every((r) => r);
-      const finalStatus = allPassed ? 'passed' : 'failed';
-      await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus);
-      logger.info({ runId: run.id, finalStatus }, 'Scenario run completed');
+      if (this.cancelledRunIds.has(run.id)) {
+        logger.info({ runId: run.id }, 'Scenario run was cancelled mid-flight, skipping final status update');
+      } else {
+        const allPassed = results.every((r) => r);
+        const finalStatus = allPassed ? 'passed' : 'failed';
+        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus);
+        logger.info({ runId: run.id, finalStatus }, 'Scenario run completed');
+      }
     } catch (error) {
       logger.error({ error, runId: run.id }, 'Scenario run failed with error');
       await this.scenarioRunService.updateRunStatus(run.id, run.projectId, 'failed').catch(() => {});
     } finally {
       this.activeRunIds.delete(run.id);
+      this.cancelledRunIds.delete(run.id);
     }
   }
 
@@ -184,6 +199,12 @@ export class ScenarioRunExecutorService {
     scenario: Awaited<ReturnType<ScenarioService['getScenarioById']>>,
     testerMap: Map<string, Awaited<ReturnType<TesterService['getTesterById']>>>,
   ): Promise<boolean> {
+    if (this.cancelledRunIds.has(run.id)) {
+      logger.info({ runId: run.id, scenarioConversationId: slot.scenarioConversationId }, 'Skipping slot — run was cancelled');
+      await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'cancelled').catch(() => {});
+      return false;
+    }
+
     await this.acquireSlot();
 
     try {

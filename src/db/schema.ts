@@ -541,7 +541,7 @@ export type DataExtractionEntry = {
 };
 
 /** Status of a scenario run or scenario conversation */
-export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed';
+export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed' | 'cancelled';
 
 // Tester table — persona that acts as a user in scenario testing
 export const testers = pgTable('testers', {

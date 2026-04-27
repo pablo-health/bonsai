@@ -1,13 +1,13 @@
 import { injectable, inject } from 'tsyringe';
-import { eq, and, SQL, desc } from 'drizzle-orm';
+import { eq, and, SQL, desc, inArray } from 'drizzle-orm';
 import { db } from '../../db/index';
-import { scenarioRuns } from '../../db/schema';
+import { scenarioRuns, scenarioConversations } from '../../db/schema';
 import type { ScenarioRunStatus } from '../../db/schema';
 import type { CreateScenarioRunRequest, ScenarioRunResponse, ScenarioRunListResponse } from '../../http/contracts/scenarioRun';
 import type { ListParams } from '../../http/contracts/common';
 import { scenarioRunResponseSchema, scenarioRunListResponseSchema } from '../../http/contracts/scenarioRun';
 import { AuditService } from '../AuditService';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, ConflictError } from '../../errors';
 import { buildFilterCondition, buildOrderBy } from '../../utils/queryBuilder';
 import { countRows, normalizeListLimit } from '../../utils/pagination';
 import { logger } from '../../utils/logger';
@@ -178,6 +178,56 @@ export class ScenarioRunService extends BaseService {
       logger.info({ runId, status }, 'Scenario run status updated');
     } catch (error) {
       logger.error({ error, runId, status }, 'Failed to update scenario run status');
+      throw error;
+    }
+  }
+
+  /**
+   * Cancels a scenario run that is either queued or in_progress.
+   * Returns the updated run, or throws NotFoundError / ConflictError.
+   * @param runId - The scenario run ID to cancel
+   * @param projectId - The project the run belongs to
+   * @returns The cancelled scenario run
+   * @throws {NotFoundError} When the run does not exist
+   * @throws {ConflictError} When the run is in a terminal state and cannot be cancelled
+   */
+  async cancelScenarioRun(runId: string, projectId: string): Promise<ScenarioRunResponse> {
+    logger.info({ runId, projectId }, 'Cancelling scenario run');
+    try {
+      const updated = await db.update(scenarioRuns).set({ status: 'cancelled', updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId), inArray(scenarioRuns.status, ['queued', 'in_progress']))).returning();
+      if (updated.length === 0) {
+        const run = await db.query.scenarioRuns.findFirst({ where: and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)) });
+        if (!run) throw new NotFoundError(`Scenario run with id ${runId} not found`);
+        throw new ConflictError(`Scenario run ${runId} cannot be cancelled in status '${run.status}'`);
+      }
+      return scenarioRunResponseSchema.parse(updated[0]);
+    } catch (error) {
+      logger.error({ error, runId }, 'Failed to cancel scenario run');
+      throw error;
+    }
+  }
+
+  /**
+   * Deletes a scenario run and all its associated scenario conversations.
+   * Only runs in terminal states (passed, failed, cancelled) can be deleted.
+   * @param runId - The scenario run ID to delete
+   * @param projectId - The project the run belongs to
+   * @throws {NotFoundError} When the run does not exist
+   * @throws {ConflictError} When the run is not in a terminal state
+   */
+  async deleteScenarioRun(runId: string, projectId: string): Promise<void> {
+    logger.info({ runId, projectId }, 'Deleting scenario run');
+    try {
+      const run = await db.query.scenarioRuns.findFirst({ where: and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)) });
+      if (!run) throw new NotFoundError(`Scenario run with id ${runId} not found`);
+      if (!['passed', 'failed', 'cancelled'].includes(run.status)) {
+        throw new ConflictError(`Scenario run ${runId} cannot be deleted in status '${run.status}'. Cancel it first.`);
+      }
+      await db.delete(scenarioConversations).where(and(eq(scenarioConversations.scenarioRunId, runId), eq(scenarioConversations.projectId, projectId)));
+      await db.delete(scenarioRuns).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)));
+      logger.info({ runId }, 'Scenario run deleted successfully');
+    } catch (error) {
+      logger.error({ error, runId }, 'Failed to delete scenario run');
       throw error;
     }
   }

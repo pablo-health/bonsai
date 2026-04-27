@@ -8,7 +8,7 @@ extendZodWithOpenApi(z);
 export { listParamsSchema, type ListParams };
 
 /** Possible statuses for a scenario run or scenario conversation */
-export const scenarioRunStatusSchema = z.enum(['queued', 'in_progress', 'passed', 'failed']).openapi('ScenarioRunStatus');
+export const scenarioRunStatusSchema = z.enum(['queued', 'in_progress', 'passed', 'failed', 'cancelled']).openapi('ScenarioRunStatus');
 
 /**
  * Schema for scenario run route params

@@ -92,6 +92,39 @@ export class ScenarioRunController {
         },
       },
       {
+        method: 'post',
+        path: '/api/projects/{projectId}/scenario-runs/{id}/cancel',
+        tags: ['Scenario Runs'],
+        summary: 'Cancel a scenario run',
+        description: 'Cancels a scenario run that is currently queued or in progress. Already-running conversation slots will complete but no new slots will start.',
+        request: {
+          params: scenarioRunRouteParamsSchema,
+        },
+        responses: {
+          200: {
+            description: 'Scenario run cancelled successfully',
+            content: { 'application/json': { schema: scenarioRunResponseSchema } },
+          },
+          404: { description: 'Scenario run not found' },
+          409: { description: 'Scenario run is in a terminal state and cannot be cancelled' },
+        },
+      },
+      {
+        method: 'delete',
+        path: '/api/projects/{projectId}/scenario-runs/{id}',
+        tags: ['Scenario Runs'],
+        summary: 'Delete a scenario run',
+        description: 'Permanently deletes a scenario run and all its associated conversations. Only runs in terminal states (passed, failed, cancelled) can be deleted.',
+        request: {
+          params: scenarioRunRouteParamsSchema,
+        },
+        responses: {
+          204: { description: 'Scenario run deleted successfully' },
+          404: { description: 'Scenario run not found' },
+          409: { description: 'Scenario run is not in a terminal state. Cancel it first.' },
+        },
+      },
+      {
         method: 'get',
         path: '/api/scenario-runs/scheduler',
         tags: ['Scenario Runs'],
@@ -137,6 +170,8 @@ export class ScenarioRunController {
     router.post('/api/projects/:projectId/scenario-runs', asyncHandler(this.createScenarioRun.bind(this)));
     router.get('/api/projects/:projectId/scenario-runs', asyncHandler(this.listScenarioRuns.bind(this)));
     router.get('/api/projects/:projectId/scenario-runs/:id', asyncHandler(this.getScenarioRunById.bind(this)));
+    router.post('/api/projects/:projectId/scenario-runs/:id/cancel', asyncHandler(this.cancelScenarioRun.bind(this)));
+    router.delete('/api/projects/:projectId/scenario-runs/:id', asyncHandler(this.deleteScenarioRun.bind(this)));
     router.get('/api/scenario-runs/scheduler', asyncHandler(this.getSchedulerStatus.bind(this)));
     router.put('/api/scenario-runs/scheduler', asyncHandler(this.updateSchedulerStatus.bind(this)));
   }
@@ -179,5 +214,20 @@ export class ScenarioRunController {
       this.executorService.disable();
     }
     res.status(200).json(this.executorService.getStatus());
+  }
+
+  private async cancelScenarioRun(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.SCENARIO_RUN_WRITE]);
+    const params = scenarioRunRouteParamsSchema.parse(req.params);
+    const run = await this.scenarioRunService.cancelScenarioRun(params.id, params.projectId);
+    this.executorService.signalCancel(params.id);
+    res.status(200).json(run);
+  }
+
+  private async deleteScenarioRun(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.SCENARIO_RUN_WRITE]);
+    const params = scenarioRunRouteParamsSchema.parse(req.params);
+    await this.scenarioRunService.deleteScenarioRun(params.id, params.projectId);
+    res.status(204).send();
   }
 }

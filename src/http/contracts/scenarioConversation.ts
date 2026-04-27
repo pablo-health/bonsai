@@ -33,7 +33,7 @@ export const scenarioConversationResponseSchema = z.object({
   scenarioId: z.string().describe('ID of the scenario being tested'),
   testerId: z.string().describe('ID of the tester persona used in this conversation'),
   conversationId: z.string().nullable().describe('ID of the underlying conversation used to run this scenario conversation'),
-  status: z.enum(['queued', 'in_progress', 'passed', 'failed']).describe('Current execution status of this conversation'),
+  status: z.enum(['queued', 'in_progress', 'passed', 'failed', 'cancelled']).describe('Current execution status of this conversation'),
   dataExtractionResults: z.record(z.string(), z.unknown()).nullable().describe('Extracted stage variable values at the end of the conversation'),
   dataTransformationResults: z.record(z.string(), z.unknown()).nullable().describe('Post-processed data transformation results'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
