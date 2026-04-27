@@ -37,6 +37,8 @@ export const migrationSelectionSchema = z.object({
   knowledgeCategoryIds: z.array(z.string()).optional().describe('Specific knowledge category IDs to include. All child knowledge items are always included.'),
   providerIds: z.array(z.string()).optional().describe('Specific provider IDs to include (in addition to any transitively required ones).'),
   apiKeyIds: z.array(z.string()).optional().describe('Specific API key IDs to include.'),
+  testerIds: z.array(z.string()).optional().describe('Specific tester IDs to include.'),
+  scenarioIds: z.array(z.string()).optional().describe('Specific scenario IDs to include.'),
 }).openapi('MigrationSelection').describe('Granular entity selection for export/pull. Omit all fields (empty object {}) to export everything.');
 
 export type MigrationSelection = z.infer<typeof migrationSelectionSchema>;
@@ -70,6 +72,8 @@ export const exportBundleSchema = z.object({
   knowledgeItems: z.array(bundleEntitySchema).describe('Knowledge item records — depend on knowledgeCategories'),
   stages: z.array(bundleEntitySchema).describe('Stage records — depend on projects, agents, and classifiers'),
   apiKeys: z.array(bundleEntitySchema).describe('API key records — depend on projects'),
+  testers: z.array(bundleEntitySchema).describe('Tester records — depend on projects'),
+  scenarios: z.array(bundleEntitySchema).describe('Scenario records — depend on projects'),
 }).openapi('ExportBundle');
 
 export type ExportBundle = z.infer<typeof exportBundleSchema>;
@@ -86,6 +90,8 @@ export const exportQuerySchema = z.object({
   knowledgeCategoryIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific knowledge category IDs to export. All child items are included.'),
   providerIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific provider IDs to export (added on top of transitively required ones).'),
   apiKeyIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific API key IDs to export.'),
+  testerIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific tester IDs to export.'),
+  scenarioIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific scenario IDs to export.'),
 });
 
 export type ExportQuery = z.infer<typeof exportQuerySchema>;
@@ -173,6 +179,8 @@ export const migrationPreviewSchema = z.object({
   knowledgeItems: z.array(entityStubSchema).describe('Knowledge item stubs that would be included — name is the question text'),
   stages: z.array(entityStubSchema).describe('Stage stubs that would be included'),
   apiKeys: z.array(entityStubSchema).describe('API key stubs that would be included'),
+  testers: z.array(entityStubSchema).describe('Tester stubs that would be included'),
+  scenarios: z.array(entityStubSchema).describe('Scenario stubs that would be included'),
 }).openapi('MigrationPreview');
 
 export type MigrationPreview = z.infer<typeof migrationPreviewSchema>;
