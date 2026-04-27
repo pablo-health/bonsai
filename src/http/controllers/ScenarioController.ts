@@ -124,6 +124,20 @@ export class ScenarioController {
           409: { description: 'Version conflict - entity was modified' },
         },
       },
+      {
+        method: 'get',
+        path: '/api/projects/{projectId}/scenarios/{id}/audit-logs',
+        tags: ['Scenarios'],
+        summary: 'Get scenario audit logs',
+        description: 'Retrieves audit logs for a specific scenario',
+        request: {
+          params: scenarioRouteParamsSchema,
+        },
+        responses: {
+          200: { description: 'Audit logs retrieved successfully' },
+          404: { description: 'Scenario not found' },
+        },
+      },
     ];
   }
 
@@ -136,6 +150,7 @@ export class ScenarioController {
     router.get('/api/projects/:projectId/scenarios/:id', asyncHandler(this.getScenarioById.bind(this)));
     router.put('/api/projects/:projectId/scenarios/:id', asyncHandler(this.updateScenario.bind(this)));
     router.delete('/api/projects/:projectId/scenarios/:id', asyncHandler(this.deleteScenario.bind(this)));
+    router.get('/api/projects/:projectId/scenarios/:id/audit-logs', asyncHandler(this.getScenarioAuditLogs.bind(this)));
   }
 
   private async createScenario(req: Request, res: Response): Promise<void> {
@@ -175,5 +190,16 @@ export class ScenarioController {
     const body = deleteScenarioBodySchema.parse(req.body);
     await this.scenarioService.deleteScenario(params.projectId, params.id, body.version, req.context);
     res.status(204).send();
+  }
+
+  /**
+   * GET /api/projects/:projectId/scenarios/:id/audit-logs
+   * Get audit logs for a scenario
+   */
+  private async getScenarioAuditLogs(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.AUDIT_READ]);
+    const params = scenarioRouteParamsSchema.parse(req.params);
+    const logs = await this.scenarioService.getScenarioAuditLogs(params.id, params.projectId);
+    res.status(200).json(logs);
   }
 }

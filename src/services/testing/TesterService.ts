@@ -230,4 +230,21 @@ export class TesterService extends BaseService {
       throw error;
     }
   }
+
+  /**
+   * Retrieves all audit log entries for a specific tester
+   * @param id - The unique identifier of the tester
+   * @param projectId - The project ID the tester belongs to
+   * @returns Array of audit log entries for the tester
+   */
+  async getTesterAuditLogs(id: string, projectId: string): Promise<any[]> {
+    logger.debug({ id, projectId }, 'Fetching audit logs for tester');
+
+    try {
+      return await this.auditService.getEntityAuditLogs('tester', id, projectId);
+    } catch (error) {
+      logger.error({ error, id, projectId }, 'Failed to fetch tester audit logs');
+      throw error;
+    }
+  }
 }
