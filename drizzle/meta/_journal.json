@@ -386,6 +386,13 @@
       "when": 1777321760028,
       "tag": "0054_oval_marten_broadcloak",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1777372472691,
+      "tag": "0055_lying_professor_monster",
+      "breakpoints": true
     }
   ]
 }
