@@ -1,1 +1,0 @@
-ALTER TABLE "scenario_runs" ADD COLUMN "status_details" text;

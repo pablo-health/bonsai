@@ -387,7 +387,7 @@ export const issues = pgTable('issues', {
   environment: text('environment'),
   buildVersion: text('build_version'),
   stage: text('stage'),
-  sessionId: text('session_id'),
+  conversationId: text('conversation_id'),
   eventIndex: integer('event_index'),
   userId: text('user_id'),
   severity: text('severity').notNull(),

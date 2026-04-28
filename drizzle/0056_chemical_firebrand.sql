@@ -1,1 +1,0 @@
-ALTER TABLE "scenarios" ADD COLUMN "conversation_opener" text;

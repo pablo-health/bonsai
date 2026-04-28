@@ -1,6 +1,6 @@
 {
-  "id": "3bba53f9-1e94-4b8a-9f7d-8e9b3470094b",
-  "prevId": "2fb5e327-ae7d-4995-a7cf-2e1b44035be5",
+  "id": "6149626c-932f-477e-a759-e871ba66aff3",
+  "prevId": "9ce71e3d-9496-4c47-9c37-32482be1cd5b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1477,8 +1477,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "session_id": {
-          "name": "session_id",
+        "conversation_id": {
+          "name": "conversation_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false

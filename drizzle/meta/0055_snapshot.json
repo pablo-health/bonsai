@@ -1,5 +1,5 @@
 {
-  "id": "2fb5e327-ae7d-4995-a7cf-2e1b44035be5",
+  "id": "9ce71e3d-9496-4c47-9c37-32482be1cd5b",
   "prevId": "85200491-e1c5-46dd-9876-28eacf825865",
   "version": "7",
   "dialect": "postgresql",
@@ -1477,12 +1477,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "event_index": {
           "name": "event_index",
           "type": "integer",
@@ -1544,6 +1538,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -2758,12 +2758,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'queued'"
-        },
-        "status_details": {
-          "name": "status_details",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "metadata": {
           "name": "metadata",
