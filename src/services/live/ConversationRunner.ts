@@ -1441,13 +1441,9 @@ export class ConversationRunner {
     this.responseGeneratedInTurn = false;
     this.resetTurnData();
 
-    // Load the action from the database
-    const globalAction = await db.query.globalActions.findFirst({
-      where: (globalActions, { and, eq }) => and(
-        eq(globalActions.projectId, this.stageData.project.id),
-        eq(globalActions.name, actionName)
-      )
-    });
+    // Find the action in the already-loaded stage global actions.
+    // Match by id first (clients send the action ID, e.g. "gact_..."), then fall back to name.
+    const globalAction = this.stageData.globalActions.find(a => a.id === actionName || a.name === actionName);
 
     const stageAction = this.stageData.stage.actions[actionName];
 
