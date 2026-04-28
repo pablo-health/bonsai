@@ -176,7 +176,7 @@ export class ScenarioRunExecutorService {
       }
     } catch (error) {
       logger.error({ error, runId: run.id }, 'Scenario run failed with error');
-      await this.scenarioRunService.updateRunStatus(run.id, run.projectId, 'failed').catch(() => {});
+      await this.scenarioRunService.updateRunStatus(run.id, run.projectId, 'failed', (error instanceof Error ? error.message : String(error))).catch(() => {});
     } finally {
       this.activeRunIds.delete(run.id);
       this.cancelledRunIds.delete(run.id);

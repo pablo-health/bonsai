@@ -37,6 +37,7 @@ export const scenarioRunResponseSchema = z.object({
   testers: z.record(z.string(), z.number().int()).describe('Map of tester persona ID to number of conversations assigned to that tester'),
   totalConversations: z.number().int().describe('Computed total number of conversations across all testers'),
   status: scenarioRunStatusSchema.describe('Current status of the scenario run'),
+  statusDetails: z.string().nullable().describe('Human-readable details about the current status, e.g. failure reason or cancellation actor'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
   version: z.number().int().describe('Version number for optimistic locking'),
   createdAt: z.coerce.date().describe('Timestamp when the run was created'),

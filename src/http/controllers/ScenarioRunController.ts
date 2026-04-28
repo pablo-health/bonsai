@@ -219,7 +219,7 @@ export class ScenarioRunController {
   private async cancelScenarioRun(req: Request, res: Response): Promise<void> {
     checkPermissions(req, [PERMISSIONS.SCENARIO_RUN_WRITE]);
     const params = scenarioRunRouteParamsSchema.parse(req.params);
-    const run = await this.scenarioRunService.cancelScenarioRun(params.id, params.projectId);
+    const run = await this.scenarioRunService.cancelScenarioRun(params.id, params.projectId, req.context?.operatorId);
     this.executorService.signalCancel(params.id);
     res.status(200).json(run);
   }

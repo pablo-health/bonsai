@@ -594,6 +594,7 @@ export const scenarioRuns = pgTable('scenario_runs', {
   testers: jsonb('testers').notNull().default({}).$type<Record<string, number>>(),
   totalConversations: integer('total_conversations').notNull(),
   status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
+  statusDetails: text('status_details'),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
