@@ -40,7 +40,7 @@ export class ScenarioService extends BaseService {
     logger.info({ scenarioId, projectId, name: input.name, operatorId: context?.operatorId }, 'Creating scenario');
 
     try {
-      const scenario = await db.insert(scenarios).values({ id: scenarioId, projectId, name: input.name, description: input.description ?? null, language: input.language, startingStageId: input.startingStageId, maxTurns: input.maxTurns, endingStageIds: input.endingStageIds ?? [], personaCanHangUp: input.personaCanHangUp ?? false, dataExtraction: input.dataExtraction ?? null, contextTransformerId: input.contextTransformerId ?? null, dataPostProcessingExpected: input.dataPostProcessingExpected ?? null, tags: input.tags ?? [], metadata: input.metadata ?? null, version: 1 }).returning();
+      const scenario = await db.insert(scenarios).values({ id: scenarioId, projectId, name: input.name, description: input.description ?? null, language: input.language, startingStageId: input.startingStageId, maxTurns: input.maxTurns, endingStageIds: input.endingStageIds ?? [], personaCanHangUp: input.personaCanHangUp ?? false, conversationOpener: input.conversationOpener ?? null, dataExtraction: input.dataExtraction ?? null, contextTransformerId: input.contextTransformerId ?? null, dataPostProcessingExpected: input.dataPostProcessingExpected ?? null, tags: input.tags ?? [], metadata: input.metadata ?? null, version: 1 }).returning();
 
       const created = scenario[0];
 
@@ -170,6 +170,7 @@ export class ScenarioService extends BaseService {
       if (updateData.maxTurns !== undefined) updatePayload.maxTurns = updateData.maxTurns;
       if (updateData.endingStageIds !== undefined) updatePayload.endingStageIds = updateData.endingStageIds;
       if (updateData.personaCanHangUp !== undefined) updatePayload.personaCanHangUp = updateData.personaCanHangUp;
+      if (updateData.conversationOpener !== undefined) updatePayload.conversationOpener = updateData.conversationOpener;
       if (updateData.dataExtraction !== undefined) updatePayload.dataExtraction = updateData.dataExtraction;
       if (updateData.contextTransformerId !== undefined) updatePayload.contextTransformerId = updateData.contextTransformerId;
       if (updateData.dataPostProcessingExpected !== undefined) updatePayload.dataPostProcessingExpected = updateData.dataPostProcessingExpected;

@@ -76,6 +76,13 @@ export class TesterClientConnection implements IClientConnection {
   }
 
   /**
+   * Returns true if an AI response is already buffered and ready to be consumed by waitForAiResponse().
+   */
+  hasPendingResponse(): boolean {
+    return this.bufferedAiText !== null;
+  }
+
+  /**
    * Returns the terminal event type if the conversation has ended, or null if still active.
    */
   getTerminalEventType(): string | null {
