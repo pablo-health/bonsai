@@ -172,9 +172,9 @@ export class ScenarioRunService extends BaseService {
    * @param projectId - The project the run belongs to
    * @param status - The new status to set
    */
-  async updateRunStatus(runId: string, projectId: string, status: ScenarioRunStatus): Promise<void> {
+  async updateRunStatus(runId: string, projectId: string, status: ScenarioRunStatus, statusDetails?: string | null): Promise<void> {
     try {
-      await db.update(scenarioRuns).set({ status, updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)));
+      await db.update(scenarioRuns).set({ status, statusDetails: statusDetails ?? null, updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)));
       logger.info({ runId, status }, 'Scenario run status updated');
     } catch (error) {
       logger.error({ error, runId, status }, 'Failed to update scenario run status');
@@ -191,10 +191,10 @@ export class ScenarioRunService extends BaseService {
    * @throws {NotFoundError} When the run does not exist
    * @throws {ConflictError} When the run is in a terminal state and cannot be cancelled
    */
-  async cancelScenarioRun(runId: string, projectId: string): Promise<ScenarioRunResponse> {
+  async cancelScenarioRun(runId: string, projectId: string, cancelledBy?: string): Promise<ScenarioRunResponse> {
     logger.info({ runId, projectId }, 'Cancelling scenario run');
     try {
-      const updated = await db.update(scenarioRuns).set({ status: 'cancelled', updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId), inArray(scenarioRuns.status, ['queued', 'in_progress']))).returning();
+      const updated = await db.update(scenarioRuns).set({ status: 'cancelled', statusDetails: cancelledBy ? `Cancelled by ${cancelledBy}` : 'Cancelled', updatedAt: new Date() }).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId), inArray(scenarioRuns.status, ['queued', 'in_progress']))).returning();
       if (updated.length === 0) {
         const run = await db.query.scenarioRuns.findFirst({ where: and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)) });
         if (!run) throw new NotFoundError(`Scenario run with id ${runId} not found`);

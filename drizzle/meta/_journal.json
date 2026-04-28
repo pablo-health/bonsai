@@ -393,6 +393,13 @@
       "when": 1777372472691,
       "tag": "0055_lying_professor_monster",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1777381052652,
+      "tag": "0056_sour_naoko",
+      "breakpoints": true
     }
   ]
 }

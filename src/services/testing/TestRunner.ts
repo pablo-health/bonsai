@@ -72,7 +72,18 @@ export class TestRunner {
       /** History from the tester's perspective: AI utterances are 'user', tester utterances are 'assistant'. */
       const history: LlmMessage[] = [];
 
-      if (runner.getState() !== 'awaiting_user_input') {
+      if (connection.hasPendingResponse()) {
+        // AI already spoke before awaiting user input — drain the buffered response.
+        const aiText = await connection.waitForAiResponse();
+        history.push({ role: 'user', content: aiText });
+      } else {
+        // First stage awaits user input — send the configured opener (or a generic fallback)
+        // so the conversation starts without needing the tester LLM to produce cold-start content.
+        const opener = scenario.conversationOpener ?? '[Conversation begins.]';
+        logger.info({ conversationId, opener }, 'TestRunner: sending conversation opener');
+        history.push({ role: 'assistant', content: opener });
+        turnCount++;
+        await runner.receiveUserTextInput(opener);
         const aiText = await connection.waitForAiResponse();
         history.push({ role: 'user', content: aiText });
       }

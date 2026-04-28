@@ -171,12 +171,14 @@ export class ScenarioRunExecutorService {
       } else {
         const allPassed = results.every((r) => r);
         const finalStatus = allPassed ? 'passed' : 'failed';
-        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus);
+        const failedCount = results.filter((r) => !r).length;
+        const statusDetails = allPassed ? null : `${failedCount} of ${results.length} conversation${results.length !== 1 ? 's' : ''} failed`;
+        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus, statusDetails);
         logger.info({ runId: run.id, finalStatus }, 'Scenario run completed');
       }
     } catch (error) {
       logger.error({ error, runId: run.id }, 'Scenario run failed with error');
-      await this.scenarioRunService.updateRunStatus(run.id, run.projectId, 'failed').catch(() => {});
+      await this.scenarioRunService.updateRunStatus(run.id, run.projectId, 'failed', (error instanceof Error ? error.message : String(error))).catch(() => {});
     } finally {
       this.activeRunIds.delete(run.id);
       this.cancelledRunIds.delete(run.id);
