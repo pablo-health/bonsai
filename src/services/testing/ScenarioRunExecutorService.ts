@@ -171,7 +171,9 @@ export class ScenarioRunExecutorService {
       } else {
         const allPassed = results.every((r) => r);
         const finalStatus = allPassed ? 'passed' : 'failed';
-        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus);
+        const failedCount = results.filter((r) => !r).length;
+        const statusDetails = allPassed ? null : `${failedCount} of ${results.length} conversation${results.length !== 1 ? 's' : ''} failed`;
+        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus, statusDetails);
         logger.info({ runId: run.id, finalStatus }, 'Scenario run completed');
       }
     } catch (error) {
