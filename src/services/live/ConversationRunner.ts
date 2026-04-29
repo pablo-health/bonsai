@@ -1927,14 +1927,20 @@ export class ConversationRunner {
       userInput = newUserInput;
     }
 
-    // Start filler sentence immediately — opens the response turn early by sending
-    // start_ai_generation_output and feeding the sentence into TTS before classification begins.
+    // Filler delivery and classification run concurrently: filler LLM + TTS connect/send are
+    // independent of classification (processTextInput), so both can start simultaneously.
+    // The Promise.all below is the single synchronisation point; nothing that classificationor
+    // filler reads/writes conflicts before that barrier.
     this.lastFillerSentence = null;
     this.lastFillerPrompt = null;
     const fillerStartMs = Date.now();
-    const fillerSentence = await this.generateFillerSentence(userInput);
-    const fillerEndMs = Date.now();
-    if (fillerSentence) {
+
+    // Kick off filler delivery without awaiting — open the response turn and feed TTS as soon
+    // as the filler LLM responds, while classification proceeds in parallel.
+    let fillerEndMs: number | null = null;
+    const fillerDeliveryPromise: Promise<string | null> = this.generateFillerSentence(userInput).then(async (fillerSentence) => {
+      fillerEndMs = Date.now();
+      if (!fillerSentence) return null;
       this.turnData.fillerDurationMs = fillerEndMs - fillerStartMs;
       this.turnData.outputTurnId = generateId(ID_PREFIXES.OUTPUT);
       const fillerStartMessage: CALStartAiGenerationOutputMessage = {
@@ -1945,7 +1951,9 @@ export class ConversationRunner {
       };
       await this.channel.sendMessage(fillerStartMessage);
       if (this.stageData.ttsProvider) {
+        this.turnData.ttsConnectStartMs = Date.now();
         await this.stageData.ttsProvider.start();
+        this.turnData.ttsConnectEndMs = Date.now();
         await this.stageData.ttsProvider.sendText(fillerSentence);
       }
       const fillerChunkMessage: CALAiTranscribedChunkMessage = {
@@ -1961,14 +1969,19 @@ export class ConversationRunner {
       this.responseOutputTurnStarted = true;
       this.lastFillerSentence = fillerSentence;
       this.turnData.fillerSentence = fillerSentence;
-    }
+      return fillerSentence;
+    });
 
-    // Standard mode: fire moderation in parallel with processTextInput to reduce latency.
-    // Moderation is started here, after filler, so it overlaps with classification/processing.
+    // Standard mode: fire moderation in parallel with both filler delivery and classification.
     const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
 
+    // Kick off classification concurrently with filler delivery — neither depends on the other.
     const processingStartMs = Date.now();
-    const processingResult = await this.userInputProcessor.processTextInput(this.session, userInput, userInput);
+    const processingPromise = this.userInputProcessor.processTextInput(this.session, userInput, userInput);
+
+    // Wait for both filler delivery and classification to complete before proceeding.
+    await Promise.all([fillerDeliveryPromise, processingPromise]);
+    const processingResult = await processingPromise; // already resolved, no extra round-trip
     const processingEndMs = Date.now();
     const processingDurationMs = processingEndMs - processingStartMs;
 
@@ -2122,8 +2135,8 @@ export class ConversationRunner {
       moderationStartMs: this.turnData.moderationStartMs ?? undefined,
       moderationEndMs: this.turnData.moderationEndMs ?? undefined,
       moderationDurationMs: this.turnData.moderationDurationMs ?? undefined,
-      fillerStartMs: fillerSentence ? fillerStartMs : undefined,
-      fillerEndMs: fillerSentence ? fillerEndMs : undefined,
+      fillerStartMs: this.turnData.fillerSentence ? fillerStartMs : undefined,
+      fillerEndMs: this.turnData.fillerSentence ? (fillerEndMs ?? undefined) : undefined,
       fillerDurationMs: this.turnData.fillerDurationMs ?? undefined,
       processingStartMs,
       processingEndMs,
