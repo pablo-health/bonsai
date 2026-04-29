@@ -109,6 +109,7 @@ import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
+import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
 import { providerHintSchema, providerHintResolutionTargetSchema, providerHintResolutionSchema, asrConfigExchangeV1Schema, storageConfigExchangeV1Schema, moderationConfigExchangeV1Schema, fillerSettingsExchangeV1Schema, projectExchangeV1Schema, agentExchangeV1Schema, stageExchangeV1Schema, classifierExchangeV1Schema, contextTransformerExchangeV1Schema, toolExchangeV1Schema, globalActionExchangeV1Schema, guardrailExchangeV1Schema, knowledgeCategoryExchangeV1Schema, knowledgeItemExchangeV1Schema, projectExchangeBundleV1Schema, projectExchangeImportResultSchema } from './http/contracts/projectExchange';
 
 extendZodWithOpenApi(z);
@@ -622,6 +623,12 @@ export function getOpenAPISpec(): any {
   // Register WhatsApp outgoing send route
   const whatsAppPaths = WhatsAppChannelHost.getOpenAPIPaths();
   for (const path of whatsAppPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Telegram webhook route
+  const telegramPaths = TelegramChannelHost.getOpenAPIPaths();
+  for (const path of telegramPaths) {
     registry.registerPath(path);
   }
 
