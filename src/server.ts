@@ -47,6 +47,7 @@ import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
+import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
 import logger from './utils/logger';
 import { fileURLToPath } from 'url';
 import { SecretsManagerRegistry } from './services/secrets/SecretsManagerRegistry';
@@ -253,6 +254,7 @@ export function createApp(): express.Application {
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
   container.resolve(WhatsAppChannelHost).registerRoutes(app);
+  container.resolve(TelegramChannelHost).registerRoutes(app);
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();
