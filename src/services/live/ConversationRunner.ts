@@ -1217,6 +1217,32 @@ export class ConversationRunner {
         }
       }
 
+      // If a filler TTS session was open on the departing stage's provider, signal end-of-text
+      // immediately so it can flush its buffer concurrently with the new stage being built.
+      // We await full drain after wireUpProviders() to prevent filler audio and response audio
+      // from interleaving at the client side.
+      const priorTtsProvider = this.responseOutputTurnStarted ? (oldStageData.ttsProvider ?? null) : null;
+      let resolvePriorTtsDrained: () => void = () => {};
+      const priorTtsEndedPromise: Promise<void> = new Promise<void>(r => { resolvePriorTtsDrained = r; });
+      if (priorTtsProvider) {
+        priorTtsProvider.setOnGenerationEnded(async () => {
+          logger.debug({ conversationId: this.conversation.id }, 'Prior-stage TTS provider drained after stage transition');
+          resolvePriorTtsDrained();
+        });
+        priorTtsProvider.setOnError(async () => {
+          logger.warn({ conversationId: this.conversation.id }, 'Prior-stage TTS provider error while draining — unblocking stage transition');
+          resolvePriorTtsDrained();
+        });
+        try {
+          await priorTtsProvider.end();
+        } catch (err) {
+          logger.warn({ conversationId: this.conversation.id, message: err instanceof Error ? err.message : String(err) }, 'Failed to end prior-stage TTS provider during stage transition — unblocking');
+          resolvePriorTtsDrained();
+        }
+      } else {
+        resolvePriorTtsDrained();
+      }
+
       // Update stageId on this.conversation before building new stage data.
       // This keeps stageData.conversation as the same object reference as this.conversation,
       // so any subsequent applyActionOutcome writes to this.conversation.stageVars are
@@ -1234,6 +1260,21 @@ export class ConversationRunner {
 
       // Re-wire providers for the new stage
       await this.wireUpProviders();
+
+      // Wait for the prior-stage TTS provider to fully drain before starting the new one.
+      // This prevents filler audio chunks (prior provider) and response audio chunks (new
+      // provider) from interleaving at the client, and ensures ordinal counters are reset
+      // cleanly by the new provider's setOnGenerationStarted before it begins streaming.
+      await priorTtsEndedPromise;
+
+      // If filler already opened the output turn, start the new stage's TTS provider now.
+      // generateResponse() skips ttsProvider.start() when responseOutputTurnStarted is true,
+      // so the new provider must be ready before the LLM begins sending text chunks.
+      if (this.responseOutputTurnStarted && this.stageData.ttsProvider) {
+        this.turnData.ttsConnectStartMs = Date.now();
+        await this.stageData.ttsProvider.start();
+        this.turnData.ttsConnectEndMs = Date.now();
+      }
 
       const eventData: JumpToStageEventData = {
         fromStageId,
