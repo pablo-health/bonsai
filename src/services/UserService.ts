@@ -228,18 +228,17 @@ export class UserService extends BaseService {
     logger.info({ userId, projectId }, 'Ensuring user exists (auto-create)');
 
     try {
-      const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
+      const inserted = await db.insert(users).values({ id: userId, projectId, profile: {} }).onConflictDoNothing().returning();
 
-      if (existing) {
-        return userResponseSchema.parse(existing);
+      if (inserted.length > 0) {
+        const createdUser = inserted[0];
+        logger.info({ userId: createdUser.id, projectId }, 'User auto-created successfully');
+        return userResponseSchema.parse(createdUser);
       }
 
-      const created = await db.insert(users).values({ id: userId, projectId, profile: {} }).returning();
-      const createdUser = created[0];
+      const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
 
-      logger.info({ userId: createdUser.id, projectId }, 'User auto-created successfully');
-
-      return userResponseSchema.parse(createdUser);
+      return userResponseSchema.parse(existing);
     } catch (error) {
       logger.error({ error, userId, projectId }, 'Failed to ensure user exists');
       throw error;
