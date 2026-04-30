@@ -37,8 +37,8 @@ const VERSION = '0.1.0';
 
 function printUsage() {
   console.log(`\n  Bonsai CLI v${VERSION}\n`);
-  console.log('  Usage:');
-  console.log('    bonsai <command> [subcommand] [options]\n');
+ console.log('  Usage:');
+    console.log('    bonsai-cli <command> [subcommand] [options]\n');
   console.log('  Auth:');
   console.log('    login              Log in with email/password');
   console.log('    logout             Clear stored credentials');

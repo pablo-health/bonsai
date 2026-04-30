@@ -4,7 +4,7 @@
   "description": "Bonsai CLI — terminal interface for Bonsai Backend API",
   "type": "module",
   "bin": {
-    "bonsai": "./dist/cli.js"
+    "bonsai-cli": "./dist/cli.js"
   },
   "scripts": {
     "start": "tsx src/cli.ts",
