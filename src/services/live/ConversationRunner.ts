@@ -2397,10 +2397,15 @@ export class ConversationRunner {
     try {
       const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput);
       const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
-      const fillerMessages = [
+      const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
+      let fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system' as const, content: renderedPrompt },
-        { role: 'user' as const, content: userInput },
       ];
+      if (historyMessageCount > 0) {
+        const recentHistory = context.history.slice(-historyMessageCount);
+        fillerMessages.push(...recentHistory.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })));
+      }
+      fillerMessages.push({ role: 'user' as const, content: userInput });
       const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
       const fillerLimits = resolveProviderModelLimits(this.stageData.costManagementConfig, this.stageData.fillerLlmProviderInfo?.id ?? '', fillerModel);
       const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
