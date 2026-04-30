@@ -58,7 +58,8 @@ export class ScenarioConversationEvaluator {
       dataTransformationResults = await this.applyContextTransformer(scenario.contextTransformerId, projectId, dataExtractionResults, conversationId);
     }
 
-    const passed = this.checkExpectedValues(dataTransformationResults ?? dataExtractionResults, scenario.dataPostProcessingExpected);
+    const passed = this.checkExpectedValues(dataExtractionResults, scenario.dataExtraction.map(e => ({ [e.varName]: e.expectedValue })).reduce((acc, val) => ({ ...acc, ...val }), {}))
+      && this.checkExpectedValues(dataTransformationResults ?? {}, scenario.dataPostProcessingExpected);
 
     logger.info({ conversationId, scenarioId: scenario.id, passed }, 'Scenario conversation evaluation complete');
     return { dataExtractionResults, dataTransformationResults, passed };
