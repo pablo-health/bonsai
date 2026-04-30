@@ -105,6 +105,11 @@ import { ScenarioRunController } from './http/controllers/ScenarioRunController'
 import { scenarioRunStatusSchema, createScenarioRunSchema, scenarioRunResponseSchema, scenarioRunListResponseSchema } from './http/contracts/scenarioRun';
 import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
 import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from './http/contracts/scenarioConversation';
+import { BenchmarkSuiteController } from './http/controllers/BenchmarkSuiteController';
+import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkProviderConfigController';
+import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
+import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
+import { timingStatsSchema, benchmarkStatsSchema, createBenchmarkSuiteSchema, updateBenchmarkSuiteSchema, benchmarkSuiteResponseSchema, benchmarkSuiteListResponseSchema, createBenchmarkProviderConfigSchema, updateBenchmarkProviderConfigSchema, benchmarkProviderConfigResponseSchema, benchmarkProviderConfigListResponseSchema, createBenchmarkConfigSchema, updateBenchmarkConfigSchema, benchmarkConfigResponseSchema, benchmarkConfigListResponseSchema, triggerBenchmarkRunSchema, benchmarkConfigExecutionResponseSchema, benchmarkRunResponseSchema, benchmarkRunListResponseSchema, llmIterationOutputSchema, ttsIterationOutputSchema, asrIterationOutputSchema, benchmarkIterationResultDataSchema, benchmarkResultResponseSchema } from './http/contracts/benchmark';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
@@ -629,6 +634,47 @@ export function getOpenAPISpec(): any {
   // Register Telegram webhook route
   const telegramPaths = TelegramChannelHost.getOpenAPIPaths();
   for (const path of telegramPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register Benchmark sub-schemas (reusable components) and routes
+  registry.register('BenchmarkTimingStats', timingStatsSchema);
+  registry.register('BenchmarkStats', benchmarkStatsSchema);
+  registry.register('CreateBenchmarkSuiteRequest', createBenchmarkSuiteSchema);
+  registry.register('UpdateBenchmarkSuiteRequest', updateBenchmarkSuiteSchema);
+  registry.register('BenchmarkSuiteResponse', benchmarkSuiteResponseSchema);
+  registry.register('BenchmarkSuiteListResponse', benchmarkSuiteListResponseSchema);
+  registry.register('CreateBenchmarkProviderConfigRequest', createBenchmarkProviderConfigSchema);
+  registry.register('UpdateBenchmarkProviderConfigRequest', updateBenchmarkProviderConfigSchema);
+  registry.register('BenchmarkProviderConfigResponse', benchmarkProviderConfigResponseSchema);
+  registry.register('BenchmarkProviderConfigListResponse', benchmarkProviderConfigListResponseSchema);
+  registry.register('CreateBenchmarkConfigRequest', createBenchmarkConfigSchema);
+  registry.register('UpdateBenchmarkConfigRequest', updateBenchmarkConfigSchema);
+  registry.register('BenchmarkConfigResponse', benchmarkConfigResponseSchema);
+  registry.register('BenchmarkConfigListResponse', benchmarkConfigListResponseSchema);
+  registry.register('TriggerBenchmarkRunRequest', triggerBenchmarkRunSchema);
+  registry.register('BenchmarkConfigExecutionResponse', benchmarkConfigExecutionResponseSchema);
+  registry.register('BenchmarkRunResponse', benchmarkRunResponseSchema);
+  registry.register('BenchmarkRunListResponse', benchmarkRunListResponseSchema);
+  registry.register('LlmIterationOutput', llmIterationOutputSchema);
+  registry.register('TtsIterationOutput', ttsIterationOutputSchema);
+  registry.register('AsrIterationOutput', asrIterationOutputSchema);
+  registry.register('BenchmarkIterationResultData', benchmarkIterationResultDataSchema);
+  registry.register('BenchmarkResultResponse', benchmarkResultResponseSchema);
+  const benchmarkSuitePaths = BenchmarkSuiteController.getOpenAPIPaths();
+  for (const path of benchmarkSuitePaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkProviderConfigPaths = BenchmarkProviderConfigController.getOpenAPIPaths();
+  for (const path of benchmarkProviderConfigPaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkConfigPaths = BenchmarkConfigController.getOpenAPIPaths();
+  for (const path of benchmarkConfigPaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkRunPaths = BenchmarkRunController.getOpenAPIPaths();
+  for (const path of benchmarkRunPaths) {
     registry.registerPath(path);
   }
 
