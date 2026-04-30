@@ -536,6 +536,12 @@ export const conversationArtifacts = pgTable('conversation_artifacts', {
 /** Comparison modes for evaluation assertions */
 export type EvaluationComparisonMode = 'exists' | 'not_exists' | 'eq' | 'contains' | 'includes' | 'matches' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'nin';
 
+/** Expected value entry with optional comparison mode */
+export type ExpectedValueEntry = {
+  value?: unknown;
+  mode?: EvaluationComparisonMode;
+};
+
 /** Entry in the data extraction configuration: a stage variable with an optional expected value and comparison mode */
 export type DataExtractionEntry = {
   stageId: string;
@@ -581,7 +587,7 @@ export const scenarios = pgTable('scenarios', {
   conversationOpener: text('conversation_opener'),
   dataExtraction: jsonb('data_extraction').$type<DataExtractionEntry[]>(),
   contextTransformerId: text('context_transformer_id'),
-  dataPostProcessingExpected: jsonb('data_post_processing_expected').$type<Record<string, unknown>>(),
+  dataPostProcessingExpected: jsonb('data_post_processing_expected').$type<Record<string, ExpectedValueEntry>>(),
   tags: jsonb('tags').notNull().default([]).$type<string[]>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
