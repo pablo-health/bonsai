@@ -1,12 +1,14 @@
 import { injectable, inject } from 'tsyringe';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../db/index';
-import { conversations, contextTransformers, providers } from '../../db/schema';
+import { conversations, contextTransformers, providers, type EvaluationComparisonMode } from '../../db/schema';
 import { LlmProviderFactory } from '../providers/llm/LlmProviderFactory';
 import { extractTextFromContent } from '../../utils/llm';
 import { parseJsonFromMarkdown } from '../../utils/jsonParser';
 import { logger } from '../../utils/logger';
 import type { ScenarioResponse } from '../../http/contracts/scenario';
+
+const comparisonModes: EvaluationComparisonMode[] = ['exists', 'not_exists', 'eq', 'contains', 'includes', 'matches', 'gt', 'gte', 'lt', 'lte', 'in', 'nin'];
 
 /** Result of evaluating a single scenario conversation post-run */
 export type EvaluationResult = {
@@ -58,8 +60,13 @@ export class ScenarioConversationEvaluator {
       dataTransformationResults = await this.applyContextTransformer(scenario.contextTransformerId, projectId, dataExtractionResults, conversationId);
     }
 
-    const passed = this.checkExpectedValues(dataExtractionResults, scenario.dataExtraction.map(e => ({ [e.varName]: e.expectedValue })).reduce((acc, val) => ({ ...acc, ...val }), {}))
-      && this.checkExpectedValues(dataTransformationResults ?? {}, scenario.dataPostProcessingExpected);
+    const extractionExpectations = (scenario.dataExtraction ?? []).reduce((acc, e) => {
+      acc[e.varName] = { value: e.expectedValue, mode: e.expectedMode };
+      return acc;
+    }, {} as Record<string, { value?: unknown; mode?: EvaluationComparisonMode }>);
+
+    const passed = this.checkExpectedValues(dataExtractionResults, extractionExpectations)
+      && this.checkExpectedValues(dataTransformationResults ?? {}, scenario.dataPostProcessingExpected ?? {});
 
     logger.info({ conversationId, scenarioId: scenario.id, passed }, 'Scenario conversation evaluation complete');
     return { dataExtractionResults, dataTransformationResults, passed };
@@ -120,23 +127,96 @@ export class ScenarioConversationEvaluator {
   }
 
   /**
-   * Checks whether the actual results match the expected values.
-   * Returns true if no expected values are configured or all defined expected values match.
+   * Checks whether the actual results match the expected values using mode-aware comparison.
+   * Returns true if no expected values are configured or all defined expected values pass their assertions.
    * @param actual - Actual results (transformed or extracted)
-   * @param expected - Expected values from scenario configuration, or null
+   * @param expected - Expected values with optional mode from scenario configuration
    * @returns True if all expected values match or no expected values are defined
    */
-  private checkExpectedValues(actual: Record<string, unknown>, expected: Record<string, unknown> | null): boolean {
+  private checkExpectedValues(actual: Record<string, unknown>, expected: Record<string, { value?: unknown; mode?: EvaluationComparisonMode }> | null): boolean {
     if (!expected || Object.keys(expected).length === 0) return true;
 
-    for (const [key, expectedValue] of Object.entries(expected)) {
+    for (const [key, expectation] of Object.entries(expected)) {
+      const { value: expectedValue, mode = 'eq' } = expectation;
       const actualValue = actual[key];
-      if (JSON.stringify(actualValue) !== JSON.stringify(expectedValue)) {
-        logger.debug({ key, expectedValue, actualValue }, 'Expected value mismatch');
+
+      if (mode === 'exists') {
+        if (actualValue == null) {
+          logger.debug({ key, mode }, 'Expected value to exist but was null');
+          return false;
+        }
+      } else if (mode === 'not_exists') {
+        if (actualValue != null) {
+          logger.debug({ key, mode }, 'Expected value not to exist but was found');
+          return false;
+        }
+      } else if (!comparisonModes.includes(mode)) {
+        logger.warn({ key, mode }, `Unknown comparison mode "${mode}", falling back to eq`);
+      }
+
+      const result = this.compareValue(actualValue, expectedValue, mode);
+      if (!result) {
+        logger.debug({ key, expectedValue, actualValue, mode }, 'Expected value mismatch');
         return false;
       }
     }
 
     return true;
+  }
+
+  /**
+   * Compares an actual value against an expected value using the specified comparison mode.
+   * @param actual - The actual value to check
+   * @param expectedValue - The expected value to compare against
+   * @param mode - The comparison mode to use (defaults to 'eq')
+   * @returns True if the comparison passes, false otherwise
+   */
+  private compareValue(actual: unknown, expectedValue: unknown, mode: EvaluationComparisonMode): boolean {
+    switch (mode) {
+      case 'exists':
+        return actual != null;
+
+      case 'not_exists':
+        return actual == null;
+
+      case 'eq':
+        return JSON.stringify(actual) === JSON.stringify(expectedValue);
+
+      case 'contains':
+        if (typeof actual !== 'string' || expectedValue == null) return false;
+        return actual.includes(String(expectedValue));
+
+      case 'includes':
+        if (!Array.isArray(actual)) return false;
+        return actual.some(item => JSON.stringify(item) === JSON.stringify(expectedValue));
+
+      case 'matches':
+        if (!(expectedValue instanceof RegExp)) return false;
+        return expectedValue.test(String(actual));
+
+      case 'gt':
+        return Number(actual) > Number(expectedValue);
+
+      case 'gte':
+        return Number(actual) >= Number(expectedValue);
+
+      case 'lt':
+        return Number(actual) < Number(expectedValue);
+
+      case 'lte':
+        return Number(actual) <= Number(expectedValue);
+
+      case 'in':
+        if (!Array.isArray(expectedValue)) return false;
+        return expectedValue.some(item => JSON.stringify(item) === JSON.stringify(actual));
+
+      case 'nin':
+        if (!Array.isArray(expectedValue)) return true;
+        return !expectedValue.some(item => JSON.stringify(item) === JSON.stringify(actual));
+
+      default:
+        logger.warn({ mode }, `Unreachable comparison mode`);
+        return false;
+    }
   }
 }

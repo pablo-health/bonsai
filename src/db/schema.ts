@@ -533,11 +533,15 @@ export const conversationArtifacts = pgTable('conversation_artifacts', {
   foreignKey({ columns: [table.projectId, table.conversationId], foreignColumns: [conversations.projectId, conversations.id] }).onDelete('cascade'),
 ]);
 
-/** Entry in the data extraction configuration: a stage variable with an optional expected value */
+/** Comparison modes for evaluation assertions */
+export type EvaluationComparisonMode = 'exists' | 'not_exists' | 'eq' | 'contains' | 'includes' | 'matches' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'nin';
+
+/** Entry in the data extraction configuration: a stage variable with an optional expected value and comparison mode */
 export type DataExtractionEntry = {
   stageId: string;
   varName: string;
   expectedValue?: unknown;
+  expectedMode?: EvaluationComparisonMode;
 };
 
 /** Status of a scenario run or scenario conversation */
