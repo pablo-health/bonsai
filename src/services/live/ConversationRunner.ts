@@ -2397,8 +2397,16 @@ export class ConversationRunner {
     try {
       const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput);
       const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
-      const fillerMessages = [
+      const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
+      // The current user message is already in context.history (saved to DB before context is built),
+      // so remove it here to avoid sending it twice — it is appended explicitly below.
+      let recentHistory = [...context.history];
+      if (recentHistory.at(-1)?.role === 'user') {
+        recentHistory.pop();
+      }
+      const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system' as const, content: renderedPrompt },
+        ...recentHistory.slice(-historyMessageCount).map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
         { role: 'user' as const, content: userInput },
       ];
       const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
@@ -2406,6 +2414,7 @@ export class ConversationRunner {
       const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
       const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
       const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
+      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
       const result = await fillerLlmProvider.generate(truncatedFillerMessages, fillerMaxTokens !== undefined ? { maxTokens: fillerMaxTokens } : undefined);
       const text = extractTextFromContent(result.content).trim();
       if (text.length > 0) {
