@@ -4,6 +4,15 @@ import { openAILlmSettingsSchema } from '../../services/providers/llm/OpenAILlmP
 import { openAILegacyLlmSettingsSchema } from '../../services/providers/llm/OpenAILegacyLlmProvider';
 import { anthropicLlmSettingsSchema } from '../../services/providers/llm/AnthropicLlmProvider';
 import { geminiLlmSettingsSchema } from '../../services/providers/llm/GeminiLlmProvider';
+import { groqLlmSettingsSchema } from '../../services/providers/llm/GroqLlmProvider';
+import { mistralLlmSettingsSchema } from '../../services/providers/llm/MistralLlmProvider';
+import { deepSeekLlmSettingsSchema } from '../../services/providers/llm/DeepSeekLlmProvider';
+import { openRouterLlmSettingsSchema } from '../../services/providers/llm/OpenRouterLlmProvider';
+import { togetherAILlmSettingsSchema } from '../../services/providers/llm/TogetherAILlmProvider';
+import { fireworksAILlmSettingsSchema } from '../../services/providers/llm/FireworksAILlmProvider';
+import { perplexityLlmSettingsSchema } from '../../services/providers/llm/PerplexityLlmProvider';
+import { cohereLlmSettingsSchema } from '../../services/providers/llm/CohereLlmProvider';
+import { xAILlmSettingsSchema } from '../../services/providers/llm/XAILlmProvider';
 import { ollamaLlmSettingsSchema } from '../../services/providers/llm/OllamaLlmProvider';
 import { elevenLabsTtsSettingsSchema } from '../../services/providers/tts/ElevenLabsTtsProvider';
 import { openAiTtsSettingsSchema } from '../../services/providers/tts/OpenAiTtsProvider';
@@ -106,6 +115,15 @@ export const llmSettingsSchema = z.union([
   openAILegacyLlmSettingsSchema,
   anthropicLlmSettingsSchema,
   geminiLlmSettingsSchema,
+  groqLlmSettingsSchema,
+  mistralLlmSettingsSchema,
+  deepSeekLlmSettingsSchema,
+  openRouterLlmSettingsSchema,
+  togetherAILlmSettingsSchema,
+  fireworksAILlmSettingsSchema,
+  perplexityLlmSettingsSchema,
+  cohereLlmSettingsSchema,
+  xAILlmSettingsSchema,
   ollamaLlmSettingsSchema,
 ]).openapi('LlmSettings').nullable().optional().describe('LLM provider-specific settings for this stage');
 
