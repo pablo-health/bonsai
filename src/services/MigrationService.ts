@@ -11,6 +11,7 @@ import {
   globalActions,
   knowledgeCategories,
   knowledgeItems,
+  guardrails,
   stages,
   apiKeys,
   environments,
@@ -44,7 +45,7 @@ function isSelectAll(sel: MigrationSelection): boolean {
  * Export entity order (FK-safe):
  *   providers → projects → agents → classifiers → contextTransformers
  *   → tools → globalActions → knowledgeCategories → knowledgeItems
- *   → stages → apiKeys
+ *   → guardrails → stages → apiKeys
  *
  * Excluded from migration (runtime / credential data):
  *   operators, users, conversations, conversationEvents, conversationArtifacts,
@@ -94,6 +95,7 @@ export class MigrationService extends BaseService {
       apiKeyIds: query.apiKeyIds,
       testerIds: query.testerIds,
       scenarioIds: query.scenarioIds,
+      guardrailIds: query.guardrailIds,
     };
 
     logger.info({ selection, operatorId: context.operatorId }, 'Exporting migration bundle');
@@ -144,6 +146,7 @@ export class MigrationService extends BaseService {
         upserted.push({ entity: 'globalActions', count: await this.upsertGlobalActions(tx, bundle.globalActions) });
         upserted.push({ entity: 'knowledgeCategories', count: await this.upsertKnowledgeCategories(tx, bundle.knowledgeCategories) });
         upserted.push({ entity: 'knowledgeItems', count: await this.upsertKnowledgeItems(tx, bundle.knowledgeItems) });
+        upserted.push({ entity: 'guardrails', count: await this.upsertGuardrails(tx, bundle.guardrails) });
         upserted.push({ entity: 'stages', count: await this.upsertStages(tx, bundle.stages) });
         upserted.push({ entity: 'apiKeys', count: await this.upsertApiKeys(tx, bundle.apiKeys) });
         upserted.push({ entity: 'testers', count: await this.upsertTesters(tx, bundle.testers) });
@@ -161,6 +164,7 @@ export class MigrationService extends BaseService {
         ...bundle.globalActions.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'globalAction', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.knowledgeCategories.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'knowledgeCategory', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.knowledgeItems.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'knowledgeItem', entityId: row.id, userId: context.operatorId, newEntity: row })),
+        ...bundle.guardrails.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'guardrail', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.stages.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'stage', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.apiKeys.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'apiKey', entityId: row.id, userId: context.operatorId, newEntity: row })),
         ...bundle.testers.map(row => this.auditService.logChange({ action: 'MIGRATE', entityType: 'tester', entityId: row.id, userId: context.operatorId, newEntity: row })),
@@ -177,6 +181,7 @@ export class MigrationService extends BaseService {
         { entity: 'globalActions', count: bundle.globalActions.length },
         { entity: 'knowledgeCategories', count: bundle.knowledgeCategories.length },
         { entity: 'knowledgeItems', count: bundle.knowledgeItems.length },
+        { entity: 'guardrails', count: bundle.guardrails.length },
         { entity: 'stages', count: bundle.stages.length },
         { entity: 'apiKeys', count: bundle.apiKeys.length },
         { entity: 'testers', count: bundle.testers.length },
@@ -305,6 +310,7 @@ export class MigrationService extends BaseService {
       apiKeyIds: query.apiKeyIds,
       testerIds: query.testerIds,
       scenarioIds: query.scenarioIds,
+      guardrailIds: query.guardrailIds,
     };
 
     const bundle = await this.resolveBundle(selection, '', selection);
@@ -322,6 +328,7 @@ export class MigrationService extends BaseService {
       globalActions: bundle.globalActions.map(toProjectStub),
       knowledgeCategories: bundle.knowledgeCategories.map(toProjectStub),
       knowledgeItems: bundle.knowledgeItems.map(r => ({ id: r.id as string, name: (r.question ?? r.id) as string })),
+      guardrails: bundle.guardrails.map(toProjectStub),
       stages: bundle.stages.map(toProjectStub),
       apiKeys: bundle.apiKeys.map(toProjectStub),
       testers: bundle.testers.map(toProjectStub),
@@ -331,7 +338,7 @@ export class MigrationService extends BaseService {
     result.totalCount = [
       result.providers, result.projects, result.agents, result.classifiers,
       result.contextTransformers, result.tools, result.globalActions,
-      result.knowledgeCategories, result.knowledgeItems, result.stages, result.apiKeys,
+      result.knowledgeCategories, result.knowledgeItems, result.guardrails, result.stages, result.apiKeys,
       result.testers, result.scenarios,
     ].reduce((sum, arr) => sum + arr.length, 0);
 
@@ -368,37 +375,39 @@ export class MigrationService extends BaseService {
 
     // ── 2. Fetch explicitly selected leaf entities ────────────────────────────
 
-    const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitStageRows, explicitApiKeyRows, explicitTesterRows, explicitScenarioRows] = await Promise.all([
-      this.fetchOrAll(selectAll || !!selection.agentIds?.length, agents, selection.agentIds, agents.id),
-      this.fetchOrAll(selectAll || !!selection.classifierIds?.length, classifiers, selection.classifierIds, classifiers.id),
-      this.fetchOrAll(selectAll || !!selection.contextTransformerIds?.length, contextTransformers, selection.contextTransformerIds, contextTransformers.id),
-      this.fetchOrAll(selectAll || !!selection.toolIds?.length, tools, selection.toolIds, tools.id),
-      this.fetchOrAll(selectAll || !!selection.globalActionIds?.length, globalActions, selection.globalActionIds, globalActions.id),
-      this.fetchOrAll(selectAll || !!selection.knowledgeCategoryIds?.length, knowledgeCategories, selection.knowledgeCategoryIds, knowledgeCategories.id),
-      this.fetchOrAll(selectAll || !!selection.stageIds?.length, stages, selection.stageIds, stages.id),
-      this.fetchOrAll(selectAll || !!selection.apiKeyIds?.length, apiKeys, selection.apiKeyIds, apiKeys.id),
-      this.fetchOrAll(selectAll || !!selection.testerIds?.length, testers, selection.testerIds, testers.id),
-      this.fetchOrAll(selectAll || !!selection.scenarioIds?.length, scenarios, selection.scenarioIds, scenarios.id),
-    ]);
+  const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitGrRows, explicitStageRows, explicitApiKeyRows, explicitTesterRows, explicitScenarioRows] = await Promise.all([
+       this.fetchOrAll(selectAll || !!selection.agentIds?.length, agents, selection.agentIds, agents.id),
+       this.fetchOrAll(selectAll || !!selection.classifierIds?.length, classifiers, selection.classifierIds, classifiers.id),
+       this.fetchOrAll(selectAll || !!selection.contextTransformerIds?.length, contextTransformers, selection.contextTransformerIds, contextTransformers.id),
+       this.fetchOrAll(selectAll || !!selection.toolIds?.length, tools, selection.toolIds, tools.id),
+       this.fetchOrAll(selectAll || !!selection.globalActionIds?.length, globalActions, selection.globalActionIds, globalActions.id),
+       this.fetchOrAll(selectAll || !!selection.knowledgeCategoryIds?.length, knowledgeCategories, selection.knowledgeCategoryIds, knowledgeCategories.id),
+       this.fetchOrAll(selectAll || !!selection.guardrailIds?.length, guardrails, selection.guardrailIds, guardrails.id),
+       this.fetchOrAll(selectAll || !!selection.stageIds?.length, stages, selection.stageIds, stages.id),
+       this.fetchOrAll(selectAll || !!selection.apiKeyIds?.length, apiKeys, selection.apiKeyIds, apiKeys.id),
+       this.fetchOrAll(selectAll || !!selection.testerIds?.length, testers, selection.testerIds, testers.id),
+       this.fetchOrAll(selectAll || !!selection.scenarioIds?.length, scenarios, selection.scenarioIds, scenarios.id),
+     ]);
 
     // ── 3. Expand project selections: fetch all children for selected projects ─
 
     const expandedProjectIds = new Set(projectRows.map(p => p.id));
 
     const childrenOfProjects = expandedProjectIds.size > 0 && !selectAll
-      ? await Promise.all([
-          db.select().from(agents).where(inArray(agents.projectId, [...expandedProjectIds])),
-          db.select().from(classifiers).where(inArray(classifiers.projectId, [...expandedProjectIds])),
-          db.select().from(contextTransformers).where(inArray(contextTransformers.projectId, [...expandedProjectIds])),
-          db.select().from(tools).where(inArray(tools.projectId, [...expandedProjectIds])),
-          db.select().from(globalActions).where(inArray(globalActions.projectId, [...expandedProjectIds])),
-          db.select().from(knowledgeCategories).where(inArray(knowledgeCategories.projectId, [...expandedProjectIds])),
-          db.select().from(stages).where(inArray(stages.projectId, [...expandedProjectIds])),
-          db.select().from(apiKeys).where(inArray(apiKeys.projectId, [...expandedProjectIds])),
-          db.select().from(testers).where(inArray(testers.projectId, [...expandedProjectIds])),
-          db.select().from(scenarios).where(inArray(scenarios.projectId, [...expandedProjectIds])),
-        ])
-      : [[], [], [], [], [], [], [], [], [], []];
+       ? await Promise.all([
+           db.select().from(agents).where(inArray(agents.projectId, [...expandedProjectIds])),
+           db.select().from(classifiers).where(inArray(classifiers.projectId, [...expandedProjectIds])),
+           db.select().from(contextTransformers).where(inArray(contextTransformers.projectId, [...expandedProjectIds])),
+           db.select().from(tools).where(inArray(tools.projectId, [...expandedProjectIds])),
+           db.select().from(globalActions).where(inArray(globalActions.projectId, [...expandedProjectIds])),
+           db.select().from(knowledgeCategories).where(inArray(knowledgeCategories.projectId, [...expandedProjectIds])),
+           db.select().from(guardrails).where(inArray(guardrails.projectId, [...expandedProjectIds])),
+           db.select().from(stages).where(inArray(stages.projectId, [...expandedProjectIds])),
+           db.select().from(apiKeys).where(inArray(apiKeys.projectId, [...expandedProjectIds])),
+           db.select().from(testers).where(inArray(testers.projectId, [...expandedProjectIds])),
+           db.select().from(scenarios).where(inArray(scenarios.projectId, [...expandedProjectIds])),
+         ])
+       : [[], [], [], [], [], [], [], [], [], [], []];
 
     // Merge explicit + project-child rows (deduplicated by ID)
     const agentRows = this.dedup([...explicitAgentRows, ...childrenOfProjects[0] as any[]], 'id');
@@ -407,10 +416,11 @@ export class MigrationService extends BaseService {
     const toolRows = this.dedup([...explicitToolRows, ...childrenOfProjects[3] as any[]], 'id');
     const gaRows = this.dedup([...explicitGaRows, ...childrenOfProjects[4] as any[]], 'id');
     const kcRows = this.dedup([...explicitKcRows, ...childrenOfProjects[5] as any[]], 'id');
-    const stageRows = this.dedup([...explicitStageRows, ...childrenOfProjects[6] as any[]], 'id');
-    const apiKeyRows = this.dedup([...explicitApiKeyRows, ...childrenOfProjects[7] as any[]], 'id');
-    const testerRows = this.dedup([...explicitTesterRows, ...childrenOfProjects[8] as any[]], 'id');
-    const scenarioRows = this.dedup([...explicitScenarioRows, ...childrenOfProjects[9] as any[]], 'id');
+    const grRows = this.dedup([...explicitGrRows, ...childrenOfProjects[6] as any[]], 'id');
+    const stageRows = this.dedup([...explicitStageRows, ...childrenOfProjects[7] as any[]], 'id');
+    const apiKeyRows = this.dedup([...explicitApiKeyRows, ...childrenOfProjects[8] as any[]], 'id');
+    const testerRows = this.dedup([...explicitTesterRows, ...childrenOfProjects[9] as any[]], 'id');
+    const scenarioRows = this.dedup([...explicitScenarioRows, ...childrenOfProjects[10] as any[]], 'id');
 
     // ── 4. Knowledge items — fetch all items for every included category ─────
 
@@ -431,6 +441,7 @@ export class MigrationService extends BaseService {
       ...toolRows.map(r => r.projectId),
       ...gaRows.map(r => r.projectId),
       ...allKcRows.map(r => r.projectId),
+      ...grRows.map(r => r.projectId),
       ...stageRows.map(r => r.projectId),
       ...apiKeyRows.map(r => r.projectId),
       ...testerRows.map(r => r.projectId),
@@ -507,6 +518,7 @@ export class MigrationService extends BaseService {
       globalActions: gaRows,
       knowledgeCategories: allKcRows,
       knowledgeItems: kiRows,
+      guardrails: grRows,
       stages: stageRows,
       apiKeys: apiKeyRows,
       testers: testerRows,
@@ -831,6 +843,26 @@ export class MigrationService extends BaseService {
         answer: sql`excluded.answer`,
         order: sql`excluded.order`,
         version: sql`${knowledgeItems.version} + 1`,
+        updatedAt: sql`now()`,
+      },
+    });
+    return rows.length;
+  }
+
+  private async upsertGuardrails(tx: DbTx, rows: any[]): Promise<number> {
+    if (!rows.length) return 0;
+    await tx.insert(guardrails).values(rows.map(r => this.parseTimestamps(r))).onConflictDoUpdate({
+      target: [guardrails.projectId, guardrails.id],
+      set: {
+        projectId: sql`excluded.project_id`,
+        name: sql`excluded.name`,
+        condition: sql`excluded.condition`,
+        classificationTrigger: sql`excluded.classification_trigger`,
+        effects: sql`excluded.effects`,
+        examples: sql`excluded.examples`,
+        tags: sql`excluded.tags`,
+        metadata: sql`excluded.metadata`,
+        version: sql`${guardrails.version} + 1`,
         updatedAt: sql`now()`,
       },
     });

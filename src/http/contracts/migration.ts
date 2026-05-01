@@ -24,6 +24,7 @@ const bundleEntitySchema = z.record(z.string(), z.any());
  *   globalActions → (self-contained, but belong to a project)
  *   knowledgeItems → knowledgeCategories → projects
  *   apiKeys       → projects
+ *   guardrails    → projects
  *   projects      → providers (asr, storage)
  */
 export const migrationSelectionSchema = z.object({
@@ -39,6 +40,7 @@ export const migrationSelectionSchema = z.object({
   apiKeyIds: z.array(z.string()).optional().describe('Specific API key IDs to include.'),
   testerIds: z.array(z.string()).optional().describe('Specific tester IDs to include.'),
   scenarioIds: z.array(z.string()).optional().describe('Specific scenario IDs to include.'),
+  guardrailIds: z.array(z.string()).optional().describe('Specific guardrail IDs to include.'),
 }).openapi('MigrationSelection').describe('Granular entity selection for export/pull. Omit all fields (empty object {}) to export everything.');
 
 export type MigrationSelection = z.infer<typeof migrationSelectionSchema>;
@@ -49,7 +51,7 @@ export type MigrationSelection = z.infer<typeof migrationSelectionSchema>;
  * imported sequentially without FK violations:
  *   providers → projects → agents → classifiers → contextTransformers
  *   → tools → globalActions → knowledgeCategories → knowledgeItems
- *   → stages → apiKeys
+ *   → guardrails → stages → apiKeys
  *
  * Provider records are exported WITHOUT their config field (API credentials are stripped).
  * The target instance must reconfigure provider credentials after import.
@@ -70,6 +72,7 @@ export const exportBundleSchema = z.object({
   globalActions: z.array(bundleEntitySchema).describe('Global action records — depend on projects'),
   knowledgeCategories: z.array(bundleEntitySchema).describe('Knowledge category records — depend on projects'),
   knowledgeItems: z.array(bundleEntitySchema).describe('Knowledge item records — depend on knowledgeCategories'),
+  guardrails: z.array(bundleEntitySchema).describe('Guardrail records — depend on projects'),
   stages: z.array(bundleEntitySchema).describe('Stage records — depend on projects, agents, and classifiers'),
   apiKeys: z.array(bundleEntitySchema).describe('API key records — depend on projects'),
   testers: z.array(bundleEntitySchema).describe('Tester records — depend on projects'),
@@ -92,6 +95,7 @@ export const exportQuerySchema = z.object({
   apiKeyIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific API key IDs to export.'),
   testerIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific tester IDs to export.'),
   scenarioIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific scenario IDs to export.'),
+  guardrailIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific guardrail IDs to export.'),
 });
 
 export type ExportQuery = z.infer<typeof exportQuerySchema>;
@@ -177,6 +181,7 @@ export const migrationPreviewSchema = z.object({
   globalActions: z.array(entityStubSchema).describe('Global action stubs that would be included'),
   knowledgeCategories: z.array(entityStubSchema).describe('Knowledge category stubs that would be included'),
   knowledgeItems: z.array(entityStubSchema).describe('Knowledge item stubs that would be included — name is the question text'),
+  guardrails: z.array(entityStubSchema).describe('Guardrail stubs that would be included'),
   stages: z.array(entityStubSchema).describe('Stage stubs that would be included'),
   apiKeys: z.array(entityStubSchema).describe('API key stubs that would be included'),
   testers: z.array(entityStubSchema).describe('Tester stubs that would be included'),
