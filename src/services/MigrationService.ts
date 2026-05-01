@@ -30,6 +30,7 @@ import { PERMISSIONS } from '../permissions';
 import { generateId } from '../utils/idGenerator';
 import { logger } from '../utils/logger';
 import { InvalidOperationError, NotFoundError, RemoteConnectionError } from '../errors';
+import { SecretRefUtils } from './secrets/SecretRefUtils';
 import type { ExportBundle, ExportQuery, PullRequest, MigrationResult, MigrationJob, MigrationSelection, MigrationPreview, EntityStub } from '../http/contracts/migration';
 
 /** Drizzle transaction type, inferred to avoid driver-specific imports. */
@@ -66,6 +67,7 @@ export class MigrationService extends BaseService {
   constructor(
     @inject(VersionService) private readonly versionService: VersionService,
     @inject(AuditService) private readonly auditService: AuditService,
+    @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
   ) {
     super();
   }
@@ -239,10 +241,12 @@ guardrailIds: query.guardrailIds,
     const env = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
     if (!env) throw new NotFoundError(`Environment with id ${environmentId} not found`);
 
+    const resolvedEnv = await this.secretRefUtils.resolveObject(env as any) as typeof env;
+
     const authRes = await this.safeFetch(`${env.url}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: env.login, password: env.password }),
+      body: JSON.stringify({ id: resolvedEnv.login, password: resolvedEnv.password }),
     });
     if (!authRes.ok) throw new RemoteConnectionError(`Authentication against source failed: HTTP ${authRes.status}`);
 
@@ -630,11 +634,14 @@ guardrailIds: query.guardrailIds,
       const env = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
       if (!env) throw new NotFoundError(`Environment with id ${environmentId} not found`);
 
+      // Resolve any encrypted secret references in credentials
+      const resolvedEnv = await this.secretRefUtils.resolveObject(env as any) as typeof env;
+
       // 2. Authenticate against source instance
       const authRes = await this.safeFetch(`${env.url}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: env.login, password: env.password }),
+        body: JSON.stringify({ id: resolvedEnv.login, password: resolvedEnv.password }),
       });
       if (!authRes.ok) throw new RemoteConnectionError(`Authentication against source failed: HTTP ${authRes.status}`);
 
