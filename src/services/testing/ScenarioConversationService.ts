@@ -1,5 +1,5 @@
 import { injectable } from 'tsyringe';
-import { eq, and, SQL, desc } from 'drizzle-orm';
+import { eq, and, SQL, desc, isNotNull } from 'drizzle-orm';
 import { db } from '../../db/index';
 import { scenarioConversations } from '../../db/schema';
 import type { ScenarioRunStatus } from '../../db/schema';
@@ -162,6 +162,30 @@ export class ScenarioConversationService extends BaseService {
       await db.update(scenarioConversations).set({ conversationId, updatedAt: new Date() }).where(and(eq(scenarioConversations.id, id), eq(scenarioConversations.projectId, projectId)));
     } catch (error) {
       logger.error({ error, id, conversationId }, 'Failed to link conversation to scenario conversation');
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves all non-null conversation IDs linked to a scenario run.
+   * Used by analytics to filter data to only conversations used during testing.
+   * @param projectId - The project the scenario run belongs to
+   * @param scenarioRunId - The scenario run ID to filter by
+   * @returns Array of conversation IDs linked to the scenario run
+   */
+  async getConversationIdsByScenarioRun(projectId: string, scenarioRunId: string): Promise<string[]> {
+    try {
+      const results = await db.query.scenarioConversations.findMany({
+        where: and(
+          eq(scenarioConversations.projectId, projectId),
+          eq(scenarioConversations.scenarioRunId, scenarioRunId),
+          isNotNull(scenarioConversations.conversationId),
+        ),
+        columns: { conversationId: true },
+      });
+      return results.map((r) => r.conversationId!).filter(Boolean);
+    } catch (error) {
+      logger.error({ error, scenarioRunId }, 'Failed to fetch conversation IDs for scenario run');
       throw error;
     }
   }
