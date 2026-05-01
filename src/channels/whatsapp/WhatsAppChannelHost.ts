@@ -392,6 +392,11 @@ export class WhatsAppChannelHost {
     // Ensure the user exists (create if not)
     await this.userService.ensureUserExists(projectId, body.to);
 
+    // Deep-merge injected userProfile into existing user profile
+    if (body.userProfile && Object.keys(body.userProfile).length > 0) {
+      await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
+    }
+
     // Pre-create the conversation
     const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
     const conversation = await this.conversationService.createConversation({

@@ -88,6 +88,11 @@ export class StartConversationHandler implements ClientMessageHandler<CALStartCo
         throw new UserBannedError(`User ${user.id} is banned and cannot start a conversation${user.banReason ? `: ${user.banReason}` : ''}`);
       }
 
+      // Deep-merge injected userProfile into existing user profile
+      if (message.userProfile && Object.keys(message.userProfile).length > 0) {
+        await this.userService.updateUserProfile(context.session!.projectId, message.userId, message.userProfile);
+      }
+
       // Resolve stageId: explicit message value takes priority, then fall back to project default
       const resolvedStageId = message.stageId ?? project.startingStageId;
       if (!resolvedStageId) {
