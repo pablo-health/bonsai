@@ -883,6 +883,13 @@
           "type": "string",
           "description": "When set, the handler attaches to this pre-created conversation instead of creating a new one. Used for outgoing call flows where the conversation record is created at call initiation time."
         },
+        "userProfile": {
+          "type": "object",
+          "additionalProperties": {
+            "nullable": true
+          },
+          "description": "Optional user profile data to inject and deep-merge into the user's existing profile on the users table."
+        },
         "requestId": {
           "type": "string",
           "description": "Unique identifier for request correlation and tracking"

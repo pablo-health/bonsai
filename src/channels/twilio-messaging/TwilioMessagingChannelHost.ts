@@ -295,6 +295,11 @@ export class TwilioMessagingChannelHost {
     // Ensure the user exists (create if not)
     await this.userService.ensureUserExists(projectId, body.to);
 
+    // Deep-merge injected userProfile into existing user profile
+    if (body.userProfile && Object.keys(body.userProfile).length > 0) {
+      await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
+    }
+
     // Create virtual connection and register a real session so inbound replies
     // are routed to this conversation instead of spawning a new session.
     const phoneKey = `${projectId}:${body.to}`;

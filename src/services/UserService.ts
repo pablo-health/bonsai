@@ -2,6 +2,7 @@ import { injectable, inject } from 'tsyringe';
 import { eq, or, and, like, SQL, desc, sql } from 'drizzle-orm';
 import { db } from '../db/index';
 import { users } from '../db/schema';
+import { deepMerge } from '../utils/deepMerge';
 import type { CreateUserRequest, UpdateUserRequest, UserResponse, UserListResponse } from '../http/contracts/user';
 import type { ListParams } from '../http/contracts/common';
 import { userResponseSchema, userListResponseSchema } from '../http/contracts/user';
@@ -241,6 +242,34 @@ export class UserService extends BaseService {
       return userResponseSchema.parse(existing);
     } catch (error) {
       logger.error({ error, userId, projectId }, 'Failed to ensure user exists');
+      throw error;
+    }
+  }
+
+  /**
+   * Deep-merges profile data into an existing user's profile, creating the user with the profile if they do not exist.
+   * This is used to inject user profile data at conversation start time across all communication channels.
+   * @param projectId - The project the user belongs to
+   * @param userId - The ID of the user
+   * @param profileUpdate - Profile fields to deep-merge into the existing profile
+   */
+  async updateUserProfile(projectId: string, userId: string, profileUpdate: Record<string, unknown>): Promise<void> {
+    logger.info({ userId, projectId }, 'Updating user profile');
+
+    try {
+      const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
+
+      if (!existing) {
+        await db.insert(users).values({ id: userId, projectId, profile: profileUpdate });
+        logger.info({ userId, projectId }, 'User created with injected profile');
+        return;
+      }
+
+      const mergedProfile = deepMerge((existing.profile ?? {}) as Record<string, unknown>, profileUpdate);
+      await db.update(users).set({ profile: mergedProfile, updatedAt: new Date() }).where(and(eq(users.projectId, projectId), eq(users.id, userId)));
+      logger.info({ userId, projectId }, 'User profile updated successfully');
+    } catch (error) {
+      logger.error({ error, userId, projectId }, 'Failed to update user profile');
       throw error;
     }
   }
