@@ -27,6 +27,7 @@ export type ApiKeyFeature =
   | 'stage_control'
   | 'run_action'
   | 'call_tool'
+  | 'abort_generation'
   | 'events';
 
 /** All supported API key feature values. */
@@ -40,6 +41,7 @@ export const ALL_API_KEY_FEATURES: Array<ApiKeyFeature> = [
   'stage_control',
   'run_action',
   'call_tool',
+  'abort_generation',
   'events',
 ];
 

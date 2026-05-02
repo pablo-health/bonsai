@@ -145,6 +145,15 @@ export const calCallToolRequestSchema = calBaseInputMessageSchema.extend({
 });
 
 /**
+ * Signals that the client wishes to abort (barge-in on) an ongoing AI generation.
+ * Sent when the user starts speaking while the agent is mid-response during a voice conversation.
+ */
+export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  stageId: z.string().describe('Identifier of the stage whose generation should be aborted'),
+});
+
+/**
  * Discriminated union of all inbound message types accepted by a communication channel.
  */
 export const calInputMessageSchema = z.discriminatedUnion('type', [
@@ -160,6 +169,7 @@ export const calInputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsRequestSchema,
   calRunActionRequestSchema,
   calCallToolRequestSchema,
+  calAbortAiGenerationRequestSchema,
 ]);
 
 // Output result message schemas
@@ -312,6 +322,17 @@ export const calSendAiVoiceChunkMessageSchema = calBaseOutputMessageSchema.exten
 });
 
 /**
+ * Signals that the AI generation was aborted due to user barge-in (voice interruption).
+ * Sent by the server when it receives a voice interruption during agent speech synthesis.
+ */
+export const calAbortAiGenerationOutputMessageSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation_output'),
+  outputTurnId: z.string().describe('Generation turn that was aborted'),
+  accumulatedText: z.string().describe('Full text generated and sent to TTS before the barge-in occurred'),
+  abortTimestampMs: z.number().describe('Unix timestamp in milliseconds when the generation was aborted'),
+});
+
+/**
  * Signals that the AI generation turn has completed.
  */
 export const calEndAiGenerationOutputMessageSchema = calBaseOutputMessageSchema.extend({
@@ -422,6 +443,7 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calCallToolResponseSchema,
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
+  calAbortAiGenerationOutputMessageSchema,
   calEndAiGenerationOutputMessageSchema,
   calAiTranscribedChunkMessageSchema,
   calUserTranscribedChunkMessageSchema,
@@ -448,6 +470,7 @@ export type CALGetVarRequest = z.infer<typeof calGetVarRequestSchema>;
 export type CALGetAllVarsRequest = z.infer<typeof calGetAllVarsRequestSchema>;
 export type CALRunActionRequest = z.infer<typeof calRunActionRequestSchema>;
 export type CALCallToolRequest = z.infer<typeof calCallToolRequestSchema>;
+export type CALAbortAiGenerationRequest = z.infer<typeof calAbortAiGenerationRequestSchema>;
 export type CALInputMessage = z.infer<typeof calInputMessageSchema>;
 
 export type CALStartConversationResponse = z.infer<typeof calStartConversationResponseSchema>;
@@ -465,6 +488,7 @@ export type CALCallToolResponse = z.infer<typeof calCallToolResponseSchema>;
 
 export type CALStartAiGenerationOutputMessage = z.infer<typeof calStartAiGenerationOutputMessageSchema>;
 export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessageSchema>;
+export type CALAbortAiGenerationOutputMessage = z.infer<typeof calAbortAiGenerationOutputMessageSchema>;
 export type CALEndAiGenerationOutputMessage = z.infer<typeof calEndAiGenerationOutputMessageSchema>;
 export type CALAiTranscribedChunkMessage = z.infer<typeof calAiTranscribedChunkMessageSchema>;
 export type CALUserTranscribedChunkMessage = z.infer<typeof calUserTranscribedChunkMessageSchema>;

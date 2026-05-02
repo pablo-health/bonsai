@@ -3,6 +3,7 @@ import { calToWsOutput } from './utils';
 import {
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
+  calAbortAiGenerationOutputMessageSchema,
   calEndAiGenerationOutputMessageSchema,
   calAiTranscribedChunkMessageSchema,
   calSendAiImageOutputMessageSchema,
@@ -21,6 +22,12 @@ export const sendAiVoiceChunkMessageSchema = calToWsOutput(calSendAiVoiceChunkMe
   audioData: z.string().describe('Base64-encoded audio chunk data'),
 });
 export type SendAiVoiceChunkMessage = z.infer<typeof sendAiVoiceChunkMessageSchema>;
+
+/**
+ * Message indicating that AI generation was aborted due to user barge-in.
+ */
+export const abortAiGenerationOutputMessageSchema = calToWsOutput(calAbortAiGenerationOutputMessageSchema);
+export type AbortAiGenerationOutputMessage = z.infer<typeof abortAiGenerationOutputMessageSchema>;
 
 /** Message indicating the end of AI voice output. */
 export const endAiGenerationOutputMessageSchema = calToWsOutput(calEndAiGenerationOutputMessageSchema);
