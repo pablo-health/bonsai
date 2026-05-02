@@ -1831,14 +1831,10 @@ export class ConversationRunner {
  /**
     * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
     * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
-    * processUserInput onward. During barge-in mode, ASR is NOT stopped — it stays open for
-    * continued listening. Only acts when in receiving_user_voice state.
+   * processUserInput onward. Only acts when in receiving_user_voice state.
     */
    private async handleVadEndOfUtterance(): Promise<void> {
      if (this.conversation.status !== 'receiving_user_voice') return;
-
-     // During barge-in: do NOT stop ASR — keep listening for continued speech.
-     if (this.isBargeIn) return;
 
      if (!this.stageData.asrProvider) return;
 
