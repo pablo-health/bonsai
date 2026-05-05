@@ -104,6 +104,19 @@ export class WebSocketConnection implements IClientConnection {
         break;
       }
 
+      case 'abort_ai_generation_output': {
+        this.send({
+          type: 'abort_ai_generation_output',
+          sessionId,
+          conversationId,
+          requestId: msg.correlationId,
+          outputTurnId: msg.outputTurnId,
+          accumulatedText: msg.accumulatedText,
+          abortTimestampMs: msg.abortTimestampMs,
+        });
+        break;
+      }
+
       case 'end_ai_generation_output': {
         this.send({
           type: 'end_ai_generation_output',
