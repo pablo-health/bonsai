@@ -188,7 +188,7 @@ export const createBenchmarkConfigSchema = z.object({
   description: z.string().optional().describe('Optional description'),
   providerConfigId: z.string().min(1).describe('ID of the benchmark provider config to use'),
   inputType: z.enum(['messages', 'text', 'audio']).describe('Type of input data: messages (LLM), text (TTS), or audio (ASR)'),
-  inputData: z.record(z.string(), z.unknown()).describe('Input payload. LLM: { messages: LlmMessage[] }. TTS: { text: string }. ASR: { audioBase64: string, mimeType: string }'),
+  inputData: z.record(z.string(), z.unknown()).describe('Input payload. LLM: { messages: LlmMessage[] }. TTS: { text: string }. ASR: { audioBase64: string, mimeType: string, fileName?: string }'),
   repeats: z.number().int().min(1).max(100).optional().default(3).describe('Number of times to repeat the test per run'),
 });
 

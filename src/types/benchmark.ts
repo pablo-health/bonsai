@@ -26,6 +26,8 @@ export type TtsBenchmarkInput = {
 export type AsrBenchmarkInput = {
   audioBase64: string;
   mimeType: string;
+  /** Original file name of the audio clip */
+  fileName?: string;
 };
 
 /** Union of all typed benchmark inputs */
