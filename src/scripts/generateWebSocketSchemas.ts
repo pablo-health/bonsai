@@ -64,6 +64,7 @@ import {
   abortAiGenerationOutputMessageSchema,
   endAiGenerationOutputMessageSchema,
   aiTranscribedChunkMessageSchema,
+  userSpeakingStartedMessageSchema,
   sendAiImageOutputMessageSchema,
   sendAiAudioOutputMessageSchema,
 } from '../channels/websocket/contracts/aiResponse';
@@ -136,6 +137,7 @@ function generateWebSocketSchemas(): void {
   registry.register('abort-ai-generation-output', abortAiGenerationOutputMessageSchema);
   registry.register('end-ai-generation-output', endAiGenerationOutputMessageSchema);
   registry.register('ai-transcribed-chunk', aiTranscribedChunkMessageSchema);
+  registry.register('user-speaking-started', userSpeakingStartedMessageSchema);
   registry.register('send-ai-image-output', sendAiImageOutputMessageSchema);
   registry.register('send-ai-audio-output', sendAiAudioOutputMessageSchema);
   registry.register('variables-updated-event', variablesUpdatedEventDataSchema);

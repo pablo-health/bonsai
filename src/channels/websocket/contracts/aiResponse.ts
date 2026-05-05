@@ -6,6 +6,7 @@ import {
   calAbortAiGenerationOutputMessageSchema,
   calEndAiGenerationOutputMessageSchema,
   calAiTranscribedChunkMessageSchema,
+  calUserSpeakingStartedMessageSchema,
   calSendAiImageOutputMessageSchema,
   calSendAiAudioOutputMessageSchema,
 } from '../../messages';
@@ -36,6 +37,10 @@ export type EndAiGenerationOutputMessage = z.infer<typeof endAiGenerationOutputM
 /** Message sent when an AI speech chunk has been transcribed. */
 export const aiTranscribedChunkMessageSchema = calToWsOutput(calAiTranscribedChunkMessageSchema);
 export type AiTranscribedChunkMessage = z.infer<typeof aiTranscribedChunkMessageSchema>;
+
+/** Message signalling that VAD detected the user started speaking during AI generation (barge-in). */
+export const userSpeakingStartedMessageSchema = calToWsOutput(calUserSpeakingStartedMessageSchema);
+export type UserSpeakingStartedMessage = z.infer<typeof userSpeakingStartedMessageSchema>;
 
 /**
  * Message containing AI-generated image output.

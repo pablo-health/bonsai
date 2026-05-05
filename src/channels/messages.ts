@@ -353,6 +353,15 @@ export const calAiTranscribedChunkMessageSchema = calBaseOutputMessageSchema.ext
   isFinal: z.boolean().describe('Whether this is the final transcription chunk for this output turn'),
 });
 
+/**
+ * Signals that VAD detected the user started speaking while AI was generating a response.
+ * Sent immediately so the UI can stop AI audio playback and switch to listening state.
+ */
+export const calUserSpeakingStartedMessageSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('user_speaking_started'),
+  inputTurnId: z.string().describe('Input turn that was assigned for this user utterance'),
+});
+
 // Output push message schemas — user transcription
 
 /**
@@ -446,6 +455,7 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calAbortAiGenerationOutputMessageSchema,
   calEndAiGenerationOutputMessageSchema,
   calAiTranscribedChunkMessageSchema,
+  calUserSpeakingStartedMessageSchema,
   calUserTranscribedChunkMessageSchema,
   calSendAiImageOutputMessageSchema,
   calSendAiAudioOutputMessageSchema,
@@ -491,6 +501,7 @@ export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessa
 export type CALAbortAiGenerationOutputMessage = z.infer<typeof calAbortAiGenerationOutputMessageSchema>;
 export type CALEndAiGenerationOutputMessage = z.infer<typeof calEndAiGenerationOutputMessageSchema>;
 export type CALAiTranscribedChunkMessage = z.infer<typeof calAiTranscribedChunkMessageSchema>;
+export type CALUserSpeakingStartedMessage = z.infer<typeof calUserSpeakingStartedMessageSchema>;
 export type CALUserTranscribedChunkMessage = z.infer<typeof calUserTranscribedChunkMessageSchema>;
 export type CALSendAiImageOutputMessage = z.infer<typeof calSendAiImageOutputMessageSchema>;
 export type CALSendAiAudioOutputMessage = z.infer<typeof calSendAiAudioOutputMessageSchema>;

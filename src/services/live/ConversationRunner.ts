@@ -12,7 +12,7 @@ import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
-import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage } from '../../channels/messages';
+import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
 import { ILlmProvider, LlmChunk, LlmGenerationResult } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider } from "../providers/asr/IAsrProvider";
@@ -1768,11 +1768,22 @@ export class ConversationRunner {
     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
     */
    private async handleVadSpeechStart(): Promise<void> {
-     // Barge-in interrupt: user speaks while AI is still generating a response.
-      if (this.conversation.status === 'generating_response') {
-        await this.abortCurrentResponse();
-        return;
-      }
+    // Barge-in interrupt: user speaks while AI is still generating a response.
+       if (this.conversation.status === 'generating_response') {
+         await this.abortCurrentResponse();
+         this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+         try {
+           const userSpeakingMsg: CALUserSpeakingStartedMessage = {
+             type: 'user_speaking_started',
+             conversationId: this.stageData.conversation.id,
+             inputTurnId: this.turnData.inputTurnId,
+           };
+           await this.channel.sendMessage(userSpeakingMsg);
+         } catch (error) {
+           logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
+         }
+         return;
+       }
 
      // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
       if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
