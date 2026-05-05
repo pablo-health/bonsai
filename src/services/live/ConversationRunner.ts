@@ -1833,20 +1833,35 @@ export class ConversationRunner {
     * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
    * processUserInput onward. Only acts when in receiving_user_voice state.
     */
-   private async handleVadEndOfUtterance(): Promise<void> {
-     if (this.conversation.status !== 'receiving_user_voice') return;
+  private async handleVadEndOfUtterance(): Promise<void> {
+      if (this.conversation.status === 'receiving_user_voice') {
+        if (!this.stageData.asrProvider) return;
 
-     if (!this.stageData.asrProvider) return;
+        try {
+          await this.stageData.asrProvider.stop();
+          logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
+        } catch (error) {
+          const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
+          await this.markAsFailed(errorMessage);
+          logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
+        }
+        return;
+      }
 
-     try {
-       await this.stageData.asrProvider.stop();
-       logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
-     } catch (error) {
-       const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
-       await this.markAsFailed(errorMessage);
-       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
-     }
-   }
+      // During barge-in with VAD reset skipped, end_of_utterance can fire while status is
+      // awaiting_user_input (generation completed before the user finished speaking). Stop any
+      // pre-warmed ASR session so it doesn't hang and waste resources — the next speech_start
+      // will create a fresh session.
+      if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
+        this.asrPreWarmPromise = null;
+        try {
+          await this.stageData.asrProvider?.stop();
+          logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance during barge-in awaiting, stopped pre-warmed ASR for conversation ${this.stageData.conversation.id}`);
+        } catch (error) {
+          logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop pre-warmed ASR during barge-in end-of-utterance (non-fatal)`);
+        }
+      }
+    }
 
    /**
     * Handles barge-in interrupt: user speaks while AI is generating a response. Cancels TTS output,
@@ -2658,7 +2673,12 @@ export class ConversationRunner {
     this.conversation.status = newState;
     await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState);
     if (newState === 'awaiting_user_input' && this.isVadMode && this.vadProcessor) {
-      this.vadProcessor.reset();
+      // During barge-in, skip VAD reset to keep speech tracking continuous through the
+      // generation→awaiting transition. A mid-utterance pause would otherwise force VAD to
+      // re-detect speech, losing audio that Azure never finalizes.
+      if (!this.isBargeIn) {
+        this.vadProcessor.reset();
+      }
       // Pre-warm the next ASR session immediately so it is ready before VAD fires speech_start.
       // Audio only flows once state transitions to receiving_user_voice, so silence never reaches
       // the provider. If the session times out before the user speaks, setOnRecognitionStopped
