@@ -114,6 +114,8 @@ export type TurnData = {
   prescriptedText: string | null;
   /** Truncation info from the completion context window preparation; null before first completion in the turn */
   completionTruncationInfo: TruncationInfo | null;
+  /** Accumulated LLM output text for the current turn; used to populate accumulatedText on barge-in abort */
+  accumulatedText: string | null;
 };
 
 export type StageRuntimeData = {
@@ -205,7 +207,7 @@ export class ConversationRunner {
   }
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
-  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null };
+  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
   constructor(
     @inject(LlmProviderFactory) private llmProviderFactory: LlmProviderFactory,
@@ -768,6 +770,7 @@ export class ConversationRunner {
         if (this.turnData.firstTokenMs === null && this.turnData.llmStartMs !== null) {
           this.turnData.firstTokenMs = Date.now();
         }
+        this.turnData.accumulatedText = `${this.turnData.accumulatedText || ''}${chunk.content}`;
         if (ttsProvider) {
           // Pass chunk text to TTS provider for speech synthesis
           await ttsProvider.sendText(chunk.content);
@@ -1890,9 +1893,9 @@ export class ConversationRunner {
        const abortMessage: CALAbortAiGenerationOutputMessage = {
          type: 'abort_ai_generation_output',
          conversationId: this.stageData.conversation.id,
-         outputTurnId: this.turnData.outputTurnId || '',
-         accumulatedText: '',
-         abortTimestampMs: Date.now(),
+       outputTurnId: this.turnData.outputTurnId || '',
+          accumulatedText: this.turnData.accumulatedText || '',
+          abortTimestampMs: Date.now(),
        };
        await this.channel.sendMessage(abortMessage);
      } catch (error) {
@@ -2064,6 +2067,7 @@ export class ConversationRunner {
       fillerSentence: null,
       prescriptedText: null,
       completionTruncationInfo: null,
+      accumulatedText: null,
     };
   }
 
@@ -2078,9 +2082,9 @@ export class ConversationRunner {
        if (abortedOutputTurnId) {
          const turnAbortedEventData: TurnAbortedEventData = {
            inputTurnId: this.turnData.inputTurnId || '',
-           outputTurnId: abortedOutputTurnId,
-           accumulatedText: '',
-           abortTimestampMs: Date.now(),
+       outputTurnId: abortedOutputTurnId,
+            accumulatedText: this.turnData.accumulatedText || '',
+            abortTimestampMs: Date.now(),
          };
          try {
            await this.saveAndSendEvent('turn_aborted', turnAbortedEventData);
