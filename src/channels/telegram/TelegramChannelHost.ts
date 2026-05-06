@@ -14,7 +14,7 @@ import { telegramChannelProviderConfigSchema } from '../../services/providers/ch
 import { sessionSettingsSchema } from '../websocket/contracts/auth';
 import { logger } from '../../utils/logger';
 import { asyncHandler } from '../../utils/asyncHandler';
-import type { CALInputMessage } from '../messages';
+import type { CALInputMessage, CALStartConversationResponse } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
 import { ProjectService } from '../../services/ProjectService';
@@ -362,7 +362,24 @@ export class TelegramChannelHost {
     logger.info({ sessionId, projectId, userId: senderId }, 'Telegram: new virtual session created');
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: String(senderId), stageId, agentId, correlationId: undefined };
-    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
+
+    // Capture the handler's response to detect failures (dispatcher silently swallows errors)
+    let startResponse: CALStartConversationResponse | undefined;
+    const captureContext: ClientMessageHandlerContext = {
+      ...this.buildContext(sessionId),
+      send: (msg: unknown) => {
+        if ((msg as CALStartConversationResponse).type === 'start_conversation') {
+          startResponse = msg as CALStartConversationResponse;
+        }
+      },
+    };
+    await this.dispatcher.dispatch(startMsg, captureContext);
+
+    if (startResponse?.success !== true) {
+      logger.error({ sessionId, error: startResponse?.error, projectId, userId: senderId }, 'Telegram: start_conversation failed');
+      res.status(200).json({ ok: true });
+      return;
+    }
 
     // After reset we only start the conversation; don't re-send the /reset text as input
     if (cmd.action !== 'reset') {
