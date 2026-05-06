@@ -6,13 +6,13 @@ import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS 
 import type { LifecycleContext } from "../../types/actions";
 import { db } from "../../db";
 import { conversations, users, sampleCopies } from "../../db/schema";
-import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData } from "../../types/conversationEvents";
+import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData, TurnAbortedEventData } from "../../types/conversationEvents";
 import { ConversationService } from "../ConversationService";
 import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
-import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage } from '../../channels/messages';
+import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
 import { ILlmProvider, LlmChunk, LlmGenerationResult } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider } from "../providers/asr/IAsrProvider";
@@ -114,6 +114,8 @@ export type TurnData = {
   prescriptedText: string | null;
   /** Truncation info from the completion context window preparation; null before first completion in the turn */
   completionTruncationInfo: TruncationInfo | null;
+  /** Accumulated LLM output text for the current turn; used to populate accumulatedText on barge-in abort */
+  accumulatedText: string | null;
 };
 
 export type StageRuntimeData = {
@@ -188,11 +190,16 @@ export class ConversationRunner {
   /** Server-side VAD processor; non-null when the project is configured with serverVad and the ASR format is PCM. */
   private vadProcessor: VadProcessor | null = null;
   /**
-   * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
-   * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
-   * is in progress or after it has been consumed by handleVadSpeechStart.
-   */
+    * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
+    * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
+    * is in progress or after it has been consumed by handleVadSpeechStart.
+    */
   private asrPreWarmPromise: Promise<void> | null = null;
+
+  /** Partial ASR transcript accumulated during barge-in (silent barge-in captures partial text). Null when not in barge-in mode. */
+  private bargeInPartialText: string | null = null;
+  /** True when a user barge-in has been detected and we are accumulating continued speech. */
+  private isBargeIn = false;
 
   /** True when server-side VAD is active for this session. VAD owns the turn lifecycle when active. */
   get isVadMode(): boolean {
@@ -200,7 +207,7 @@ export class ConversationRunner {
   }
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
-  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null };
+  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
   constructor(
     @inject(LlmProviderFactory) private llmProviderFactory: LlmProviderFactory,
@@ -560,6 +567,28 @@ export class ConversationRunner {
             return;
           }
 
+          // Barge-in keep-listening: if the AI is still generating, restart ASR to capture
+          // continued speech. Only process input when generation has completed or was never started.
+          if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
+            const allTextChunks = asrProvider.getAllTextChunks();
+            const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
+            // Preserve partial transcript for the final turn processing.
+            this.bargeInPartialText = this.bargeInPartialText ? `${this.bargeInPartialText} ${fullText}`.trim() : fullText;
+
+            // If AI is still generating, restart ASR to keep listening.
+            if (this.conversation.status === 'receiving_user_voice') {
+              try {
+                await this.stageData.asrProvider?.start();
+                logger.info({ conversationId }, `Barge-in: ASR restarted for continued listening`);
+              } catch (error) {
+                logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during barge-in keep-listening`);
+              }
+              return;
+            }
+
+            // Generation has completed — fall through to process accumulated text.
+          }
+
           logger.info({ conversationId }, `ASR recognition stopped for conversation ${conversationId}`);
 
           isRecognizing = false;
@@ -741,6 +770,7 @@ export class ConversationRunner {
         if (this.turnData.firstTokenMs === null && this.turnData.llmStartMs !== null) {
           this.turnData.firstTokenMs = Date.now();
         }
+        this.turnData.accumulatedText = `${this.turnData.accumulatedText || ''}${chunk.content}`;
         if (ttsProvider) {
           // Pass chunk text to TTS provider for speech synthesis
           await ttsProvider.sendText(chunk.content);
@@ -1222,7 +1252,7 @@ export class ConversationRunner {
       // We await full drain after wireUpProviders() to prevent filler audio and response audio
       // from interleaving at the client side.
       const priorTtsProvider = this.responseOutputTurnStarted ? (oldStageData.ttsProvider ?? null) : null;
-      let resolvePriorTtsDrained: () => void = () => {};
+      let resolvePriorTtsDrained: () => void = () => { };
       const priorTtsEndedPromise: Promise<void> = new Promise<void>(r => { resolvePriorTtsDrained = r; });
       if (priorTtsProvider) {
         priorTtsProvider.setOnGenerationEnded(async () => {
@@ -1733,11 +1763,56 @@ export class ConversationRunner {
   }
 
   /**
-   * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
-   * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
-   * forwarded to ASR live (streaming mode). Only acts when in awaiting_user_input state.
-   */
+     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
+     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
+     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
+     */
   private async handleVadSpeechStart(): Promise<void> {
+    // Barge-in interrupt: user speaks while AI is still generating a response.
+    if (this.conversation.status === 'generating_response') {
+      await this.abortCurrentResponse();
+      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      return;
+    }
+
+    // Send VAD signal that the user has started speaking
+    try {
+      const userSpeakingMsg: CALUserSpeakingStartedMessage = {
+        type: 'user_speaking_started',
+        conversationId: this.stageData.conversation.id,
+        inputTurnId: this.turnData.inputTurnId,
+      };
+      await this.channel.sendMessage(userSpeakingMsg);
+      logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, 'Sent user_speaking_started message during barge-in');
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
+    }
+
+    // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
+    if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
+      await this.handleSubsequentBargeInSpeechStart();
+      return;
+    }
+
+    // Subsequent barge-in speech_start after ASR stopped and user spoke again.
+    if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
+      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start after ASR stop, restarting ASR`);
+      try {
+        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+        await this.changeState('receiving_user_voice');
+        if (this.asrPreWarmPromise) {
+          await this.asrPreWarmPromise;
+          this.asrPreWarmPromise = null;
+          this.stageData.asrProvider?.resetForNewTurn();
+        } else {
+          await this.stageData.asrProvider?.start();
+        }
+      } catch (error) {
+        logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
+      }
+      return;
+    }
+
     if (this.conversation.status !== 'awaiting_user_input') return;
 
     if (!this.stageData.asrProvider) {
@@ -1771,22 +1846,98 @@ export class ConversationRunner {
   }
 
   /**
-   * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
-   * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
-   * processUserInput onward. Only acts when in receiving_user_voice state.
-   */
+     * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
+     * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
+    * processUserInput onward. Only acts when in receiving_user_voice state.
+     */
   private async handleVadEndOfUtterance(): Promise<void> {
+    if (this.conversation.status === 'receiving_user_voice') {
+      if (!this.stageData.asrProvider) return;
+
+      try {
+        await this.stageData.asrProvider.stop();
+        logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
+      } catch (error) {
+        const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
+        await this.markAsFailed(errorMessage);
+        logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
+      }
+      return;
+    }
+
+    // During barge-in with VAD reset skipped, end_of_utterance can fire while status is
+    // awaiting_user_input (generation completed before the user finished speaking). Stop any
+    // pre-warmed ASR session so it doesn't hang and waste resources — the next speech_start
+    // will create a fresh session.
+    if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
+      this.asrPreWarmPromise = null;
+      try {
+        await this.stageData.asrProvider?.stop();
+        logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance during barge-in awaiting, stopped pre-warmed ASR for conversation ${this.stageData.conversation.id}`);
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop pre-warmed ASR during barge-in end-of-utterance (non-fatal)`);
+      }
+    }
+  }
+
+  /**
+   * Handles barge-in interrupt: user speaks while AI is generating a response. Cancels TTS output,
+   * sends abort message to client, and marks the runner for barge-in mode so the accumulated ASR
+   * transcript (partial + new utterance) will be processed as a fresh turn when recognition stops.
+   */
+  public async abortCurrentResponse(): Promise<void> {
+    // Already in barge-in mode — do nothing (subsequent speech_start is handled by handleSubsequentBargeInSpeechStart).
+    if (this.isBargeIn) return;
+
+    logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in interrupt detected');
+    this.isBargeIn = true;
+
+    // Cancel TTS output — the provider may still be streaming audio chunks.
+    if (this.stageData.ttsProvider) {
+      try {
+        await this.stageData.ttsProvider.cancel();
+        logger.info({ conversationId: this.stageData.conversation.id }, 'TTS cancelled due to barge-in interrupt');
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'TTS cancel failed during barge-in (non-fatal)');
+      }
+    }
+
+    // Send abort message to client so it stops playing audio.
+    try {
+      const abortMessage: CALAbortAiGenerationOutputMessage = {
+        type: 'abort_ai_generation_output',
+        conversationId: this.stageData.conversation.id,
+        outputTurnId: this.turnData.outputTurnId || '',
+        accumulatedText: this.turnData.accumulatedText || '',
+        abortTimestampMs: Date.now(),
+      };
+      await this.channel.sendMessage(abortMessage);
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
+    }
+  }
+
+  /**
+   * Handles subsequent VAD speech_start during barge-in mode. When a user pauses briefly
+   * (triggering VAD end_of_utterance) but then continues speaking, this restarts the ASR
+   * session so the new audio is captured. The previous partial transcript is preserved via
+   * asrProvider.resetForNewTurn() which clears text chunks but keeps the session open.
+   */
+  private async handleSubsequentBargeInSpeechStart(): Promise<void> {
+    if (!this.isBargeIn) return;
     if (this.conversation.status !== 'receiving_user_voice') return;
 
-    if (!this.stageData.asrProvider) return;
+    if (!this.stageData.asrProvider) {
+      logger.warn({ conversationId: this.stageData.conversation.id }, 'Subsequent barge-in speech_start: no ASR provider available');
+      return;
+    }
 
     try {
-      await this.stageData.asrProvider.stop();
-      logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
+      // Reset per-turn state (text chunks, chunk ID) while keeping the ASR session alive.
+      this.stageData.asrProvider.resetForNewTurn();
+      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start, reset ASR for continued listening`);
     } catch (error) {
-      const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
-      await this.markAsFailed(errorMessage);
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
+      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to reset ASR during subsequent barge-in speech_start`);
     }
   }
 
@@ -1930,10 +2081,33 @@ export class ConversationRunner {
       fillerSentence: null,
       prescriptedText: null,
       completionTruncationInfo: null,
+      accumulatedText: null,
     };
   }
 
   private async processUserInput(userInput: string, userInputSource: 'text' | 'voice', asrEndMs?: number) {
+    // Handle barge-in: prepend accumulated partial transcript from previous ASR sessions.
+    if (this.isBargeIn && this.bargeInPartialText) {
+      const abortedOutputTurnId = this.turnData.outputTurnId || null;
+      userInput = `${this.bargeInPartialText} ${userInput}`.trim();
+      logger.info({ conversationId: this.stageData.conversation.id, abortedOutputTurnId }, `Barge-in: processing accumulated transcript`);
+
+      // Save turn_aborted event for the interrupted response.
+      if (abortedOutputTurnId) {
+        const turnAbortedEventData: TurnAbortedEventData = {
+          inputTurnId: this.turnData.inputTurnId || '',
+          outputTurnId: abortedOutputTurnId,
+          accumulatedText: this.turnData.accumulatedText || '',
+          abortTimestampMs: Date.now(),
+        };
+        try {
+          await this.saveAndSendEvent('turn_aborted', turnAbortedEventData);
+        } catch (error) {
+          logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to save turn_aborted event during barge-in');
+        }
+      }
+    }
+
     this.responseGeneratedInTurn = false;
     // Capture asrStartMs and asrEndMs before resetting turnData so we can compute asrDurationMs and persist raw timestamps
     const savedAsrStartMs = this.turnData.asrStartMs;
@@ -1964,7 +2138,10 @@ export class ConversationRunner {
       // This prevents inappropriate content from reaching provider APIs and risking account bans.
       const moderationResult = await this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
-      if (newUserInput === null) return;
+      if (newUserInput === null) {
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
+        return;
+      }
       userInput = newUserInput;
     }
 
@@ -2030,7 +2207,10 @@ export class ConversationRunner {
     if (parallelModerationPromise) {
       const moderationResult = await parallelModerationPromise;
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
-      if (newUserInput === null) return;
+      if (newUserInput === null) {
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
+        return;
+      }
       userInput = newUserInput;
     }
 
@@ -2290,15 +2470,22 @@ export class ConversationRunner {
       }
       await this.changeState('awaiting_user_input');
     }
+
+    // Reset barge-in state after turn completes (success, failure, or exception).
+    if (this.isBargeIn) {
+      logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in turn completed, resetting barge-in state');
+      this.isBargeIn = false;
+      this.bargeInPartialText = null;
+    }
   }
 
   /**
    * Executes any terminal action (end or abort) that was deferred until after the current
    * turn's response — including TTS audio — has been fully delivered to the client.
-   * If no action is pending, transitions the conversation back to awaiting user input.
-   * This method is idempotent: a second call after the action has already been consumed
-   * is safe and will not overwrite a terminal state.
-   */
+  * If no action is pending, transitions the conversation back to awaiting user input.
+  * This method is idempotent: a second call after the action has already been consumed
+  * is safe and will not overwrite a terminal state.
+  */
   private async handlePostResponseAction(): Promise<void> {
     const action = this.pendingPostResponseAction;
     this.pendingPostResponseAction = null;
@@ -2321,7 +2508,7 @@ export class ConversationRunner {
       }
       const eventData: ConversationEndEventData = { stageId: this.stageData.id, reason: action.endReason };
       await this.saveAndSendEvent('conversation_end', eventData);
-      await this.changeTerminalState('finished');
+      await this.changeState('finished');
     } else {
       const onConversationAbortAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_ABORT);
       if (onConversationAbortAction) {
@@ -2336,7 +2523,7 @@ export class ConversationRunner {
         sourceActionName: action.name,
       };
       await this.saveAndSendEvent('conversation_aborted', eventData);
-      await this.changeTerminalState('finished');
+      await this.changeState('finished');
     }
   }
 
@@ -2504,7 +2691,12 @@ export class ConversationRunner {
     this.conversation.status = newState;
     await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState);
     if (newState === 'awaiting_user_input' && this.isVadMode && this.vadProcessor) {
-      this.vadProcessor.reset();
+      // During barge-in, skip VAD reset to keep speech tracking continuous through the
+      // generation→awaiting transition. A mid-utterance pause would otherwise force VAD to
+      // re-detect speech, losing audio that Azure never finalizes.
+      if (!this.isBargeIn) {
+        this.vadProcessor.reset();
+      }
       // Pre-warm the next ASR session immediately so it is ready before VAD fires speech_start.
       // Audio only flows once state transitions to receiving_user_voice, so silence never reaches
       // the provider. If the session times out before the user speaks, setOnRecognitionStopped
@@ -2520,16 +2712,7 @@ export class ConversationRunner {
   }
 
   /**
-   * Transitions the conversation to a terminal state and records the stage at which it ended.
-   * @param newState - The terminal state to transition to
-   */
-  private async changeTerminalState(newState: ConversationState): Promise<void> {
-    this.conversation.status = newState;
-    await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState, undefined, undefined, this.stageData.id);
-  }
-
-  /**
-   * Helper method to save a conversation event and send it to connected clients via WebSocket.
+    * Helper method to save a conversation event and send it to connected clients via WebSocket.
    * @returns The generated event ID
    */
   private async saveAndSendEvent(eventType: any, eventData: any): Promise<string> {
