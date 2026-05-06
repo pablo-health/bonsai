@@ -16,9 +16,6 @@ import { logger } from '../../utils/logger';
 import { asyncHandler } from '../../utils/asyncHandler';
 import type { CALInputMessage, CALStartConversationResponse } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
-import { ConversationService } from '../../services/ConversationService';
-import { ProjectService } from '../../services/ProjectService';
-import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
 import { PERMISSIONS } from '../../permissions';
 import { checkPermissions } from '../../utils/permissions';
@@ -58,14 +55,30 @@ type TelegramWebhookBody = {
 /** Discriminated result of slash-command parsing. */
 type SlashCommandResult =
   | { action: 'text' }
+  | { action: 'start' }
   | { action: 'reset' }
   | { action: 'go_to_stage'; stageId: string };
+
+/** Parsed data from the webhook preamble (validation + extraction). */
+type WebhookContext = {
+  apiKey: string;
+  stageId?: string;
+  agentId?: string;
+  projectId: string;
+  keySettings: Record<string, unknown> | undefined;
+  botToken: string;
+  senderId: number;
+  messageText: string;
+};
 
 /**
  * HTTP host for the Telegram channel via the Telegram Bot API.
  *
  * Handles incoming webhooks from Telegram, maintaining a virtual session per user ID
- * with an inactivity timeout. Supports a slash-command interface for control operations:
+ * with an inactivity timeout. Conversations are only initiated on `/start` — all other
+ * messages from users without an active session are silently ignored. Supports a slash-command
+ * interface for control operations:
+ * - `/start` — initiates a new conversation (sent automatically by Telegram on first interaction)
  * - `/reset` — ends the current conversation and immediately starts a fresh one
  * - `/stage <stageId>` — navigates to a specific stage (requires `stage_control` feature)
  * - Any other `/xxx` message — treated as regular text input
@@ -73,8 +86,8 @@ type SlashCommandResult =
  * Webhook URL format:
  * `GET/POST /api/telegram/webhook?apiKey=xxx&stageId=yyy&channelProviderId=zzz[&agentId=aaa]`
  *
- * After saving the bot token in the provider config, call the `setupWebhook` endpoint
- * (or use the Bot API directly) to register this URL as the webhook target.
+ * After saving the bot token in the provider config, call the `deploy-webhook` endpoint
+ * to register this URL as the webhook target.
  */
 @singleton()
 export class TelegramChannelHost {
@@ -89,9 +102,6 @@ export class TelegramChannelHost {
     @inject(SessionManager) private readonly sessionManager: SessionManager,
     @inject(ChannelHandlerDispatcher) private readonly dispatcher: ChannelHandlerDispatcher,
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
-    @inject(ConversationService) private readonly conversationService: ConversationService,
-    @inject(ProjectService) private readonly projectService: ProjectService,
-    @inject(UserService) private readonly userService: UserService,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
   ) {}
 
@@ -193,10 +203,6 @@ export class TelegramChannelHost {
     }
   }
 
-  private async setupWebhook(botToken: string, webhookUrl: string): Promise<void> {
-    await this.deployWebhook(botToken, webhookUrl);
-  }
-
   /**
    * Handles the admin UI request to deploy a Telegram webhook.
    * Validates the provider, resolves the bot token, constructs the webhook URL,
@@ -241,26 +247,75 @@ export class TelegramChannelHost {
    * Handles an inbound Telegram webhook (POST).
    *
    * Flow:
-   * 1. Parse and validate query params (apiKey, stageId, channelProviderId).
-   * 2. Validate API key → resolve projectId + keySettings.
-   * 3. Rate-limit check on caller IP.
-   * 4. Load channel provider → parse credentials.
-   * 5. Extract message from the Telegram payload; ACK silently if none.
-   * 6. Deduplicate via update_id tracking.
-   * 7. Parse slash commands from message text.
-   * 8. Look up or create a virtual session for the user.
-   * 9. Dispatch appropriate CAL messages based on command type.
-   * 10. Return HTTP 200 immediately.
+   * 1. Validate query params, API key, rate limit, provider config, and message via extractWebhookData.
+   * 2. Parse slash commands from message text.
+   * 3. Look up or create a virtual session for the user.
+   * 4. Dispatch appropriate CAL messages based on command type.
+   * 5. Return HTTP 200 immediately.
    */
   private async handleWebhook(req: Request, res: Response): Promise<void> {
+    const ctx = await this.extractWebhookData(req, res);
+    if (!ctx) return;
+
+    const userKey = `${ctx.projectId}:${ctx.senderId}`;
+    const existingSessionId = this.userSessionMap.get(userKey);
+    const cmd = this.parseSlashCommand(ctx.messageText);
+
+    // Handle /reset: tear down existing session so a fresh one is created below
+    if (cmd.action === 'reset' && existingSessionId) {
+      const allowedFeatures = ctx.keySettings?.allowedFeatures as string[] | undefined;
+      if (!allowedFeatures || !allowedFeatures.includes('conversation_control')) {
+        logger.warn({ projectId: ctx.projectId }, 'Telegram /reset command: conversation_control feature not permitted by API key');
+        res.status(200).json({ ok: true });
+        return;
+      }
+      await this.terminateSession(existingSessionId, userKey);
+    }
+
+    if (existingSessionId) {
+      const existing = this.sessionManager.getSession(existingSessionId);
+      // If the session exists but has no active conversation (e.g. previous start_conversation failed),
+      // tear it down so a fresh session is created below.
+      if (!existing?.conversationId) {
+        logger.info({ sessionId: existingSessionId }, 'Telegram: existing session has no active conversation, recreating');
+        await this.terminateSession(existingSessionId, userKey);
+      } else {
+        if (cmd.action === 'start') {
+          res.status(200).json({ ok: true });
+          return;
+        }
+        this.scheduleTimeout(existingSessionId, userKey);
+        await this.dispatchCommand(existingSessionId, cmd, ctx.messageText);
+        res.status(200).json({ ok: true });
+        return;
+      }
+    }
+
+    // Only initiate a conversation on /start or after /reset; ignore all other messages from unknown users
+    if (cmd.action !== 'start' && cmd.action !== 'reset') {
+      logger.debug({ projectId: ctx.projectId, userId: ctx.senderId, text: ctx.messageText }, 'Telegram: ignoring non-/start message from user without active session');
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    await this.createNewSession(ctx, userKey);
+
+    res.status(200).json({ ok: true });
+  }
+
+  /**
+   * Validates query params, API key, rate limit, provider config, and extracts message data.
+   * Sends an HTTP response and returns undefined on any validation failure.
+   */
+  private async extractWebhookData(req: Request, res: Response): Promise<WebhookContext | undefined> {
     const queryResult = webhookQuerySchema.safeParse(req.query);
     if (!queryResult.success) {
       res.status(400).json({ error: 'Missing or invalid query parameters' });
       return;
     }
-    const { apiKey: rawApiKey, stageId, agentId, channelProviderId } = queryResult.data;
+    const { apiKey, stageId, agentId, channelProviderId } = queryResult.data;
 
-    const apiKeyRecord = await db.query.apiKeys.findFirst({ where: eq(apiKeys.key, rawApiKey) });
+    const apiKeyRecord = await db.query.apiKeys.findFirst({ where: eq(apiKeys.key, apiKey) });
     if (!apiKeyRecord || !apiKeyRecord.isActive) {
       logger.warn('Telegram webhook: invalid or inactive API key');
       res.status(401).json({ error: 'Invalid or inactive API key' });
@@ -298,14 +353,8 @@ export class TelegramChannelHost {
     }
     const { botToken } = configResult.data;
 
-    // Telegram requires webhooks to be registered via setWebhook.
-    // We auto-setup the webhook if it hasn't been configured yet.
-    const webhookUrl = `${req.protocol}://${req.get('host')}/api/telegram/webhook?apiKey=${rawApiKey}&channelProviderId=${channelProviderId}`;
-    await this.setupWebhook(botToken, webhookUrl);
-
-    // Extract the first message from the Telegram payload
+    // Extract message from the Telegram payload
     const payload = req.body as TelegramWebhookBody;
-    const updateId = payload.update_id;
 
     if (!payload.message && !payload.edited_message) {
       res.status(200).json({ ok: true });
@@ -326,50 +375,34 @@ export class TelegramChannelHost {
       return;
     }
 
-    const userKey = `${projectId}:${senderId}`;
-    const existingSessionId = this.userSessionMap.get(userKey);
+    return {
+      apiKey,
+      stageId,
+      agentId,
+      projectId,
+      keySettings: keySettings as Record<string, unknown> | undefined,
+      botToken,
+      senderId,
+      messageText: message.text.trim(),
+    };
+  }
 
-    const messageText = message.text.trim();
-    const cmd = this.parseSlashCommand(messageText);
-
-    // Handle /reset: tear down existing session so a fresh one is created below
-    if (cmd.action === 'reset' && existingSessionId) {
-      if (keySettings?.allowedFeatures && !keySettings.allowedFeatures.includes('conversation_control')) {
-        logger.warn({ projectId }, 'Telegram /reset command: conversation_control feature not permitted by API key');
-        res.status(200).json({ ok: true });
-        return;
-      }
-      await this.terminateSession(existingSessionId, userKey);
-    }
-
-    if (existingSessionId) {
-      const existing = this.sessionManager.getSession(existingSessionId);
-      // If the session exists but has no active conversation (e.g. previous start_conversation failed),
-      // tear it down so a fresh session is created below.
-      if (!existing?.conversationId) {
-        logger.info({ sessionId: existingSessionId }, 'Telegram: existing session has no active conversation, recreating');
-        await this.terminateSession(existingSessionId, userKey);
-      } else {
-        this.scheduleTimeout(existingSessionId, userKey);
-        await this.dispatchCommand(existingSessionId, cmd, messageText);
-        res.status(200).json({ ok: true });
-        return;
-      }
-    }
-
-    // Create a new session
-    const connection = new TelegramConnection(senderId, botToken, this.sessionManager);
+  /**
+   * Creates a new virtual session and starts a conversation for the user.
+   */
+  private async createNewSession(ctx: WebhookContext, userKey: string): Promise<void> {
+    const connection = new TelegramConnection(ctx.senderId, ctx.botToken, this.sessionManager);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
-    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, ctx.projectId, defaultSettings, ctx.keySettings ?? null);
     this.userSessionMap.set(userKey, sessionId);
     this.scheduleTimeout(sessionId, userKey);
 
-    logger.info({ sessionId, projectId, userId: senderId }, 'Telegram: new virtual session created');
+    logger.info({ sessionId, projectId: ctx.projectId, userId: ctx.senderId }, 'Telegram: new virtual session created');
 
-    const startMsg: CALInputMessage = { type: 'start_conversation', userId: String(senderId), stageId, agentId, correlationId: undefined };
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: String(ctx.senderId), stageId: ctx.stageId, agentId: ctx.agentId, correlationId: undefined };
 
     // Capture the handler's response to detect failures (dispatcher silently swallows errors)
     let startResponse: CALStartConversationResponse | undefined;
@@ -384,17 +417,8 @@ export class TelegramChannelHost {
     await this.dispatcher.dispatch(startMsg, captureContext);
 
     if (startResponse?.success !== true) {
-      logger.error({ sessionId, error: startResponse?.error, projectId, userId: senderId }, 'Telegram: start_conversation failed');
-      res.status(200).json({ ok: true });
-      return;
+      logger.error({ sessionId, error: startResponse?.error, projectId: ctx.projectId, userId: ctx.senderId }, 'Telegram: start_conversation failed');
     }
-
-    // After reset we only start the conversation; don't re-send the /reset text as input
-    if (cmd.action !== 'reset') {
-      await this.dispatchCommand(sessionId, cmd, messageText);
-    }
-
-    res.status(200).json({ ok: true });
   }
 
   /**
@@ -433,6 +457,7 @@ export class TelegramChannelHost {
 
   /**
    * Parses the message text for slash commands.
+   * - `/start` → start action
    * - `/reset` → reset action
    * - `/stage <stageId>` → go_to_stage action
    * - Everything else (including unknown `/xxx`) → text fall-through
@@ -444,6 +469,7 @@ export class TelegramChannelHost {
     const parts = text.split(/\s+/);
     const cmd = parts[0].toLowerCase();
 
+    if (cmd === '/start') return { action: 'start' };
     if (cmd === '/reset') return { action: 'reset' };
     if (cmd === '/stage' && parts[1]) return { action: 'go_to_stage', stageId: parts[1] };
 
