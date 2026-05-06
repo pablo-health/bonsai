@@ -118,6 +118,11 @@ export const PERMISSIONS = {
   SCENARIO_RUN_READ: 'scenario_run:read',
   SCENARIO_RUN_WRITE: 'scenario_run:write',
 
+  // Benchmark permissions
+  BENCHMARK_READ: 'benchmark:read',
+  BENCHMARK_WRITE: 'benchmark:write',
+  BENCHMARK_RUN: 'benchmark:run',
+
   // System permissions
   SYSTEM_CONFIG: 'system:config',
   AUDIT_READ: 'audit:read',
