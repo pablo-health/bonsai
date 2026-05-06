@@ -20,6 +20,10 @@ import { ConversationService } from '../../services/ConversationService';
 import { ProjectService } from '../../services/ProjectService';
 import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
+import { PERMISSIONS } from '../../permissions';
+import { checkPermissions } from '../../utils/permissions';
+import { NotFoundError, RemoteConnectionError } from '../../errors';
+import { deployTelegramWebhookSchema, deployTelegramWebhookResponseSchema } from '../../http/contracts/telegram';
 
 /** Default inactivity session timeout in milliseconds (30 minutes). */
 const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -111,6 +115,37 @@ export class TelegramChannelHost {
           403: { description: 'API key does not permit telegram channel' },
         },
       },
+      {
+        method: 'post',
+        path: '/api/telegram/deploy-webhook',
+        tags: ['Telegram'],
+        summary: 'Deploy Telegram webhook',
+        description: 'Registers the server webhook URL with the Telegram Bot API so incoming messages are forwarded to this instance. Called from the admin UI after configuring a Telegram channel provider.',
+        request: {
+          body: {
+            content: {
+              'application/json': {
+                schema: deployTelegramWebhookSchema,
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Webhook deployed successfully',
+            content: {
+              'application/json': {
+                schema: deployTelegramWebhookResponseSchema,
+              },
+            },
+          },
+          400: { description: 'Invalid request body' },
+          401: { description: 'Authentication required' },
+          403: { description: 'Missing PROVIDER_WRITE permission' },
+          404: { description: 'Channel provider not found or not a Telegram provider' },
+          502: { description: 'Failed to communicate with the Telegram Bot API' },
+        },
+      },
     ];
   }
 
@@ -121,6 +156,7 @@ export class TelegramChannelHost {
    */
   registerRoutes(router: Router): void {
     router.post('/api/telegram/webhook', asyncHandler(this.handleWebhook.bind(this)));
+    router.post('/api/telegram/deploy-webhook', asyncHandler(this.handleDeployWebhook.bind(this)));
   }
 
   /**
@@ -133,7 +169,7 @@ export class TelegramChannelHost {
    * @param botToken - The bot token to configure.
    * @param webhookUrl - The full webhook URL to register.
    */
-  private async setupWebhook(botToken: string, webhookUrl: string): Promise<void> {
+  public async deployWebhook(botToken: string, webhookUrl: string): Promise<{ ok: boolean; response?: unknown; error?: string }> {
     const url = `${TELEGRAM_API_BASE}${botToken}/setWebhook`;
     try {
       const response = await fetch(url, {
@@ -145,13 +181,60 @@ export class TelegramChannelHost {
       if (!response.ok) {
         const errorText = await response.text();
         logger.error({ botToken, error: errorText }, 'Telegram: failed to set webhook');
-        return;
+        return { ok: false, error: errorText };
       }
 
+      const data = await response.json();
       logger.info({ botToken, webhookUrl }, 'Telegram: webhook set successfully');
+      return { ok: true, response: data };
     } catch (error) {
       logger.error({ error, botToken }, 'Telegram: error setting webhook');
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private async setupWebhook(botToken: string, webhookUrl: string): Promise<void> {
+    await this.deployWebhook(botToken, webhookUrl);
+  }
+
+  /**
+   * Handles the admin UI request to deploy a Telegram webhook.
+   * Validates the provider, resolves the bot token, constructs the webhook URL,
+   * and registers it with the Telegram Bot API.
+   */
+  private async handleDeployWebhook(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.PROVIDER_WRITE]);
+
+    const body = deployTelegramWebhookSchema.parse(req.body);
+    const { channelProviderId, apiKey, origin } = body;
+
+    const providerRecord = await db.query.providers.findFirst({ where: eq(providers.id, channelProviderId) });
+    if (!providerRecord || providerRecord.providerType !== 'channel' || providerRecord.apiType !== 'telegram') {
+      throw new NotFoundError('Telegram channel provider not found');
+    }
+
+    const rawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+    const configResult = telegramChannelProviderConfigSchema.safeParse(rawConfig);
+    if (!configResult.success) {
+      throw new NotFoundError('Channel provider config is invalid');
+    }
+    const { botToken } = configResult.data;
+
+    const protocol = origin ? new URL(origin).protocol.slice(0, -1) : req.protocol;
+    const host = origin ? new URL(origin).host : req.get('host');
+    const webhookUrl = `${protocol}://${host}/api/telegram/webhook?apiKey=${apiKey}&channelProviderId=${channelProviderId}`;
+
+    const result = await this.deployWebhook(botToken, webhookUrl);
+
+    if (!result.ok) {
+      throw new RemoteConnectionError(`Failed to deploy Telegram webhook: ${result.error}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      webhookUrl,
+      telegramResponse: result.response,
+    });
   }
 
   /**
