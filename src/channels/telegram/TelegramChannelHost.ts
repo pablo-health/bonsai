@@ -343,10 +343,18 @@ export class TelegramChannelHost {
     }
 
     if (existingSessionId) {
-      this.scheduleTimeout(existingSessionId, userKey);
-      await this.dispatchCommand(existingSessionId, cmd, messageText);
-      res.status(200).json({ ok: true });
-      return;
+      const existing = this.sessionManager.getSession(existingSessionId);
+      // If the session exists but has no active conversation (e.g. previous start_conversation failed),
+      // tear it down so a fresh session is created below.
+      if (!existing?.conversationId) {
+        logger.info({ sessionId: existingSessionId }, 'Telegram: existing session has no active conversation, recreating');
+        await this.terminateSession(existingSessionId, userKey);
+      } else {
+        this.scheduleTimeout(existingSessionId, userKey);
+        await this.dispatchCommand(existingSessionId, cmd, messageText);
+        res.status(200).json({ ok: true });
+        return;
+      }
     }
 
     // Create a new session
