@@ -48,6 +48,8 @@ import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMe
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
 import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
+import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
+import { SesChannelHost } from './channels/email/ses/SesChannelHost';
 import logger from './utils/logger';
 import { fileURLToPath } from 'url';
 import { SecretsManagerRegistry } from './services/secrets/SecretsManagerRegistry';
@@ -255,6 +257,8 @@ export function createApp(): express.Application {
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
   container.resolve(WhatsAppChannelHost).registerRoutes(app);
   container.resolve(TelegramChannelHost).registerRoutes(app);
+  container.resolve(SendGridChannelHost).registerRoutes(app);
+  container.resolve(SesChannelHost).registerRoutes(app);
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();

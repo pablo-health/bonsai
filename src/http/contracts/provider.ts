@@ -28,6 +28,8 @@ import { telegramChannelProviderConfigSchema } from '../../services/providers/ch
 import { twilioMessagingChannelProviderConfigSchema } from '../../services/providers/channel/TwilioMessagingChannelProvider';
 import { twilioVoiceChannelProviderConfigSchema } from '../../services/providers/channel/TwilioVoiceChannelProvider';
 import { whatsAppChannelProviderConfigSchema } from '../../services/providers/channel/WhatsAppChannelProvider';
+import { sendGridChannelProviderConfigSchema } from '../../services/providers/channel/SendGridChannelProvider';
+import { sesChannelProviderConfigSchema } from '../../services/providers/channel/SesChannelProvider';
 
 extendZodWithOpenApi(z);
 
@@ -86,6 +88,8 @@ export const channelProviderConfigSchema = z.union([
   twilioMessagingChannelProviderConfigSchema,
   twilioVoiceChannelProviderConfigSchema,
   whatsAppChannelProviderConfigSchema,
+  sendGridChannelProviderConfigSchema,
+  sesChannelProviderConfigSchema,
 ]).describe('Channel provider configuration');
 
 export type ChannelProviderConfig = z.infer<typeof channelProviderConfigSchema>;
