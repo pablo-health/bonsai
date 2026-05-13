@@ -70,29 +70,29 @@ export class BenchmarkExecutorService {
   }
 
   private async processNextPendingRun(): Promise<void> {
-    const [run] = await db.select().from(benchmarkRuns).where(eq(benchmarkRuns.status, 'pending')).limit(1);
-    if (!run) return;
+    while (true) {
+      const [run] = await db.select().from(benchmarkRuns).where(eq(benchmarkRuns.status, 'pending')).limit(1);
+      if (!run) return;
 
-    logger.info({ runId: run.id, suiteId: run.suiteId }, 'Processing benchmark run');
+      logger.info({ runId: run.id, suiteId: run.suiteId }, 'Processing benchmark run');
 
-    await db.update(benchmarkRuns).set({ status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
+      await db.update(benchmarkRuns).set({ status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
 
-    try {
-      const configs = await db.select().from(benchmarkConfigs).where(eq(benchmarkConfigs.suiteId, run.suiteId));
+      try {
+        const configs = await db.select().from(benchmarkConfigs).where(eq(benchmarkConfigs.suiteId, run.suiteId));
 
-      for (const config of configs) {
-        await this.processConfigExecution(run.id, config);
+        for (const config of configs) {
+          await this.processConfigExecution(run.id, config);
+        }
+
+        await db.update(benchmarkRuns).set({ status: 'completed', completedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
+        logger.info({ runId: run.id }, 'Benchmark run completed');
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        logger.error({ runId: run.id, error }, 'Benchmark run failed');
+        await db.update(benchmarkRuns).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
       }
-
-      await db.update(benchmarkRuns).set({ status: 'completed', completedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
-      logger.info({ runId: run.id }, 'Benchmark run completed');
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      logger.error({ runId: run.id, error }, 'Benchmark run failed');
-      await db.update(benchmarkRuns).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
     }
-
-    this.checkAndProcess();
   }
 
   private async processConfigExecution(runId: string, config: typeof benchmarkConfigs.$inferSelect): Promise<void> {
