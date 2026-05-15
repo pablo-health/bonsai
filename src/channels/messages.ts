@@ -303,6 +303,7 @@ export const calStartAiGenerationOutputMessageSchema = calBaseOutputMessageSchem
   type: z.literal('start_ai_generation_output'),
   outputTurnId: z.string().describe('Unique identifier for this generation turn; used to correlate all subsequent output messages'),
   expectVoice: z.boolean().describe('Whether the response will include synthesised voice audio'),
+  flushBuffer: z.boolean().optional().describe('Whether the channel adapter should flush any buffered audio from a previous turn before delivering this turn. Set to false for filler delivery on non-barge-in turns to avoid unnecessary silence.'),
 });
 
 /**
