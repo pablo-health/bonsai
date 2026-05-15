@@ -921,8 +921,14 @@ export class ConversationRunner {
     const onConversationStartAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_START);
     if (onConversationStartAction) {
       logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_start lifecycle action');
-      const startOutcome = await this.actionsExecutor.executeActions([onConversationStartAction], context, this.stageData.id, 'conversation_start', this.saveAndSendEvent.bind(this));
+      const startingStageId = this.stageData.id;
+      const startOutcome = await this.actionsExecutor.executeActions([onConversationStartAction], context, startingStageId, 'conversation_start', this.saveAndSendEvent.bind(this));
       await this.applyActionOutcome(context, startOutcome);
+      // If ON_START navigated to a different stage, goToStage already ran on_enter and applied
+      // enterBehavior for the destination — nothing left to do here.
+      if (startOutcome.goToStageId && startOutcome.goToStageId !== startingStageId) {
+        return;
+      }
     }
 
     // Execute __on_enter lifecycle action if defined
@@ -1223,7 +1229,7 @@ export class ConversationRunner {
       logger.info({ conversationId: this.conversation.id, currentStageId: this.stageData.id, targetStageId: stageId }, `Navigating to stage ${stageId}`);
 
       const allowed = isProcessingUserInput
-        ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input'
+        ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input' || this.conversation.status === 'initialized'
         : this.conversation.status === 'awaiting_user_input';
       if (!allowed) {
         throw new Error(`Cannot navigate to stage in current state: ${this.conversation.status}`);
