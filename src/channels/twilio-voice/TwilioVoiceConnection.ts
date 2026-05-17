@@ -63,7 +63,11 @@ export class TwilioVoiceConnection implements IClientConnection {
     try {
       const { WebSocket: WS } = await import('ws');
       if (this.ws.readyState === WS.OPEN) {
-        this.ws.close();
+        this.ws.send(JSON.stringify({
+          event: 'twiml',
+          streamSid: this.streamSid,
+          twiml: '<Response><Hangup/></Response>'
+        }));
       }
     } catch {
       // ignore close errors

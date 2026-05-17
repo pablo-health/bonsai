@@ -2047,6 +2047,13 @@ export class ConversationRunner {
     } catch (error) {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to update conversation status in database via ConversationService`);
     }
+
+    // Close client connection on terminal state
+    try {
+      await this.session.clientConnection?.close();
+    } catch (error) {
+      logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on failure');
+    }
   }
 
   /**
@@ -2696,6 +2703,16 @@ export class ConversationRunner {
   private async changeState(newState: ConversationState) {
     this.conversation.status = newState;
     await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState);
+
+    const TERMINAL_STATES = ['finished', 'aborted', 'failed'] as const;
+    if (TERMINAL_STATES.includes(newState as (typeof TERMINAL_STATES)[number])) {
+      try {
+        await this.session.clientConnection?.close();
+      } catch (error) {
+        logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on terminal state');
+      }
+    }
+
     if (newState === 'awaiting_user_input' && this.isVadMode && this.vadProcessor) {
       // During barge-in, skip VAD reset to keep speech tracking continuous through the
       // generation→awaiting transition. A mid-utterance pause would otherwise force VAD to
