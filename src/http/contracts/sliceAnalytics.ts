@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
-import { SOURCE_IDS } from '../../services/analytics/sources';
+import { SOURCE_IDS, AGGREGATION_FUNCTIONS } from '../../services/analytics/sources';
 
 extendZodWithOpenApi(z);
 
@@ -20,6 +20,7 @@ export const sourceMetricSchema = z.object({
   id: z.string().describe('Metric identifier used in metrics[] after the aggregation function'),
   label: z.string().describe('Human-readable label'),
   unit: z.enum(['ms', 'tokens', 'count', 'boolean']).describe('Unit of measurement'),
+  aggregateFunctions: z.array(z.enum(AGGREGATION_FUNCTIONS)).describe('Aggregation functions available for this metric'),
 }).openapi('SourceMetric');
 
 /** Schema for a single source entry in the catalog */
