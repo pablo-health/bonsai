@@ -1,0 +1,292 @@
+# Bonsai Backend
+
+> Platform for building and operating governed, customer-facing conversational AI agents with structured stages, real-time voice/text sessions, and enterprise-grade operational controls.
+
+Bonsai Backend is the runtime, API, and orchestration layer of the Bonsai platform. It handles conversation state, provider integrations, guardrails, audit, and real-time voice/text sessions. The companion UI is Bonsai Console (github.com/utter-one/bonsai-console).
+
+Built with: Express 5, TypeScript, PostgreSQL + Drizzle ORM, tsyringe IoC, Zod schemas as the OpenAPI source of truth.
+
+## Project Model
+
+Everything is scoped to a **Project**. A project is a self-contained conversational AI experience:
+
+```
+Project
+├── Agents             ← persona, tone-of-voice, TTS settings
+├── Stages             ← conversation phases (greeting, identify_issue, resolution, …)
+│   └── Stage
+│       ├── Prompt     ← Handlebars system prompt template
+│       ├── Actions    ← triggers + effects (go_to_stage, run_script, call_webhook, …)
+│       ├── Features   ← enabled capabilities for this stage
+│       ├── Memory     ← stage-level memory settings
+│       └── Lifecycle  ← enter/exit hooks, default classifier, knowledge tags
+├── Classifiers        ← intent / routing / safety classification
+├── Context Transformers ← LLM-powered parallel context extraction
+├── Global Actions     ← actions available across all stages
+├── Guardrails         ← project-wide safety / policy rules
+├── Knowledge          ← FAQ categories + items injected per stage
+├── Tools              ← callable capabilities exposed to the AI
+├── Global Memory
+│   ├── User Profile   ← persistent user profile schema
+│   └── Constants      ← project-wide constants
+├── Providers          ← LLM, TTS, ASR, Storage
+├── Environments       ← named configs for environment promotion
+├── API Keys           ← project-scoped keys for WebSocket/WebRTC clients
+├── Conversations      ← live + historical sessions with events and artifacts
+└── Users              ← end-user records with profile and session history
+```
+
+## How a Conversation Turn Works
+
+```
+User input (voice or text)
+  → ASR transcription (if voice)
+  → Content moderation
+  → Classifiers + Guardrails + Context Transformers (parallel)
+  → Action execution (effects, sequential):
+      go_to_stage | run_script | call_webhook | call_tool
+      modify_variables | modify_user_profile
+      generate_response | end_conversation | abort_conversation
+  → LLM response generation (streamed)
+  → TTS synthesis (if voice output enabled, streamed)
+  → Client receives text + audio chunks over WebSocket
+```
+
+## API Surfaces
+
+### REST API — Administration
+
+- **Base path:** `/api/`
+- **Auth:** JWT bearer token (`POST /api/auth/login` → `POST /api/auth/refresh`)
+- **First-run setup:** `POST /api/setup/initial-operator` (unauthenticated, only works before any operator exists)
+- **OpenAPI spec:** `GET /openapi.json`
+- **Swagger UI:** `GET /api-docs`
+
+Key resource groups and their paths:
+
+| Resource | Path prefix | Notes |
+|---|---|---|
+| Operators | `/api/operators` | User accounts for the admin panel |
+| Projects | `/api/projects` | Top-level container for an AI experience |
+| Agents | `/api/projects/:projectId/agents` | Persona + TTS config |
+| Stages | `/api/projects/:projectId/stages` | Conversation phases |
+| Classifiers | `/api/projects/:projectId/classifiers` | Intent / routing classifiers |
+| Context Transformers | `/api/projects/:projectId/context-transformers` | Structured context extraction |
+| Global Actions | `/api/projects/:projectId/global-actions` | Cross-stage behaviors |
+| Guardrails | `/api/projects/:projectId/guardrails` | Policy enforcement |
+| Knowledge | `/api/projects/:projectId/knowledge` | FAQ categories + items |
+| Tools | `/api/projects/:projectId/tools` | Callable capabilities |
+| Conversations | `/api/projects/:projectId/conversations` | Session history + events |
+| Users | `/api/projects/:projectId/users` | End-user records |
+| API Keys | `/api/projects/:projectId/api-keys` | Keys for WS/WebRTC clients |
+| Providers | `/api/providers` | LLM / TTS / ASR / Storage configs |
+| Environments | `/api/environments` | Config snapshots for promotion |
+| Audit Logs | `/api/audit` | Immutable before/after snapshots |
+| Analytics | `/api/analytics` | Latency + usage metrics |
+| Secrets | `/api/secrets` | Encrypted secret storage |
+| Scenarios / Testers | `/api/scenarios`, `/api/testers` | Automated conversation testing |
+
+### WebSocket API — Live Sessions
+
+**Endpoint:** `ws://<host>/ws`
+
+All messages are JSON. Clients must authenticate before starting conversations.
+
+#### Authentication handshake
+
+Client → Server:
+```json
+{
+  "requestId": "req-1",
+  "type": "auth",
+  "apiKey": "<project-api-key>",
+  "sessionSettings": {
+    "sendVoiceInput": true,
+    "sendTextInput": true,
+    "receiveVoiceOutput": true,
+    "receiveTranscriptionUpdates": true,
+    "receiveEvents": false,
+    "sendAudioFormat": "pcm_16000",
+    "receiveAudioFormat": "pcm_16000"
+  }
+}
+```
+
+Server → Client:
+```json
+{
+  "type": "auth",
+  "sessionId": "session_XXXXXXXXX",
+  "projectSettings": { "projectId": "...", "acceptVoice": true, "generateVoice": true }
+}
+```
+
+#### Message types (client → server)
+
+| Type | Purpose |
+|---|---|
+| `auth` | Authenticate with API key |
+| `start_conversation` | Begin a new conversation |
+| `resume_conversation` | Resume an existing conversation |
+| `end_conversation` | End the active conversation |
+| `start_user_voice_input` | Signal start of voice input |
+| `send_user_voice_chunk` | Stream base64-encoded audio chunk |
+| `end_user_voice_input` | Signal end of voice input, trigger processing |
+| `send_user_text_input` | Send a text message |
+| `go_to_stage` | Navigate to a specific stage |
+| `set_var` / `get_var` / `get_all_vars` | Manage conversation variables |
+| `run_action` | Trigger a named action |
+| `call_tool` | Invoke a registered tool |
+
+#### Message types (server → client)
+
+| Type | Purpose |
+|---|---|
+| `start_ai_generation_output` | AI is beginning to respond |
+| `send_ai_voice_chunk` | Streamed base64 TTS audio chunk |
+| `end_ai_generation_output` | AI response complete |
+| `ai_transcribed_chunk` | Incremental AI text transcription |
+| `user_transcribed_chunk` | Incremental ASR transcription of user voice |
+| `conversation_event` | Structured event from the conversation pipeline |
+| `conversation_event_update` | Update to an existing event |
+
+Full JSON Schema for all WebSocket messages: `GET /websocket-contracts.json`
+
+### WebRTC API — Low-Latency Voice
+
+**Signaling endpoint:** `POST /api/webrtc/offer`
+
+Same conversation protocol as WebSocket. Binary audio over an unordered DataChannel (`audio`), control messages over an ordered DataChannel (`control`). Auth via the `auth` JSON message over the `control` channel.
+
+## Currently Supported Providers
+
+| Type | Providers |
+|---|---|
+| LLM | OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, OpenRouter, Together AI, Fireworks AI, Perplexity, Cohere, xAI |
+| TTS | ElevenLabs, OpenAI, Azure, Deepgram, Cartesia, Amazon Polly |
+| ASR | Azure, ElevenLabs, Deepgram, AssemblyAI, Speechmatics |
+| Storage | (configurable via provider system) |
+
+## Backend Codebase Conventions
+
+### Directory Structure
+
+```
+src/
+  http/
+    controllers/     ← ~30 Express controllers, one per domain
+    contracts/       ← Zod schemas for request/response validation + OpenAPI
+    middleware/      ← auth, requestContext, errorHandler, rateLimiter
+  services/          ← Business logic (one service per domain)
+  channels/
+    websocket/       ← WebSocket channel host + contracts
+    webrtc/          ← WebRTC channel host
+    twilio-voice/    ← Twilio Voice channel
+    twilio-messaging/← Twilio SMS channel
+    whatsapp/        ← WhatsApp channel
+    telegram/        ← Telegram channel
+    handlers/        ← Message handlers (auto-registered via @ChannelMessageHandler)
+  db/
+    schema.ts        ← Drizzle ORM schema — single source of truth for DB
+  scripts/           ← Build utilities (generateWebSocketSchemas.ts)
+  errors.ts          ← Custom error classes (map to HTTP status codes)
+  permissions.ts     ← RBAC permission strings (60+)
+  server.ts          ← Express app factory + all route registration
+  index.ts           ← Entry point
+
+drizzle/             ← Generated SQL migration files (version controlled)
+schemas/             ← Generated websocket-contracts.json
+```
+
+### Controller Pattern
+
+```typescript
+@singleton()
+export class ExampleController {
+  constructor(@inject(ExampleService) private readonly service: ExampleService) {}
+
+  static getOpenAPIPaths(): RouteConfig[] { /* OpenAPI docs */ }
+
+  registerRoutes(router: Router): void {
+    router.post('/api/examples', asyncHandler(this.create.bind(this)));
+  }
+
+  private async create(req: Request, res: Response): Promise<void> {
+    checkPermissions(req, [PERMISSIONS.EXAMPLE_WRITE]);
+    const body = createExampleSchema.parse(req.body);
+    const result = await this.service.create(body, req.context);
+    res.status(201).json(result);
+  }
+}
+```
+
+- `@singleton()` on controllers, `@injectable()` on services
+- Wrap all handlers with `asyncHandler()`
+- Validate via `schema.parse(req.body / req.params / req.query)`
+- `checkPermissions(req, [...])` at the start of every handler
+- Services also call `this.requirePermission(context, PERMISSIONS.XXX)` for defense in depth
+
+### Database Changes
+
+1. Edit `src/db/schema.ts`
+2. Update corresponding `src/http/contracts/` Zod schemas
+3. Update services that reference changed columns
+4. `npm run db:generate` → review `/drizzle/XXXX_*.sql`
+5. `npm run db:migrate`
+6. `npm run build`
+
+### WebSocket Contract Changes
+
+1. Edit files in `src/channels/websocket/contracts/`
+2. Update `src/scripts/generateWebSocketSchemas.ts` if adding new top-level message types
+3. Run `npm run schemas:generate` (also runs automatically on `npm run build`)
+
+## Key Commands
+
+```bash
+npm run dev          # schemas:generate + db:migrate + tsx watch
+npm run build        # schemas:generate + tsc → dist/
+npm start            # db:migrate + node dist/
+npm run db:generate  # Generate Drizzle migration from schema diff
+npm run db:migrate   # Apply pending migrations
+npm run db:studio    # Open Drizzle Studio
+npm run schemas:generate  # Regenerate schemas/websocket-contracts.json
+```
+
+## Environment Variables
+
+Required:
+- `DB_CONNECTION_STRING` — PostgreSQL connection string
+- `JWT_SECRET` — Min 32 characters, used to sign operator tokens
+
+Important optional:
+- `MASTER_ENCRYPTION_KEY` — Enables automatic migration of plain-text secrets in provider configs
+- `CORS_ORIGIN` — Allowed CORS origin (default: `*`)
+- `LOG_LEVEL` — pino log level (default: `info`)
+- `TRUST_PROXY` — Set to `false` to disable (default: enabled)
+- `WS_MAX_PAYLOAD_BYTES` — WebSocket max payload (default: 10MB)
+- `RATE_LIMIT_API_WINDOW_MS` / `RATE_LIMIT_API_MAX` — General API rate limiting
+- `RATE_LIMIT_AUTH_WINDOW_MS` / `RATE_LIMIT_AUTH_MAX` — Auth endpoint rate limiting
+
+## Quick Start (Docker Compose)
+
+```bash
+git clone https://github.com/utter-one/bonsai.git
+cd bonsai/compose
+cp env.example .env
+# Set JWT_SECRET to a random value of at least 32 characters
+docker compose up -d
+```
+
+- Backend API: `http://localhost:3000`
+- Swagger UI: `http://localhost:3000/api-docs`
+- OpenAPI spec: `http://localhost:3000/openapi.json`
+- WebSocket contracts: `http://localhost:3000/websocket-contracts.json`
+- LLM guide: `http://localhost:3000/llms.txt`
+
+## Optional
+
+- [Source repository](https://github.com/utter-one/bonsai): Full source code with Dockerfile and compose stack
+- [Bonsai Console](https://github.com/utter-one/bonsai-console): Companion visual admin panel
+- [OpenAPI spec](./openapi.json): Machine-readable REST API definition (relative to running instance)
+- [WebSocket contracts](./websocket-contracts.json): JSON Schema for all real-time message types (relative to running instance)
