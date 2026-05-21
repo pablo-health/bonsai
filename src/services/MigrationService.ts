@@ -1,5 +1,6 @@
 import { singleton, inject } from 'tsyringe';
 import { sql, eq, inArray } from 'drizzle-orm';
+import { randomBytes } from 'crypto';
 import { db } from '../db/index';
 import {
   providers,
@@ -25,12 +26,14 @@ import {
 import { BaseService } from './BaseService';
 import { VersionService } from './VersionService';
 import { AuditService } from './AuditService';
+import { SecretsManagerRegistry } from './secrets/SecretsManagerRegistry';
 import type { RequestContext } from './RequestContext';
 import { PERMISSIONS } from '../permissions';
 import { generateId } from '../utils/idGenerator';
 import { logger } from '../utils/logger';
 import { InvalidOperationError, NotFoundError, RemoteConnectionError } from '../errors';
 import { SecretRefUtils } from './secrets/SecretRefUtils';
+import { deriveBundleKey, encryptSecret, decryptSecret } from '../utils/crypto';
 import type { ExportBundle, ExportQuery, PullRequest, MigrationResult, MigrationJob, MigrationSelection, MigrationPreview, EntityStub } from '../http/contracts/migration';
 
 /** Drizzle transaction type, inferred to avoid driver-specific imports. */
@@ -68,6 +71,7 @@ export class MigrationService extends BaseService {
     @inject(VersionService) private readonly versionService: VersionService,
     @inject(AuditService) private readonly auditService: AuditService,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(SecretsManagerRegistry) private readonly secretsRegistry: SecretsManagerRegistry,
   ) {
     super();
   }
@@ -101,7 +105,7 @@ export class MigrationService extends BaseService {
       apiKeyIds: query.apiKeyIds,
       testerIds: query.testerIds,
       scenarioIds: query.scenarioIds,
-guardrailIds: query.guardrailIds,
+      guardrailIds: query.guardrailIds,
       copyDecoratorIds: query.copyDecoratorIds,
       sampleCopyIds: query.sampleCopyIds,
       savedSliceQueryIds: query.savedSliceQueryIds,
@@ -110,9 +114,10 @@ guardrailIds: query.guardrailIds,
 
     logger.info({ selection, operatorId: context.operatorId }, 'Exporting migration bundle');
 
-    const bundle = await this.resolveBundle(selection, restSchemaHash, selection);
+    const rawBundle = await this.resolveBundle(selection, restSchemaHash, selection);
+    const bundle = await this.packBundleSecrets(rawBundle, query.bundlePassword);
 
-    logger.info({ projectCount: bundle.projects.length, stageCount: bundle.stages.length, providerCount: bundle.providers.length, operatorId: context.operatorId }, 'Migration bundle exported successfully');
+    logger.info({ projectCount: bundle.projects.length, stageCount: bundle.stages.length, providerCount: bundle.providers.length, hasSecrets: !!bundle.bundleSecrets, operatorId: context.operatorId }, 'Migration bundle exported successfully');
 
     return bundle;
   }
@@ -124,11 +129,16 @@ guardrailIds: query.guardrailIds,
    * @param input - Bundle, force flag, and dryRun flag.
    * @param context - Request context for permission checking and audit logging.
    */
-  async importBundle(input: { bundle: ExportBundle; force?: boolean; dryRun?: boolean }, context: RequestContext): Promise<MigrationResult> {
+  async importBundle(input: { bundle: ExportBundle; force?: boolean; dryRun?: boolean; bundlePassword?: string }, context: RequestContext): Promise<MigrationResult> {
     this.requirePermission(context, PERMISSIONS.MIGRATION_IMPORT);
 
     const startedAt = Date.now();
-    const { bundle, force = false, dryRun = false } = input;
+    const { bundle: inputBundle, force = false, dryRun = false, bundlePassword } = input;
+
+    // Decrypt and re-store provider secrets from the bundle before any DB writes.
+    // In dry-run mode we still validate the password/ciphertext but skip DB writes.
+    // The returned bundle has all entity array refs remapped to newly created local secrets.
+    const bundle = await this.unpackBundleSecrets(inputBundle, bundlePassword, dryRun);
 
     const { restSchemaHash: localHash } = this.versionService.getVersion();
     const schemaHashMatch = bundle.restSchemaHash === localHash;
@@ -334,7 +344,7 @@ guardrailIds: query.guardrailIds,
       apiKeyIds: query.apiKeyIds,
       testerIds: query.testerIds,
       scenarioIds: query.scenarioIds,
-guardrailIds: query.guardrailIds,
+      guardrailIds: query.guardrailIds,
       copyDecoratorIds: query.copyDecoratorIds,
       sampleCopyIds: query.sampleCopyIds,
       savedSliceQueryIds: query.savedSliceQueryIds,
@@ -381,6 +391,135 @@ guardrailIds: query.guardrailIds,
   }
 
   // ---------------------------------------------------------------------------
+  // Private: secret packaging / unpackaging for bundles
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Scans ALL entity arrays in the bundle for `@sec:*` references and, when a
+   * `bundlePassword` is provided, resolves each plaintext value and re-encrypts
+   * it with a key derived from the password.  The encrypted entries are stored
+   * in `bundleSecrets` (keyed by the original reference string) and returned
+   * as part of the bundle.  Entity records are left unchanged — the original
+   * `@sec:*` references are preserved as lookup keys.
+   *
+   * Scanning all arrays means any entity type that gains secret fields in the
+   * future is handled automatically without changes here.
+   *
+   * Throws `InvalidOperationError` when at least one entity contains secret
+   * references but `bundlePassword` was not supplied.
+   */
+  private async packBundleSecrets(bundle: ExportBundle, bundlePassword?: string): Promise<ExportBundle> {
+    const allRefs = new Set<string>();
+    for (const value of Object.values(bundle)) {
+      if (Array.isArray(value)) {
+        for (const entity of value) {
+          for (const ref of this.secretRefUtils.collectReferences(entity)) {
+            allRefs.add(ref);
+          }
+        }
+      }
+    }
+
+    if (allRefs.size === 0) return bundle;
+
+    if (!bundlePassword) {
+      throw new InvalidOperationError('bundlePassword is required when exporting providers that contain secret configuration (API keys, auth tokens, etc.). Provide a bundlePassword query parameter and use the same value when importing.');
+    }
+
+    const bundleKey = deriveBundleKey(bundlePassword);
+    const bundleSecrets: ExportBundle['bundleSecrets'] = {};
+
+    for (const ref of allRefs) {
+      const plaintext = await this.secretsRegistry.resolveSecret(ref);
+      bundleSecrets[ref] = encryptSecret(plaintext, bundleKey);
+    }
+
+    logger.info({ secretCount: allRefs.size }, 'Provider secrets packed into bundle');
+
+    return { ...bundle, bundleSecrets };
+  }
+
+  /**
+   * Decrypts entries from `bundle.bundleSecrets` using the supplied `bundlePassword`,
+   * stores each plaintext value as a new secret under the local master encryption key,
+   * and returns a copy of the bundle with `@sec:*` references remapped to the newly
+   * created local secret IDs across ALL entity arrays.
+   *
+   * Remapping all arrays means any entity type that gains secret fields in the
+   * future is handled automatically without changes here.
+   *
+   * In `dryRun` mode the secrets are decrypted to verify the password but are
+   * NOT written to the database — the original bundle is returned unchanged.
+   *
+   * Throws `InvalidOperationError` when the bundle contains secrets but no password
+   * is provided, or when decryption fails (wrong password / tampered bundle).
+   */
+  private async unpackBundleSecrets(bundle: ExportBundle, bundlePassword: string | undefined, dryRun: boolean): Promise<ExportBundle> {
+    const { bundleSecrets } = bundle;
+
+    if (!bundleSecrets || Object.keys(bundleSecrets).length === 0) {
+      return bundle;
+    }
+
+    if (!bundlePassword) {
+      throw new InvalidOperationError('bundlePassword is required to import this bundle because it contains encrypted provider secrets.');
+    }
+
+    const bundleKey = deriveBundleKey(bundlePassword);
+
+    // Decrypt all entries first to validate the password before writing anything
+    const decrypted = new Map<string, string>();
+    try {
+      for (const [ref, entry] of Object.entries(bundleSecrets)) {
+        decrypted.set(ref, decryptSecret(entry.encryptedValue, entry.iv, entry.tag, bundleKey));
+      }
+    } catch {
+      throw new InvalidOperationError('Invalid bundlePassword: failed to decrypt bundle secrets. Ensure the same password that was used during export is provided.');
+    }
+
+    if (dryRun) {
+      logger.info({ secretCount: decrypted.size }, 'Bundle secrets validated (dry-run, not written to database)');
+      return bundle;
+    }
+
+    // Store each decrypted secret under the local master key and build a ref remap
+    const refRemap = new Map<string, string>();
+    for (const [oldRef, plaintext] of decrypted) {
+      const newRef = await this.secretsRegistry.storeSecret(this.secretsRegistry.defaultManagerName, plaintext);
+      refRemap.set(oldRef, newRef);
+    }
+
+    logger.info({ secretCount: refRemap.size }, 'Bundle secrets re-encrypted and stored under local master key');
+
+    // Remap refs in every entity array — covers any entity type that holds secrets
+    const remappedBundle = { ...bundle };
+    for (const [key, value] of Object.entries(bundle)) {
+      if (Array.isArray(value)) {
+        (remappedBundle as any)[key] = value.map(entity => this.replaceSecretRefs(entity, refRemap));
+      }
+    }
+
+    return remappedBundle;
+  }
+
+  /**
+   * Recursively walks a JSON-serializable value and replaces any string that
+   * matches a key in `refMap` with the corresponding mapped value.
+   */
+  private replaceSecretRefs(value: unknown, refMap: Map<string, string>): unknown {
+    if (typeof value === 'string') return refMap.has(value) ? refMap.get(value)! : value;
+    if (Array.isArray(value)) return value.map(item => this.replaceSecretRefs(item, refMap));
+    if (value !== null && typeof value === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        result[k] = this.replaceSecretRefs(v, refMap);
+      }
+      return result;
+    }
+    return value;
+  }
+
+  // ---------------------------------------------------------------------------
   // Private: bundle resolution
   // ---------------------------------------------------------------------------
 
@@ -409,47 +548,47 @@ guardrailIds: query.guardrailIds,
 
     // ── 2. Fetch explicitly selected leaf entities ────────────────────────────
 
-  const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitGrRows, explicitCdRows, explicitScRows, explicitSSQRows, explicitSFQRows, explicitStageRows, explicitApiKeyRows, explicitTesterRows, explicitScenarioRows] = await Promise.all([
-       this.fetchOrAll(selectAll || !!selection.agentIds?.length, agents, selection.agentIds, agents.id),
-       this.fetchOrAll(selectAll || !!selection.classifierIds?.length, classifiers, selection.classifierIds, classifiers.id),
-       this.fetchOrAll(selectAll || !!selection.contextTransformerIds?.length, contextTransformers, selection.contextTransformerIds, contextTransformers.id),
-       this.fetchOrAll(selectAll || !!selection.toolIds?.length, tools, selection.toolIds, tools.id),
-       this.fetchOrAll(selectAll || !!selection.globalActionIds?.length, globalActions, selection.globalActionIds, globalActions.id),
-       this.fetchOrAll(selectAll || !!selection.knowledgeCategoryIds?.length, knowledgeCategories, selection.knowledgeCategoryIds, knowledgeCategories.id),
-       this.fetchOrAll(selectAll || !!selection.guardrailIds?.length, guardrails, selection.guardrailIds, guardrails.id),
-       this.fetchOrAll(selectAll || !!selection.copyDecoratorIds?.length, copyDecorators, selection.copyDecoratorIds, copyDecorators.id),
-       this.fetchOrAll(selectAll || !!selection.sampleCopyIds?.length, sampleCopies, selection.sampleCopyIds, sampleCopies.id),
-       this.fetchOrAll(selectAll || !!selection.savedSliceQueryIds?.length, savedSliceQueries, selection.savedSliceQueryIds, savedSliceQueries.id),
-       this.fetchOrAll(selectAll || !!selection.savedFunnelQueryIds?.length, savedFunnelQueries, selection.savedFunnelQueryIds, savedFunnelQueries.id),
-       this.fetchOrAll(selectAll || !!selection.stageIds?.length, stages, selection.stageIds, stages.id),
-       this.fetchOrAll(selectAll || !!selection.apiKeyIds?.length, apiKeys, selection.apiKeyIds, apiKeys.id),
-       this.fetchOrAll(selectAll || !!selection.testerIds?.length, testers, selection.testerIds, testers.id),
-       this.fetchOrAll(selectAll || !!selection.scenarioIds?.length, scenarios, selection.scenarioIds, scenarios.id),
-     ]);
+    const [explicitAgentRows, explicitClassifierRows, explicitCtRows, explicitToolRows, explicitGaRows, explicitKcRows, explicitGrRows, explicitCdRows, explicitScRows, explicitSSQRows, explicitSFQRows, explicitStageRows, explicitApiKeyRows, explicitTesterRows, explicitScenarioRows] = await Promise.all([
+      this.fetchOrAll(selectAll || !!selection.agentIds?.length, agents, selection.agentIds, agents.id),
+      this.fetchOrAll(selectAll || !!selection.classifierIds?.length, classifiers, selection.classifierIds, classifiers.id),
+      this.fetchOrAll(selectAll || !!selection.contextTransformerIds?.length, contextTransformers, selection.contextTransformerIds, contextTransformers.id),
+      this.fetchOrAll(selectAll || !!selection.toolIds?.length, tools, selection.toolIds, tools.id),
+      this.fetchOrAll(selectAll || !!selection.globalActionIds?.length, globalActions, selection.globalActionIds, globalActions.id),
+      this.fetchOrAll(selectAll || !!selection.knowledgeCategoryIds?.length, knowledgeCategories, selection.knowledgeCategoryIds, knowledgeCategories.id),
+      this.fetchOrAll(selectAll || !!selection.guardrailIds?.length, guardrails, selection.guardrailIds, guardrails.id),
+      this.fetchOrAll(selectAll || !!selection.copyDecoratorIds?.length, copyDecorators, selection.copyDecoratorIds, copyDecorators.id),
+      this.fetchOrAll(selectAll || !!selection.sampleCopyIds?.length, sampleCopies, selection.sampleCopyIds, sampleCopies.id),
+      this.fetchOrAll(selectAll || !!selection.savedSliceQueryIds?.length, savedSliceQueries, selection.savedSliceQueryIds, savedSliceQueries.id),
+      this.fetchOrAll(selectAll || !!selection.savedFunnelQueryIds?.length, savedFunnelQueries, selection.savedFunnelQueryIds, savedFunnelQueries.id),
+      this.fetchOrAll(selectAll || !!selection.stageIds?.length, stages, selection.stageIds, stages.id),
+      this.fetchOrAll(selectAll || !!selection.apiKeyIds?.length, apiKeys, selection.apiKeyIds, apiKeys.id),
+      this.fetchOrAll(selectAll || !!selection.testerIds?.length, testers, selection.testerIds, testers.id),
+      this.fetchOrAll(selectAll || !!selection.scenarioIds?.length, scenarios, selection.scenarioIds, scenarios.id),
+    ]);
 
     // ── 3. Expand project selections: fetch all children for selected projects ─
 
     const expandedProjectIds = new Set(projectRows.map(p => p.id));
 
     const childrenOfProjects = expandedProjectIds.size > 0 && !selectAll
-       ? await Promise.all([
-           db.select().from(agents).where(inArray(agents.projectId, [...expandedProjectIds])),
-           db.select().from(classifiers).where(inArray(classifiers.projectId, [...expandedProjectIds])),
-           db.select().from(contextTransformers).where(inArray(contextTransformers.projectId, [...expandedProjectIds])),
-           db.select().from(tools).where(inArray(tools.projectId, [...expandedProjectIds])),
-           db.select().from(globalActions).where(inArray(globalActions.projectId, [...expandedProjectIds])),
-           db.select().from(knowledgeCategories).where(inArray(knowledgeCategories.projectId, [...expandedProjectIds])),
-           db.select().from(guardrails).where(inArray(guardrails.projectId, [...expandedProjectIds])),
-           db.select().from(copyDecorators).where(inArray(copyDecorators.projectId, [...expandedProjectIds])),
-           db.select().from(sampleCopies).where(inArray(sampleCopies.projectId, [...expandedProjectIds])),
-           db.select().from(savedSliceQueries).where(inArray(savedSliceQueries.projectId, [...expandedProjectIds])),
-           db.select().from(savedFunnelQueries).where(inArray(savedFunnelQueries.projectId, [...expandedProjectIds])),
-           db.select().from(stages).where(inArray(stages.projectId, [...expandedProjectIds])),
-           db.select().from(apiKeys).where(inArray(apiKeys.projectId, [...expandedProjectIds])),
-           db.select().from(testers).where(inArray(testers.projectId, [...expandedProjectIds])),
-           db.select().from(scenarios).where(inArray(scenarios.projectId, [...expandedProjectIds])),
-         ])
-       : [[], [], [], [], [], [], [], [], [], [], [], [], [], [], []];
+      ? await Promise.all([
+        db.select().from(agents).where(inArray(agents.projectId, [...expandedProjectIds])),
+        db.select().from(classifiers).where(inArray(classifiers.projectId, [...expandedProjectIds])),
+        db.select().from(contextTransformers).where(inArray(contextTransformers.projectId, [...expandedProjectIds])),
+        db.select().from(tools).where(inArray(tools.projectId, [...expandedProjectIds])),
+        db.select().from(globalActions).where(inArray(globalActions.projectId, [...expandedProjectIds])),
+        db.select().from(knowledgeCategories).where(inArray(knowledgeCategories.projectId, [...expandedProjectIds])),
+        db.select().from(guardrails).where(inArray(guardrails.projectId, [...expandedProjectIds])),
+        db.select().from(copyDecorators).where(inArray(copyDecorators.projectId, [...expandedProjectIds])),
+        db.select().from(sampleCopies).where(inArray(sampleCopies.projectId, [...expandedProjectIds])),
+        db.select().from(savedSliceQueries).where(inArray(savedSliceQueries.projectId, [...expandedProjectIds])),
+        db.select().from(savedFunnelQueries).where(inArray(savedFunnelQueries.projectId, [...expandedProjectIds])),
+        db.select().from(stages).where(inArray(stages.projectId, [...expandedProjectIds])),
+        db.select().from(apiKeys).where(inArray(apiKeys.projectId, [...expandedProjectIds])),
+        db.select().from(testers).where(inArray(testers.projectId, [...expandedProjectIds])),
+        db.select().from(scenarios).where(inArray(scenarios.projectId, [...expandedProjectIds])),
+      ])
+      : [[], [], [], [], [], [], [], [], [], [], [], [], [], [], []];
 
     // Merge explicit + project-child rows (deduplicated by ID)
     const agentRows = this.dedup([...explicitAgentRows, ...childrenOfProjects[0] as any[]], 'id');
@@ -675,6 +814,9 @@ guardrailIds: query.guardrailIds,
           for (const v of values) exportUrl.searchParams.append(key, v);
         }
       }
+      // Generate a single-use random bundle password so secrets travel encrypted over the wire
+      const bundlePassword = randomBytes(32).toString('hex');
+      exportUrl.searchParams.set('bundlePassword', bundlePassword);
 
       const exportRes = await this.safeFetch(exportUrl.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!exportRes.ok) throw new RemoteConnectionError(`Export fetch from source failed: HTTP ${exportRes.status}`);
@@ -682,7 +824,7 @@ guardrailIds: query.guardrailIds,
       const bundle = await exportRes.json() as ExportBundle;
 
       // 5. Import into local DB
-      const result = await this.importBundle({ bundle, force: input.force ?? false, dryRun: input.dryRun ?? false }, context);
+      const result = await this.importBundle({ bundle, force: input.force ?? false, dryRun: input.dryRun ?? false, bundlePassword }, context);
 
       this.updateJob(jobId, { status: 'completed', completedAt: new Date().toISOString(), result });
     } catch (error) {

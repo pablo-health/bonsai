@@ -42,13 +42,25 @@ export const migrationSelectionSchema = z.object({
   testerIds: z.array(z.string()).optional().describe('Specific tester IDs to include.'),
   scenarioIds: z.array(z.string()).optional().describe('Specific scenario IDs to include.'),
   guardrailIds: z.array(z.string()).optional().describe('Specific guardrail IDs to include.'),
-   copyDecoratorIds: z.array(z.string()).optional().describe('Specific copy decorator IDs to include.'),
-   sampleCopyIds: z.array(z.string()).optional().describe('Specific sample copy IDs to include. Transitively pulls in referenced copyDecorators and classifiers.'),
-   savedSliceQueryIds: z.array(z.string()).optional().describe('Specific saved slice query IDs to include.'),
-   savedFunnelQueryIds: z.array(z.string()).optional().describe('Specific saved funnel query IDs to include.'),
+  copyDecoratorIds: z.array(z.string()).optional().describe('Specific copy decorator IDs to include.'),
+  sampleCopyIds: z.array(z.string()).optional().describe('Specific sample copy IDs to include. Transitively pulls in referenced copyDecorators and classifiers.'),
+  savedSliceQueryIds: z.array(z.string()).optional().describe('Specific saved slice query IDs to include.'),
+  savedFunnelQueryIds: z.array(z.string()).optional().describe('Specific saved funnel query IDs to include.'),
 }).openapi('MigrationSelection').describe('Granular entity selection for export/pull. Omit all fields (empty object {}) to export everything.');
 
 export type MigrationSelection = z.infer<typeof migrationSelectionSchema>;
+
+/**
+ * A single encrypted secret entry inside a migration bundle.
+ * Encrypted with AES-256-GCM using a key derived from the bundle password.
+ */
+const bundleSecretEntrySchema = z.object({
+  encryptedValue: z.string().describe('Base64-encoded AES-256-GCM ciphertext'),
+  iv: z.string().describe('Base64-encoded 12-byte initialization vector'),
+  tag: z.string().describe('Base64-encoded 16-byte authentication tag'),
+}).openapi('BundleSecretEntry');
+
+export type BundleSecretEntry = z.infer<typeof bundleSecretEntrySchema>;
 
 /**
  * Self-contained export bundle produced by GET /api/migration/export.
@@ -58,8 +70,15 @@ export type MigrationSelection = z.infer<typeof migrationSelectionSchema>;
  *   → tools → globalActions → knowledgeCategories → knowledgeItems
  *   → copyDecorators → sampleCopies → guardrails → stages → apiKeys
  *
- * Provider records are exported WITHOUT their config field (API credentials are stripped).
- * The target instance must reconfigure provider credentials after import.
+ * Provider config fields that reference secrets use `@sec:manager:id` placeholder strings in the
+ * exported records. When a `bundlePassword` was supplied at export time, the corresponding
+ * plaintext values are stored (re-encrypted with the bundle key) in `bundleSecrets`, keyed by
+ * their original `@sec:manager:id` reference. During import the secrets are decrypted with the
+ * same password and re-stored under the target’s master encryption key before the provider
+ * records are upserted. If `bundlePassword` was omitted at export time, providers with secret
+ * references are still exported but their credentials will not be usable on the target until
+ * manually reconfigured.
+ *
  * Excluded from migration: operators, users, conversations, conversationEvents,
  * conversationArtifacts, auditLogs, issues, environments.
  */
@@ -76,16 +95,17 @@ export const exportBundleSchema = z.object({
   tools: z.array(bundleEntitySchema).describe('Tool records — depend on projects'),
   globalActions: z.array(bundleEntitySchema).describe('Global action records — depend on projects'),
   knowledgeCategories: z.array(bundleEntitySchema).describe('Knowledge category records — depend on projects'),
-knowledgeItems: z.array(bundleEntitySchema).describe('Knowledge item records — depend on knowledgeCategories'),
-   copyDecorators: z.array(bundleEntitySchema).describe('Copy decorator template records — depend on projects'),
-   sampleCopies: z.array(bundleEntitySchema).describe('Sample copy records — depend on projects and copyDecorators'),
-   savedSliceQueries: z.array(bundleEntitySchema).describe('Saved slice query records — depend on projects'),
-   savedFunnelQueries: z.array(bundleEntitySchema).describe('Saved funnel query records — depend on projects'),
-   guardrails: z.array(bundleEntitySchema).describe('Guardrail records — depend on projects'),
-   stages: z.array(bundleEntitySchema).describe('Stage records — depend on projects, agents, and classifiers'),
+  knowledgeItems: z.array(bundleEntitySchema).describe('Knowledge item records — depend on knowledgeCategories'),
+  copyDecorators: z.array(bundleEntitySchema).describe('Copy decorator template records — depend on projects'),
+  sampleCopies: z.array(bundleEntitySchema).describe('Sample copy records — depend on projects and copyDecorators'),
+  savedSliceQueries: z.array(bundleEntitySchema).describe('Saved slice query records — depend on projects'),
+  savedFunnelQueries: z.array(bundleEntitySchema).describe('Saved funnel query records — depend on projects'),
+  guardrails: z.array(bundleEntitySchema).describe('Guardrail records — depend on projects'),
+  stages: z.array(bundleEntitySchema).describe('Stage records — depend on projects, agents, and classifiers'),
   apiKeys: z.array(bundleEntitySchema).describe('API key records — depend on projects'),
   testers: z.array(bundleEntitySchema).describe('Tester records — depend on projects'),
   scenarios: z.array(bundleEntitySchema).describe('Scenario records — depend on projects'),
+  bundleSecrets: z.record(z.string(), bundleSecretEntrySchema).optional().describe('Encrypted provider secret values keyed by their original @sec:manager:id reference string. Present only when a bundlePassword was supplied at export time. Each entry must be decrypted (using a key derived from bundlePassword) and re-stored under the target\'s master encryption key during import.'),
 }).openapi('ExportBundle');
 
 export type ExportBundle = z.infer<typeof exportBundleSchema>;
@@ -109,6 +129,7 @@ export const exportQuerySchema = z.object({
   sampleCopyIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific sample copy IDs to export.'),
   savedSliceQueryIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific saved slice query IDs to export.'),
   savedFunnelQueryIds: z.union([z.string(), z.array(z.string())]).optional().transform(v => v === undefined ? undefined : Array.isArray(v) ? v : [v]).describe('Specific saved funnel query IDs to export.'),
+  bundlePassword: z.string().optional().describe('Password used to encrypt provider secret references in the bundle. Required when any exported provider has sensitive config fields (API keys, auth tokens, etc.). The same password must be provided at import time so that secrets can be decrypted and re-encrypted under the target instance\'s master key.'),
 });
 
 export type ExportQuery = z.infer<typeof exportQuerySchema>;
@@ -195,11 +216,11 @@ export const migrationPreviewSchema = z.object({
   knowledgeCategories: z.array(entityStubSchema).describe('Knowledge category stubs that would be included'),
   knowledgeItems: z.array(entityStubSchema).describe('Knowledge item stubs that would be included — name is the question text'),
   guardrails: z.array(entityStubSchema).describe('Guardrail stubs that would be included'),
-   copyDecorators: z.array(entityStubSchema).describe('Copy decorator stubs that would be included'),
-   sampleCopies: z.array(entityStubSchema).describe('Sample copy stubs that would be included'),
-   savedSliceQueries: z.array(entityStubSchema).describe('Saved slice query stubs that would be included'),
-   savedFunnelQueries: z.array(entityStubSchema).describe('Saved funnel query stubs that would be included'),
-   stages: z.array(entityStubSchema).describe('Stage stubs that would be included'),
+  copyDecorators: z.array(entityStubSchema).describe('Copy decorator stubs that would be included'),
+  sampleCopies: z.array(entityStubSchema).describe('Sample copy stubs that would be included'),
+  savedSliceQueries: z.array(entityStubSchema).describe('Saved slice query stubs that would be included'),
+  savedFunnelQueries: z.array(entityStubSchema).describe('Saved funnel query stubs that would be included'),
+  stages: z.array(entityStubSchema).describe('Stage stubs that would be included'),
   apiKeys: z.array(entityStubSchema).describe('API key stubs that would be included'),
   testers: z.array(entityStubSchema).describe('Tester stubs that would be included'),
   scenarios: z.array(entityStubSchema).describe('Scenario stubs that would be included'),
