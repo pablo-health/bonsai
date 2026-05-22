@@ -1806,6 +1806,20 @@ export class ConversationRunner {
       return;
     }
 
+    // Send abort message to client so it stops playing audio.
+    try {
+      const abortMessage: CALAbortAiGenerationOutputMessage = {
+        type: 'abort_ai_generation_output',
+        conversationId: this.stageData.conversation.id,
+        outputTurnId: this.turnData.outputTurnId || '',
+        accumulatedText: this.turnData.accumulatedText || '',
+        abortTimestampMs: Date.now(),
+      };
+      await this.channel.sendMessage(abortMessage);
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
+    }
+
     // Send VAD signal that the user has started speaking
     try {
       const userSpeakingMsg: CALUserSpeakingStartedMessage = {
@@ -1933,20 +1947,6 @@ export class ConversationRunner {
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'TTS cancel failed during barge-in (non-fatal)');
       }
-    }
-
-    // Send abort message to client so it stops playing audio.
-    try {
-      const abortMessage: CALAbortAiGenerationOutputMessage = {
-        type: 'abort_ai_generation_output',
-        conversationId: this.stageData.conversation.id,
-        outputTurnId: this.turnData.outputTurnId || '',
-        accumulatedText: this.turnData.accumulatedText || '',
-        abortTimestampMs: Date.now(),
-      };
-      await this.channel.sendMessage(abortMessage);
-    } catch (error) {
-      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
     }
   }
 
