@@ -13,7 +13,7 @@ import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
 import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
-import { ILlmProvider, LlmChunk, LlmGenerationResult } from "../providers/llm/ILlmProvider";
+import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider } from "../providers/asr/IAsrProvider";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
@@ -2196,40 +2196,105 @@ export class ConversationRunner {
     // Kick off filler delivery without awaiting — open the response turn and feed TTS as soon
     // as the filler LLM responds, while classification proceeds in parallel.
     let fillerEndMs: number | null = null;
-    const fillerDeliveryPromise: Promise<string | null> = this.generateFillerSentence(userInput).then(async (fillerSentence) => {
-      fillerEndMs = Date.now();
-      if (!fillerSentence) return null;
-      this.turnData.fillerDurationMs = fillerEndMs - fillerStartMs;
-      this.turnData.outputTurnId = generateId(ID_PREFIXES.OUTPUT);
-      const fillerStartMessage: CALStartAiGenerationOutputMessage = {
-        type: 'start_ai_generation_output',
-        conversationId: this.conversation.id,
-        outputTurnId: this.turnData.outputTurnId,
-        expectVoice: !!this.stageData.ttsProvider,
-        flushBuffer: false,
-      };
-      await this.channel.sendMessage(fillerStartMessage);
-      if (this.stageData.ttsProvider) {
-        this.turnData.ttsConnectStartMs = Date.now();
-        await this.stageData.ttsProvider.start();
-        this.turnData.ttsConnectEndMs = Date.now();
-        await this.stageData.ttsProvider.sendText(fillerSentence);
+    const fillerDeliveryPromise: Promise<string | null> = (async () => {
+      const fillerPrep = await this.prepareFillerMessages(userInput);
+      if (!fillerPrep) return null;
+
+      const { messages: fillerMessages, renderedPrompt, maxTokens, truncationInfo } = fillerPrep;
+      const fillerLlm = this.stageData.fillerLlmProvider;
+      const tts = this.stageData.ttsProvider;
+
+      let accumulatedText = '';
+      let firstChunk = true;
+      let generationResult: LlmGenerationResult | null = null;
+      let outputTurnId: string | null = null;
+
+      const onCompletePromise = new Promise<LlmGenerationResult>((resolve) => {
+        fillerLlm.setOnGenerationCompleted((result) => {
+          generationResult = result;
+          resolve(result);
+        });
+        fillerLlm.setOnError(async (_error: Error) => {
+          resolve({ id: '', content: [], role: 'assistant', finishReason: 'stop' });
+        });
+      });
+
+      const ttsPromise = tts
+        ? (async () => {
+            this.turnData.ttsConnectStartMs = Date.now();
+            await tts.start();
+            this.turnData.ttsConnectEndMs = Date.now();
+          })()
+        : Promise.resolve();
+      const streamPromise = fillerLlm.generateStream(fillerMessages, maxTokens !== undefined ? { maxTokens } : undefined);
+
+      fillerLlm.setOnChunk(async (chunk: LlmChunk) => {
+        accumulatedText += chunk.content;
+
+        if (firstChunk) {
+          firstChunk = false;
+          await ttsPromise;
+          outputTurnId = generateId(ID_PREFIXES.OUTPUT);
+          this.turnData.outputTurnId = outputTurnId;
+          const startMsg: CALStartAiGenerationOutputMessage = {
+            type: 'start_ai_generation_output',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            expectVoice: !!tts,
+          };
+          await this.channel.sendMessage(startMsg);
+          if (tts) {
+            await tts.sendText(chunk.content);
+          }
+          const chunkMsg: CALAiTranscribedChunkMessage = {
+            type: 'ai_transcribed_chunk',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            chunkId: generateId(ID_PREFIXES.CHUNK),
+            chunkText: chunk.content,
+            ordinal: 0,
+            isFinal: false,
+          };
+          await this.channel.sendMessage(chunkMsg);
+          this.responseOutputTurnStarted = true;
+        } else {
+          if (tts) {
+            await tts.sendText(chunk.content);
+          }
+          const chunkMsg: CALAiTranscribedChunkMessage = {
+            type: 'ai_transcribed_chunk',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            chunkId: generateId(ID_PREFIXES.CHUNK),
+            chunkText: chunk.content,
+            ordinal: 0,
+            isFinal: false,
+          };
+          await this.channel.sendMessage(chunkMsg);
+        }
+      });
+
+      await streamPromise;
+      const result = await onCompletePromise;
+
+      if (result) {
+        this.turnData.fillerLlmUsage = buildLlmUsage(result.usage, this.stageData.fillerLlmProviderInfo, this.stageData.agent?.fillerSettings?.llmSettings?.model, truncationInfo) ?? null;
       }
-      const fillerChunkMessage: CALAiTranscribedChunkMessage = {
-        type: 'ai_transcribed_chunk',
-        conversationId: this.conversation.id,
-        outputTurnId: this.turnData.outputTurnId,
-        chunkId: generateId(ID_PREFIXES.CHUNK),
-        chunkText: fillerSentence,
-        ordinal: 0,
-        isFinal: true,
-      };
-      await this.channel.sendMessage(fillerChunkMessage);
-      this.responseOutputTurnStarted = true;
-      this.lastFillerSentence = fillerSentence;
-      this.turnData.fillerSentence = fillerSentence;
-      return fillerSentence;
-    });
+
+      const finalText = accumulatedText.trim();
+      if (finalText.length > 0) {
+        this.lastFillerPrompt = renderedPrompt;
+        this.lastFillerSentence = finalText;
+        this.turnData.fillerSentence = finalText;
+      }
+
+      fillerEndMs = Date.now();
+      if (finalText.length > 0) {
+        this.turnData.fillerDurationMs = fillerEndMs - fillerStartMs;
+      }
+
+      return finalText.length > 0 ? finalText : null;
+    })();
 
     // Standard mode: fire moderation in parallel with both filler delivery and classification.
     const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
@@ -2611,6 +2676,47 @@ export class ConversationRunner {
       return '[Content removed by moderation]';
     }
     return userInput;
+  }
+
+  /**
+   * Prepares the messages, rendered prompt, and token limits for a filler LLM call.
+   * Returns null if filler is not configured.
+   */
+  private async prepareFillerMessages(userInput: string): Promise<{
+    messages: LlmMessage[];
+    renderedPrompt: string;
+    maxTokens: number | undefined;
+    truncationInfo: TruncationInfo;
+  } | null> {
+    const fillerLlmProvider = this.stageData.fillerLlmProvider;
+    const fillerSettings = this.stageData.agent?.fillerSettings;
+    if (!fillerLlmProvider || !fillerSettings) {
+      return null;
+    }
+    const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput);
+    const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
+    const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
+    let recentHistory = [...context.history];
+    if (recentHistory.at(-1)?.role === 'user') {
+      recentHistory.pop();
+    }
+    const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+      { role: 'system' as const, content: renderedPrompt },
+      ...recentHistory.slice(-historyMessageCount).map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
+      { role: 'user' as const, content: userInput },
+    ];
+    const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
+    const fillerLimits = resolveProviderModelLimits(this.stageData.costManagementConfig, this.stageData.fillerLlmProviderInfo?.id ?? '', fillerModel);
+    const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
+    const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
+    const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
+    logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
+    return {
+      messages: truncatedFillerMessages,
+      renderedPrompt,
+      maxTokens: fillerMaxTokens,
+      truncationInfo: fillerTruncation,
+    };
   }
 
   /**
