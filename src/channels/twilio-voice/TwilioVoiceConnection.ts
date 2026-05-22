@@ -15,6 +15,8 @@ import { logger } from '../../utils/logger';
  *   previous turn (barge-in) and cancels all pending mark callbacks so stale echoes are ignored.
  *   When `flushBuffer` is explicitly `false` (filler delivery on non-barge-in turns), the `clear`
  *   is skipped to avoid unnecessary silence before the first audible filler chunk.
+ * - `abort_ai_generation_output`: sends a Twilio `clear` to immediately flush buffered audio when
+ *   VAD detects user barge-in, and cancels all pending mark callbacks.
  * - `send_ai_voice_chunk`: base64-encodes the µLaw audio payload and sends it to Twilio as a `media` event.
  *   Non-µLaw chunks are logged and dropped.
  * - `end_ai_generation_output`: sends a Twilio `mark` after the last audio chunk. Twilio echoes the mark
@@ -96,6 +98,11 @@ export class TwilioVoiceConnection implements IClientConnection {
           this.onClearMarkCallbacks();
           this.ws.send(JSON.stringify({ event: 'clear', streamSid: this.streamSid }));
         }
+        break;
+      }
+      case 'abort_ai_generation_output': {
+        this.onClearMarkCallbacks();
+        this.ws.send(JSON.stringify({ event: 'clear', streamSid: this.streamSid }));
         break;
       }
       case 'send_ai_voice_chunk': {
