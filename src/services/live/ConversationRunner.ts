@@ -2515,6 +2515,7 @@ export class ConversationRunner {
           conversationId: this.conversation.id,
           outputTurnId: this.turnData.outputTurnId,
           expectVoice: this.stageData.ttsProvider !== undefined && this.stageData.ttsProvider !== null,
+          flushBuffer: true,
         };
         await this.channel.sendMessage(startGenerationMessage);
 
