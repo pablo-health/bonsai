@@ -34,12 +34,16 @@ export class AsrBenchmarkRunner {
     try {
       await asrProvider.init();
 
+      let settled = false;
       await new Promise<void>((resolve, reject) => {
         asrProvider.setOnError(async (err) => {
+          if (settled) { logger.warn({ err }, 'ASR provider error after recognition already stopped'); return; }
+          settled = true;
           reject(err);
         });
 
         asrProvider.setOnRecognitionStopped(() => {
+          settled = true;
           resolve();
         });
 
