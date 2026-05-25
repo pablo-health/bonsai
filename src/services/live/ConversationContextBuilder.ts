@@ -1,4 +1,5 @@
 import { and, asc, eq, param } from "drizzle-orm";
+import type { ApiKeyChannel } from '../../apiKeyFeatures';
 import { conversationEvents, db, projects, stages, users } from "../../db";
 import { Session } from "../../channels/SessionManager";
 import { inject, singleton } from "tsyringe";
@@ -155,7 +156,7 @@ export type ConversationContext = {
 
   /** Rendered selected sample copy content */
   copy?: string;
- 
+
   /** Raw content of the selected sample copies */
   copyContent?: string;
 
@@ -186,6 +187,9 @@ export type ConversationContext = {
     /** Human-readable language name derived from languageCode, e.g. "American English". Null if languageCode is not set. */
     language: string | null;
   };
+
+  /** Communication channel through which this conversation is happening, e.g. 'websocket', 'telegram', 'twilio_voice'. */
+  channel?: ApiKeyChannel;
 
   /** Stage configuration and available actions (optional, included for classification and processing contexts) */
   stage?: {
@@ -490,7 +494,7 @@ export class ConversationContextBuilder {
    * @param action - The action being triggered
    * @param parameters - Parameters for the triggered action
    */
-  async buildContextForAction(conversation: Conversation, actionName: string, action: StageAction | GlobalAction, parameters: Record<string, any>): Promise<ConversationContext> {
+  async buildContextForAction(conversation: Conversation, actionName: string, action: StageAction | GlobalAction, parameters: Record<string, any>, channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load user data
     const user = await db.query.users.findFirst({
       where: and(eq(users.projectId, conversation.projectId), eq(users.id, conversation.userId)),
@@ -529,6 +533,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage!, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
     };
 
@@ -559,7 +564,7 @@ export class ConversationContextBuilder {
    * @param userInput - The raw user input that triggered the filler
    * @returns ConversationContext suitable for rendering filler sentence prompt templates
    */
-  async buildContextForFillerSentence(conversation: Conversation, stage: Stage, userInput: string): Promise<ConversationContext> {
+  async buildContextForFillerSentence(conversation: Conversation, stage: Stage, userInput: string, channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load user data
     const user = await db.query.users.findFirst({
       where: and(eq(users.projectId, conversation.projectId), eq(users.id, conversation.userId)),
@@ -590,6 +595,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
     };
 
@@ -616,7 +622,7 @@ export class ConversationContextBuilder {
    * 
    * @param conversation - Conversation entity
    */
-  async buildContextForConversationStart(conversation: Conversation): Promise<ConversationContext> {
+  async buildContextForConversationStart(conversation: Conversation, channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load stage with agent
     const stage = await db.query.stages.findFirst({
       where: and(eq(stages.projectId, conversation.projectId), eq(stages.id, conversation.stageId)),
@@ -651,6 +657,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage!, this.buildRawContext(conversation, stage!, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
     };
 
@@ -668,7 +675,7 @@ export class ConversationContextBuilder {
    * @param originalUserInput - The original user input before any transformations
    * @param knowledgeCategories - Optional knowledge categories to inject as synthetic actions for this classifier
    */
-  async buildContextForClassifier(conversation: Conversation, stage: Stage, globalActions: GlobalAction[], classifierId: string, userInput?: string, originalUserInput?: string, knowledgeCategories?: KnowledgeCategoryResponse[]): Promise<ConversationContext> {
+  async buildContextForClassifier(conversation: Conversation, stage: Stage, globalActions: GlobalAction[], classifierId: string, userInput?: string, originalUserInput?: string, knowledgeCategories?: KnowledgeCategoryResponse[], channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load user data
     const user = await db.query.users.findFirst({
       where: and(eq(users.projectId, conversation.projectId), eq(users.id, conversation.userId)),
@@ -705,6 +712,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContextForClassifier(stage, globalActions, classifierId, rawContext, knowledgeCategories),
     };
 
@@ -736,7 +744,7 @@ export class ConversationContextBuilder {
    * @param userInput - The user input text
    * @param originalUserInput - The original user input before any transformations
    */
-  async buildContextForGuardrailClassifier(conversation: Conversation, stage: Stage, guardrails: Guardrail[], userInput?: string, originalUserInput?: string): Promise<ConversationContext> {
+  async buildContextForGuardrailClassifier(conversation: Conversation, stage: Stage, guardrails: Guardrail[], userInput?: string, originalUserInput?: string, channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load user data
     const [user, project, projectSampleCopies] = await Promise.all([
       db.query.users.findFirst({
@@ -808,6 +816,7 @@ export class ConversationContextBuilder {
         enterBehavior: stage.enterBehavior,
         metadata: stage.metadata || undefined,
       },
+      channel,
     };
 
     // Get all events from database; history is a filtered view on message events
@@ -836,7 +845,7 @@ export class ConversationContextBuilder {
    * @param userInput - The user input text
    * @param originalUserInput - The original user input before any transformations
    */
-  async buildContextForSampleCopyClassifier(conversation: Conversation, stage: Stage, sampleCopies: SampleCopy[], userInput?: string, originalUserInput?: string): Promise<ConversationContext> {
+  async buildContextForSampleCopyClassifier(conversation: Conversation, stage: Stage, sampleCopies: SampleCopy[], userInput?: string, originalUserInput?: string, channel?: ApiKeyChannel): Promise<ConversationContext> {
     const [user, project] = await Promise.all([
       db.query.users.findFirst({
         where: and(eq(users.projectId, conversation.projectId), eq(users.id, conversation.userId)),
@@ -876,6 +885,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage, rawContext),
     };
 
@@ -907,7 +917,7 @@ export class ConversationContextBuilder {
    * @param userInput - The user input text
    * @param originalUserInput - The original user input before any transformations
    */
-  async buildContextForTransformer(conversation: Conversation, stage: Stage, globalActions: GlobalAction[], transformerId: string, contextFields: string[], userInput?: string, originalUserInput?: string): Promise<ConversationContext> {
+  async buildContextForTransformer(conversation: Conversation, stage: Stage, globalActions: GlobalAction[], transformerId: string, contextFields: string[], userInput?: string, originalUserInput?: string, channel?: ApiKeyChannel): Promise<ConversationContext> {
     // Load user data
     const user = await db.query.users.findFirst({
       where: and(eq(users.projectId, conversation.projectId), eq(users.id, conversation.userId)),
@@ -962,6 +972,7 @@ export class ConversationContextBuilder {
       context: transformerContext,
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage, rawContext),
     };
 
@@ -993,15 +1004,16 @@ export class ConversationContextBuilder {
    * @param faq - Optional FAQ items from knowledge base to include in the context
    * @returns ConversationContext with all relevant data for processing user input and generating responses, including all actions that can be triggered by user input.
    */
-  async buildContextForUserInput(conversation: Conversation, 
-    stage: Stage, 
-    actions: ActionClassificationResult[], 
-    userInput: string, 
-    originalUserInput: string, 
+  async buildContextForUserInput(conversation: Conversation,
+    stage: Stage,
+    actions: ActionClassificationResult[],
+    userInput: string,
+    originalUserInput: string,
     sampleCopies: SampleCopy[],
     copy: string,
     copyContent: string,
     faq?: FaqItem[],
+    channel?: ApiKeyChannel,
   ): Promise<ConversationContext> {
     // Load user data, project constants, and all project sample copies in parallel
     const [user, project, projectSampleCopies] = await Promise.all([
@@ -1048,6 +1060,7 @@ export class ConversationContextBuilder {
       },
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
+      channel,
       stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
     };
 

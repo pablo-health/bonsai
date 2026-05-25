@@ -61,7 +61,7 @@ export class ContextTransformerExecutor {
     @inject(ConversationContextBuilder) private readonly contextBuilder: ConversationContextBuilder,
     @inject(ConversationService) private readonly conversationService: ConversationService,
     @inject(IsolatedScriptExecutor) private readonly scriptExecutor: IsolatedScriptExecutor,
-  ) {}
+  ) { }
 
   /**
    * Executes all context transformers for the current stage in parallel.
@@ -95,6 +95,7 @@ export class ContextTransformerExecutor {
         transformerData.transformer.contextFields ?? [],
         userInput,
         originalUserInput,
+        session.clientConnection.connectionType,
       );
       return this.executeTransformer(session, transformerData, context);
     });
