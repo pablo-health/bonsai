@@ -10,6 +10,7 @@ import type { ErrorCallback } from '../types/callbacks';
 import { logger } from '../utils/logger';
 import { NotConfiguredError, NotFoundError } from '../errors';
 import { generateId, ID_PREFIXES } from '../utils/idGenerator';
+import { getArtifactExtension } from '../utils/audioFormat';
 
 /**
  * Service for managing conversation artifacts in storage
@@ -39,7 +40,7 @@ export class ConversationStorageService {
     }
 
     const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
-    const key = this.generateArtifactKey(conversationId, artifactType);
+    const key = this.generateArtifactKey(conversationId, artifactType, metadata?.contentType);
     const url = await provider.upload(key, data, metadata);
 
     // Save artifact metadata to database
@@ -93,16 +94,15 @@ export class ConversationStorageService {
    * @param errorCallback Optional error callback for error handling
    * @throws NotConfiguredError if storage is not configured for the project
    */
-  async deleteArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<void> {
+  async deleteArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, storageKey: string, errorCallback?: ErrorCallback): Promise<void> {
     if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
     const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
-    const key = this.generateArtifactKey(conversationId, artifactType);
-    await provider.delete(key);
+    await provider.delete(storageKey);
 
-    logger.info(`Deleted artifact for conversation ${conversationId}: ${artifactType}`);
+    logger.info(`Deleted artifact ${storageKey}`);
   }
 
   /**
@@ -115,36 +115,33 @@ export class ConversationStorageService {
    * @returns Signed URL for accessing the artifact
    * @throws NotConfiguredError if storage is not configured for the project
    */
-  async getSignedUrl(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, expiresIn: number = 3600, errorCallback?: ErrorCallback): Promise<string> {
+  async getSignedUrl(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, storageKey: string, expiresIn: number = 3600, errorCallback?: ErrorCallback): Promise<string> {
     if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
     const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
-    const key = this.generateArtifactKey(conversationId, artifactType);
-    const url = await provider.getSignedUrl(key, expiresIn);
+    const url = await provider.getSignedUrl(storageKey, expiresIn);
 
-    logger.info(`Generated signed URL for conversation ${conversationId}: ${artifactType} (expires in ${expiresIn}s)`);
+    logger.info(`Generated signed URL for artifact ${storageKey} (expires in ${expiresIn}s)`);
     return url;
   }
 
   /**
    * Check if a conversation artifact exists in storage
    * @param storageConfig Storage configuration from project (containing storageProviderId and settings)
-   * @param conversationId Conversation ID
-   * @param artifactType Type of artifact
+   * @param storageKey Storage key for the artifact
    * @param errorCallback Optional error callback for error handling
    * @returns True if artifact exists, false otherwise
    * @throws NotConfiguredError if storage is not configured for the project
    */
-  async artifactExists(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<boolean> {
+  async artifactExists(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, storageKey: string, errorCallback?: ErrorCallback): Promise<boolean> {
     if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
     const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
-    const key = this.generateArtifactKey(conversationId, artifactType);
-    return await provider.exists(key);
+    return await provider.exists(storageKey);
   }
 
   /**
@@ -192,8 +189,9 @@ export class ConversationStorageService {
    * Generate storage key for a conversation artifact
    * Key format: {conversationId}/{artifactType}_{timestamp}.{extension}
    */
-  private generateArtifactKey(conversationId: string, artifactType: string): string {
+  private generateArtifactKey(conversationId: string, artifactType: string, mimeType?: string): string {
     const timestamp = Date.now();
-    return `${conversationId}/${artifactType}_${timestamp}`;
+    const extension = mimeType ? getArtifactExtension(mimeType) : '.bin';
+    return `${conversationId}/${artifactType}_${timestamp}${extension}`;
   }
 }

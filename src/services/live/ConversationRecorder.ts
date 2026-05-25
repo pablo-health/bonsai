@@ -7,6 +7,7 @@ import type { RecordingConfig } from '../../http/contracts/project';
 type ProjectRecordingConfig = { enabled: boolean; recordInput?: boolean; recordOutput?: boolean; format?: string };
 import type { ConversationStorageService } from '../ConversationStorageService';
 import { logger } from '../../utils/logger';
+import { getMimeTypeForRecordingFormat } from '../../utils/audioFormat';
 
 export class ConversationRecorder {
   private inputConverter: IAudioConverter | null = null;
@@ -76,6 +77,7 @@ export class ConversationRecorder {
     }
 
     const meta = this.buildRecordingMetadata();
+    const contentType = getMimeTypeForRecordingFormat(this.recordingFormat);
 
     if (this.recordInput && this.inputChunks.length > 0) {
       const combined = Buffer.concat(this.inputChunks);
@@ -86,7 +88,7 @@ export class ConversationRecorder {
           this.conversationId,
           'user_voice',
           combined,
-          { customMetadata: meta },
+          { contentType, customMetadata: meta },
         );
         logger.info({ conversationId: this.conversationId, size: combined.length }, `Flushed user voice recording for conversation ${this.conversationId}`);
       } catch (error) {
@@ -103,7 +105,7 @@ export class ConversationRecorder {
           this.conversationId,
           'ai_voice',
           combined,
-          { customMetadata: meta },
+          { contentType, customMetadata: meta },
         );
         logger.info({ conversationId: this.conversationId, size: combined.length }, `Flushed AI voice recording for conversation ${this.conversationId}`);
       } catch (error) {
