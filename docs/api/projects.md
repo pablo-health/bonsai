@@ -35,6 +35,7 @@ Content-Type: application/json
 | `autoCreateUsers` | `boolean` | No (default: `false`) | When enabled, users are automatically created on first WebSocket connection if they do not exist |
 | `defaultGuardrailClassifierId` | `string` | No | ID of the classifier used to evaluate guardrails for all conversations in this project |
 | `startingStageId` | `string` | No | ID of the stage to start new conversations at when no `stageId` is provided at conversation start time. Acts as the project-level default starting stage. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) | No | Audio recording configuration for conversation debugging |
 
 **Response** `201 Created` — [Project Response](#project-response)
 
@@ -101,6 +102,7 @@ All fields from the create body are optional. `version` is required for optimist
 | `autoCreateUsers` | `boolean` | No | Updated auto-create users setting |
 | `defaultGuardrailClassifierId` | `string` or `null` | No | Updated guardrail classifier ID. Set to `null` to disable. |
 | `startingStageId` | `string` or `null` | No | Updated default starting stage ID. Set to `null` to remove. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) or `null` | No | Updated recording configuration. Set to `null` to disable. |
 
 **Response** `200 OK` — [Project Response](#project-response)
 
@@ -141,6 +143,7 @@ DELETE /api/projects/:id
 | `autoCreateUsers` | `boolean` | No | Whether users are auto-created on first WebSocket connection |
 | `defaultGuardrailClassifierId` | `string` | Yes | Classifier ID for evaluating guardrails |
 | `startingStageId` | `string` | Yes | Default starting stage ID. `null` means no project-level default is set. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) | Yes | Audio recording configuration. `null` means recording is not configured. |
 | `version` | `integer` | No | Version number |
 | `createdAt` | `string` | No | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | No | ISO 8601 last update timestamp |
@@ -194,6 +197,17 @@ Describes a single field in a typed schema. Used in `userProfileVariableDescript
 | `llmProviderId` | `string` | Yes | ID of the LLM provider used for moderation (must support moderation API, e.g. OpenAI or Mistral) |
 | `blockedCategories` | `string[]` | No | List of category names that should cause the input to be blocked. If omitted or empty, any flagged category will block the input. Category names are provider-specific. |
 | `mode` | `string` | No | Execution mode: `strict` (default) or `standard`. In `strict` mode, moderation runs before any other processing. In `standard` mode, moderation runs in parallel with classification after filler generation, reducing latency. See [Content Moderation](../guide/moderation#moderation-mode). |
+
+## Recording Config
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | `boolean` | Yes | Whether audio recording is enabled for this project |
+| `recordInput` | `boolean` | No (default: `true`) | Whether to record user voice input |
+| `recordOutput` | `boolean` | No (default: `true`) | Whether to record AI voice output |
+| `format` | `string` | No (default: `pcm_16000`) | Audio format for saved recordings (e.g. `pcm_16000`, `pcm_48000`, `g711_ulaw`, `opus`) |
+
+When enabled, two separate audio files are produced per conversation: `user_voice` and `ai_voice`. Source audio is automatically converted to the configured recording format. Recordings are uploaded as conversation artifacts to the project's configured storage provider.
 
 ## Archive Project
 

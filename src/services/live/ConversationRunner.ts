@@ -8,6 +8,8 @@ import { db } from "../../db";
 import { conversations, users, sampleCopies } from "../../db/schema";
 import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData, TurnAbortedEventData } from "../../types/conversationEvents";
 import { ConversationService } from "../ConversationService";
+import { ConversationStorageService } from "../ConversationStorageService";
+import { ConversationRecorder } from "./ConversationRecorder";
 import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
@@ -210,6 +212,9 @@ export class ConversationRunner {
   /** Fast heuristic detector for speech completion during barge-in. */
   private speechCompletionDetector = new SpeechCompletionDetector();
 
+  /** Handles audio recording for the conversation. */
+  private recorder: ConversationRecorder | null = null;
+
   /** True when server-side VAD is active for this session. VAD owns the turn lifecycle when active. */
   get isVadMode(): boolean {
     return this.vadProcessor !== null;
@@ -232,6 +237,7 @@ export class ConversationRunner {
     @inject(TemplatingEngine) private templatingEngine: TemplatingEngine,
     @inject(KnowledgeService) private knowledgeService: KnowledgeService,
     @inject(ModerationService) private moderationService: ModerationService,
+    @inject(ConversationStorageService) private conversationStorageService: ConversationStorageService,
   ) { }
 
   public getRuntimeData(): StageRuntimeData {
@@ -727,8 +733,9 @@ export class ConversationRunner {
           await this.handlePostResponseAction();
         });
 
-        ttsProvider.setOnSpeechGenerating(async (chunk) => {
-          if (!firstTtsChunkGenerated) {
+      ttsProvider.setOnSpeechGenerating(async (chunk) => {
+           this.recorder?.pushOutput(chunk.audio);
+           if (!firstTtsChunkGenerated) {
             logger.info({ conversationId, chunkId: chunk.chunkId }, `First TTS chunk generated for conversation ${conversationId}`);
             firstTtsChunkGenerated = true;
             // Reset per-turn outbound converter state on first chunk of each TTS turn
@@ -924,6 +931,27 @@ export class ConversationRunner {
         logger.error({ conversationId, transformerId: transformerData.transformer.id, error: error instanceof Error ? error.message : String(error) }, `Failed to wire up transformer LLM provider for transformer ${transformerData.transformer.id}`);
       }
     }
+
+    // Initialize recording if enabled
+    if (this.stageData.project.recordingConfig?.enabled) {
+      try {
+        const inputFormat = this.session.sessionSettings.sendAudioFormat ?? 'pcm_16000';
+        const outputFormat = ttsProvider?.getOutputFormat() ?? 'pcm_16000';
+        this.recorder = new ConversationRecorder(
+          this.stageData.project.recordingConfig,
+          inputFormat,
+          outputFormat,
+          this.conversationStorageService,
+          this.stageData.project.storageConfig,
+          this.stageData.project.id,
+          conversationId,
+        );
+        await this.recorder.initialize();
+        logger.info({ conversationId, format: this.recorder.constructor.name }, `Recording initialized for conversation ${conversationId}`);
+      } catch (error) {
+        logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to initialize recording for conversation ${conversationId}`);
+      }
+    }
   }
 
   async startConversation() {
@@ -1081,6 +1109,7 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
       } else if (this.vadProcessor) {
@@ -1117,6 +1146,7 @@ export class ConversationRunner {
     }
 
     try {
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         // Route through the inbound converter; the converter's 'data' handler forwards to ASR
         this.inboundConverter.push(voiceData);
@@ -1226,6 +1256,9 @@ export class ConversationRunner {
         await cleanupProvider(transformerData.llmProvider, `transformer LLM provider (${transformerData.transformer.id})`);
       }
     }
+
+    this.recorder?.destroy();
+    this.recorder = null;
 
     logger.info({ conversationId }, 'ConversationRunner cleanup complete');
   }
@@ -2075,6 +2108,9 @@ export class ConversationRunner {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to update conversation status in database via ConversationService`);
     }
 
+    // Flush recorder before closing connection
+    await this.recorder?.flush();
+
     // Close client connection on terminal state
     try {
       await this.session.clientConnection?.close();
@@ -2849,6 +2885,7 @@ export class ConversationRunner {
 
     const TERMINAL_STATES = ['finished', 'aborted', 'failed'] as const;
     if (TERMINAL_STATES.includes(newState as (typeof TERMINAL_STATES)[number])) {
+      await this.recorder?.flush();
       try {
         await this.session.clientConnection?.close();
       } catch (error) {
