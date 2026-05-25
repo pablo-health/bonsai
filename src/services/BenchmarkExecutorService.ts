@@ -1,5 +1,5 @@
 import { singleton, inject } from 'tsyringe';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, and, sql } from 'drizzle-orm';
 import { schedule } from 'node-cron';
 import type { ScheduledTask } from 'node-cron';
 import { db } from '../db/index';
@@ -47,7 +47,44 @@ export class BenchmarkExecutorService {
     this.runService.registerNewRunListener((runId) => this.onNewRun(runId));
     this.resetStuckRuns().then(() => this.checkAndProcess());
     this.pollingTimer = setInterval(() => { this.checkAndProcess(); }, this.pollingIntervalMs);
-    this.loadCronSchedules();
+    this.loadCronSchedules().catch((err) => logger.error({ err }, 'Failed to load benchmark cron schedules'));
+  }
+
+  /**
+   * Refreshes the cron schedule for a single suite.
+   * Called by BenchmarkService after create/update/delete operations.
+   * @param suiteId - Suite ID
+   * @param cronExpression - New cron expression, or null to remove
+   * @param isActive - Whether the suite is active
+   */
+  refreshSuiteSchedule(suiteId: string, cronExpression: string | null, isActive: boolean): void {
+    if (isActive && cronExpression) {
+      this.scheduleSuite(suiteId, cronExpression);
+    } else {
+      const existing = this.scheduledTasks.get(suiteId);
+      if (existing) {
+        existing.destroy();
+        this.scheduledTasks.delete(suiteId);
+        logger.info({ suiteId }, 'Removed benchmark cron schedule');
+      }
+    }
+  }
+
+  /**
+   * Stops the executor: clears the polling timer and destroys all cron tasks.
+   * Intended for graceful shutdown.
+   */
+  stop(): void {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = null;
+    }
+    for (const [suiteId, task] of this.scheduledTasks) {
+      task.destroy();
+      logger.info({ suiteId }, 'Destroyed benchmark cron task on stop');
+    }
+    this.scheduledTasks.clear();
+    logger.info('BenchmarkExecutorService stopped');
   }
 
   // ─── Private ─────────────────────────────────────────────────────────────
@@ -58,7 +95,12 @@ export class BenchmarkExecutorService {
 
   private async resetStuckRuns(): Promise<void> {
     const updated = await db.update(benchmarkRuns).set({ status: 'pending', updatedAt: new Date() }).where(eq(benchmarkRuns.status, 'in_progress')).returning({ id: benchmarkRuns.id });
-    if (updated.length > 0) logger.warn({ count: updated.length, ids: updated.map((r) => r.id) }, 'Reset stuck benchmark runs from in_progress to pending on startup');
+    if (updated.length > 0) {
+      const runIds = updated.map((r) => r.id);
+      logger.warn({ count: updated.length, ids: runIds }, 'Reset stuck benchmark runs from in_progress to pending on startup');
+      const resetExecutions = await db.update(benchmarkConfigExecutions).set({ status: 'failed', error: 'Reset due to server restart', completedAt: new Date(), updatedAt: new Date() }).where(and(inArray(benchmarkConfigExecutions.runId, runIds), eq(benchmarkConfigExecutions.status, 'in_progress'))).returning({ id: benchmarkConfigExecutions.id });
+      if (resetExecutions.length > 0) logger.warn({ count: resetExecutions.length }, 'Reset stuck benchmark config executions to failed on startup');
+    }
   }
 
   private checkAndProcess(): void {
@@ -70,29 +112,29 @@ export class BenchmarkExecutorService {
   }
 
   private async processNextPendingRun(): Promise<void> {
-    const [run] = await db.select().from(benchmarkRuns).where(eq(benchmarkRuns.status, 'pending')).limit(1);
-    if (!run) return;
+    while (true) {
+      const [run] = await db.select().from(benchmarkRuns).where(eq(benchmarkRuns.status, 'pending')).limit(1);
+      if (!run) return;
 
-    logger.info({ runId: run.id, suiteId: run.suiteId }, 'Processing benchmark run');
+      logger.info({ runId: run.id, suiteId: run.suiteId }, 'Processing benchmark run');
 
-    await db.update(benchmarkRuns).set({ status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
+      await db.update(benchmarkRuns).set({ status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
 
-    try {
-      const configs = await db.select().from(benchmarkConfigs).where(eq(benchmarkConfigs.suiteId, run.suiteId));
+      try {
+        const configs = await db.select().from(benchmarkConfigs).where(eq(benchmarkConfigs.suiteId, run.suiteId));
 
-      for (const config of configs) {
-        await this.processConfigExecution(run.id, config);
+        for (const config of configs) {
+          await this.processConfigExecution(run.id, config);
+        }
+
+        await db.update(benchmarkRuns).set({ status: 'completed', completedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
+        logger.info({ runId: run.id }, 'Benchmark run completed');
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        logger.error({ runId: run.id, error }, 'Benchmark run failed');
+        await db.update(benchmarkRuns).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
       }
-
-      await db.update(benchmarkRuns).set({ status: 'completed', completedAt: new Date(), updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
-      logger.info({ runId: run.id }, 'Benchmark run completed');
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      logger.error({ runId: run.id, error }, 'Benchmark run failed');
-      await db.update(benchmarkRuns).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date() }).where(eq(benchmarkRuns.id, run.id));
     }
-
-    this.checkAndProcess();
   }
 
   private async processConfigExecution(runId: string, config: typeof benchmarkConfigs.$inferSelect): Promise<void> {
@@ -130,11 +172,11 @@ export class BenchmarkExecutorService {
 
       const stats = this.computeBenchmarkStats(iterationResults);
 
-      await db.update(benchmarkConfigExecutions).set({ status: 'completed', completedAt: new Date(), stats: stats as unknown as Record<string, unknown>, updatedAt: new Date() }).where(eq(benchmarkConfigExecutions.id, executionId));
+      await db.update(benchmarkConfigExecutions).set({ status: 'completed', completedAt: new Date(), stats: stats as unknown as Record<string, unknown>, updatedAt: new Date(), version: sql`${benchmarkConfigExecutions.version} + 1` }).where(eq(benchmarkConfigExecutions.id, executionId));
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       logger.error({ executionId, configId: config.id, error }, 'Benchmark config execution failed');
-      await db.update(benchmarkConfigExecutions).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date() }).where(eq(benchmarkConfigExecutions.id, executionId));
+      await db.update(benchmarkConfigExecutions).set({ status: 'failed', completedAt: new Date(), error, updatedAt: new Date(), version: sql`${benchmarkConfigExecutions.version} + 1` }).where(eq(benchmarkConfigExecutions.id, executionId));
     }
   }
 
@@ -219,9 +261,18 @@ export class BenchmarkExecutorService {
 
     try {
       const task = schedule(cronExpression, async () => {
-        logger.info({ suiteId }, 'Triggering scheduled benchmark run');
-        const [row] = await db.insert(benchmarkRuns).values({ id: generateId(ID_PREFIXES.BENCHMARK_RUN), suiteId, trigger: 'scheduled', status: 'pending' }).returning();
-        this.onNewRun(row.id);
+        try {
+          const [suite] = await db.select({ id: benchmarkSuites.id, isActive: benchmarkSuites.isActive }).from(benchmarkSuites).where(eq(benchmarkSuites.id, suiteId)).limit(1);
+          if (!suite || !suite.isActive) {
+            logger.warn({ suiteId }, 'Skipping scheduled benchmark run: suite not found or inactive');
+            return;
+          }
+          logger.info({ suiteId }, 'Triggering scheduled benchmark run');
+          const [row] = await db.insert(benchmarkRuns).values({ id: generateId(ID_PREFIXES.BENCHMARK_RUN), suiteId, trigger: 'scheduled', status: 'pending' }).returning();
+          this.onNewRun(row.id);
+        } catch (err) {
+          logger.error({ suiteId, cronExpression, err }, 'Failed to trigger scheduled benchmark run');
+        }
       });
       this.scheduledTasks.set(suiteId, task);
       logger.info({ suiteId, cronExpression }, 'Scheduled benchmark cron task');

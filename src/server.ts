@@ -137,6 +137,14 @@ export function createApp(): express.Application {
     res.sendFile(schemaPath);
   });
 
+  // LLM-ingestible guide endpoint
+  app.get('/llms.txt', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    const llmsUrl = new URL('../llms.txt', import.meta.url);
+    const llmsPath = fileURLToPath(llmsUrl);
+    res.sendFile(llmsPath);
+  });
+
   // Unauthenticated system endpoints — registered before auth middleware intentionally
   const versionController = container.resolve(VersionController);
   versionController.registerRoutes(app);

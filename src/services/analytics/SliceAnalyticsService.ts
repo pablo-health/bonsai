@@ -17,9 +17,9 @@ function resolveRelativeTime(relativeTime: RelativeTime): { from: Date; to: Date
   const to = new Date();
   const from = new Date(to);
   switch (relativeTime.unit) {
-    case 'hours':  from.setHours(from.getHours() - relativeTime.amount); break;
-    case 'days':   from.setDate(from.getDate() - relativeTime.amount); break;
-    case 'weeks':  from.setDate(from.getDate() - relativeTime.amount * 7); break;
+    case 'hours': from.setHours(from.getHours() - relativeTime.amount); break;
+    case 'days': from.setDate(from.getDate() - relativeTime.amount); break;
+    case 'weeks': from.setDate(from.getDate() - relativeTime.amount * 7); break;
     case 'months': from.setMonth(from.getMonth() - relativeTime.amount); break;
   }
   return { from, to };
@@ -56,6 +56,7 @@ export class SliceAnalyticsService extends BaseService {
         id: m.id,
         label: m.label,
         unit: m.unit,
+        aggregateFunctions: m.aggregateFunctions,
       })),
     }));
 
