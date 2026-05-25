@@ -73,16 +73,15 @@ export class ConversationStorageService {
    * @returns Binary data of the artifact
    * @throws NotConfiguredError if storage is not configured for the project
    */
-  async downloadArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<Buffer> {
+  async downloadArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, storageKey: string, errorCallback?: ErrorCallback): Promise<Buffer> {
     if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
     const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
-    const key = this.generateArtifactKey(conversationId, artifactType);
-    const data = await provider.download(key);
+    const data = await provider.download(storageKey);
 
-    logger.info(`Downloaded artifact for conversation ${conversationId}: ${artifactType} (${data.length} bytes)`);
+    logger.info(`Downloaded artifact ${storageKey} (${data.length} bytes)`);
     return data;
   }
 

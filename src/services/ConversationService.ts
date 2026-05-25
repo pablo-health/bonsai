@@ -1,7 +1,7 @@
 import { injectable, inject } from 'tsyringe';
 import { eq, and, like, SQL, desc } from 'drizzle-orm';
 import { db } from '../db/index';
-import { conversations, conversationEvents, conversationArtifacts } from '../db/schema';
+import { conversations, conversationEvents, conversationArtifacts, projects } from '../db/schema';
 import type { ConversationResponse, ConversationListResponse, ConversationEventResponse, ConversationEventListResponse, ArtifactResponse, ArtifactListResponse, ListArtifactsQuery } from '../http/contracts/conversation';
 import type { ListParams } from '../http/contracts/common';
 import { conversationResponseSchema, conversationListResponseSchema, conversationEventResponseSchema, conversationEventListResponseSchema, artifactResponseSchema, artifactListResponseSchema } from '../http/contracts/conversation';
@@ -778,11 +778,10 @@ export class ConversationService extends BaseService {
       }
 
       // Otherwise download from storage
-      const project = await db.query.projects.findFirst({ where: eq(conversations.projectId, projectId) });
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       const data = await this.conversationStorageService.downloadArtifact(
         project?.storageConfig,
-        conversationId,
-        record.artifactType,
+        record.storageKey,
       );
 
       return { data, mimeType: record.mimeType };
