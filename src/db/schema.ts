@@ -127,6 +127,11 @@ export const projects = pgTable('projects', {
   }>(),
   startingStageId: text('starting_stage_id'),
   conversationTimeoutSeconds: integer('conversation_timeout_seconds'),
+  recordingConfig: jsonb('recording_config').$type<{
+    enabled: boolean;
+    recordInput?: boolean;
+    recordOutput?: boolean;
+  }>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
