@@ -46,6 +46,8 @@ import { perplexityLlmSettingsSchema } from './services/providers/llm/Perplexity
 import { cohereLlmSettingsSchema } from './services/providers/llm/CohereLlmProvider';
 import { xAILlmSettingsSchema } from './services/providers/llm/XAILlmProvider';
 import { ollamaLlmSettingsSchema } from './services/providers/llm/OllamaLlmProvider';
+import { ovhLlmSettingsSchema } from './services/providers/llm/OVHLlmProvider';
+import { scalewayLlmSettingsSchema } from './services/providers/llm/ScalewayLlmProvider';
 import { elevenLabsTtsSettingsSchema } from './services/providers/tts/ElevenLabsTtsProvider';
 import { openAiTtsSettingsSchema } from './services/providers/tts/OpenAiTtsProvider';
 import { deepgramTtsSettingsSchema } from './services/providers/tts/DeepgramTtsProvider';
@@ -153,6 +155,8 @@ export function getOpenAPISpec(): any {
   registry.register('CohereLlmSettings', cohereLlmSettingsSchema);
   registry.register('XAILlmSettings', xAILlmSettingsSchema);
   registry.register('OllamaLlmSettings', ollamaLlmSettingsSchema);
+  registry.register('OVHLlmSettings', ovhLlmSettingsSchema);
+  registry.register('ScalewayLlmSettings', scalewayLlmSettingsSchema);
   registry.register('LlmSettings', llmSettingsSchema);
 
   // TTS settings schemas (provider-specific)

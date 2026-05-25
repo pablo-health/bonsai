@@ -14,6 +14,8 @@ import { perplexityLlmSettingsSchema } from '../../services/providers/llm/Perple
 import { cohereLlmSettingsSchema } from '../../services/providers/llm/CohereLlmProvider';
 import { xAILlmSettingsSchema } from '../../services/providers/llm/XAILlmProvider';
 import { ollamaLlmSettingsSchema } from '../../services/providers/llm/OllamaLlmProvider';
+import { ovhLlmSettingsSchema } from '../../services/providers/llm/OVHLlmProvider';
+import { scalewayLlmSettingsSchema } from '../../services/providers/llm/ScalewayLlmProvider';
 import { elevenLabsTtsSettingsSchema } from '../../services/providers/tts/ElevenLabsTtsProvider';
 import { openAiTtsSettingsSchema } from '../../services/providers/tts/OpenAiTtsProvider';
 import { deepgramTtsSettingsSchema } from '../../services/providers/tts/DeepgramTtsProvider';
@@ -125,6 +127,8 @@ export const llmSettingsSchema = z.union([
   cohereLlmSettingsSchema.catchall(z.unknown()),
   xAILlmSettingsSchema.catchall(z.unknown()),
   ollamaLlmSettingsSchema.catchall(z.unknown()),
+  ovhLlmSettingsSchema.catchall(z.unknown()),
+  scalewayLlmSettingsSchema.catchall(z.unknown()),
 ]).openapi('LlmSettings').nullable().optional().describe('LLM provider-specific settings for this stage');
 
 // ====================
