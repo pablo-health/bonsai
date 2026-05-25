@@ -9,6 +9,7 @@ import { conversations, users, sampleCopies } from "../../db/schema";
 import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData, TurnAbortedEventData } from "../../types/conversationEvents";
 import { ConversationService } from "../ConversationService";
 import { ConversationStorageService } from "../ConversationStorageService";
+import { ConversationRecorder } from "./ConversationRecorder";
 import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
@@ -211,10 +212,8 @@ export class ConversationRunner {
   /** Fast heuristic detector for speech completion during barge-in. */
   private speechCompletionDetector = new SpeechCompletionDetector();
 
-  /** Accumulated user voice audio chunks for recording. */
-  private recordingInputChunks: Buffer[] = [];
-  /** Accumulated AI voice audio chunks for recording. */
-  private recordingOutputChunks: Buffer[] = [];
+  /** Handles audio recording for the conversation. */
+  private recorder: ConversationRecorder | null = null;
 
   /** True when server-side VAD is active for this session. VAD owns the turn lifecycle when active. */
   get isVadMode(): boolean {
@@ -223,69 +222,6 @@ export class ConversationRunner {
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
   private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
-
-  /** Checks whether input (user voice) recording is enabled for the current project. */
-  private isRecordingInput(): boolean {
-    const config = this.stageData.project.recordingConfig;
-    return !!(config && config.enabled && config.recordInput);
-  }
-
-  /** Checks whether output (AI voice) recording is enabled for the current project. */
-  private isRecordingOutput(): boolean {
-    const config = this.stageData.project.recordingConfig;
-    return !!(config && config.enabled && config.recordOutput);
-  }
-
-  /** Flushes accumulated audio recordings to storage. Called on terminal conversation states. */
-  private async flushRecordings(): Promise<void> {
-    const conversationId = this.conversation.id;
-    const projectId = this.conversation.projectId;
-    const storageConfig = this.stageData.project.storageConfig;
-
-    if (!storageConfig) {
-      logger.warn({ conversationId }, `Skipping recording flush for conversation ${conversationId}: no storage provider configured`);
-      return;
-    }
-
-    if (this.recordingInputChunks.length > 0) {
-      const combined = Buffer.concat(this.recordingInputChunks);
-      const sampleRate = this.session.sessionSettings.sendAudioFormat?.replace('pcm_', '') || '16000';
-      try {
-        await this.conversationStorageService.uploadArtifact(
-          storageConfig,
-          projectId,
-          conversationId,
-          'user_voice',
-          combined,
-          { customMetadata: { sampleRate } },
-        );
-        logger.info({ conversationId, size: combined.length }, `Flushed user voice recording for conversation ${conversationId}`);
-      } catch (error) {
-        logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to flush user voice recording for conversation ${conversationId}`);
-      }
-    }
-
-    if (this.recordingOutputChunks.length > 0) {
-      const combined = Buffer.concat(this.recordingOutputChunks);
-      const sampleRate = this.session.sessionSettings.receiveAudioFormat?.replace('pcm_', '') || '16000';
-      try {
-        await this.conversationStorageService.uploadArtifact(
-          storageConfig,
-          projectId,
-          conversationId,
-          'ai_voice',
-          combined,
-          { customMetadata: { sampleRate } },
-        );
-        logger.info({ conversationId, size: combined.length }, `Flushed AI voice recording for conversation ${conversationId}`);
-      } catch (error) {
-        logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to flush AI voice recording for conversation ${conversationId}`);
-      }
-    }
-
-    this.recordingInputChunks = [];
-    this.recordingOutputChunks = [];
-  }
 
   constructor(
     @inject(LlmProviderFactory) private llmProviderFactory: LlmProviderFactory,
@@ -798,9 +734,7 @@ export class ConversationRunner {
         });
 
       ttsProvider.setOnSpeechGenerating(async (chunk) => {
-           if (this.isRecordingOutput()) {
-             this.recordingOutputChunks.push(chunk.audio);
-           }
+           this.recorder?.pushOutput(chunk.audio);
            if (!firstTtsChunkGenerated) {
             logger.info({ conversationId, chunkId: chunk.chunkId }, `First TTS chunk generated for conversation ${conversationId}`);
             firstTtsChunkGenerated = true;
@@ -997,6 +931,27 @@ export class ConversationRunner {
         logger.error({ conversationId, transformerId: transformerData.transformer.id, error: error instanceof Error ? error.message : String(error) }, `Failed to wire up transformer LLM provider for transformer ${transformerData.transformer.id}`);
       }
     }
+
+    // Initialize recording if enabled
+    if (this.stageData.project.recordingConfig?.enabled) {
+      try {
+        const inputFormat = this.session.sessionSettings.sendAudioFormat ?? 'pcm_16000';
+        const outputFormat = ttsProvider?.getOutputFormat() ?? 'pcm_16000';
+        this.recorder = new ConversationRecorder(
+          this.stageData.project.recordingConfig,
+          inputFormat,
+          outputFormat,
+          this.conversationStorageService,
+          this.stageData.project.storageConfig,
+          this.stageData.project.id,
+          conversationId,
+        );
+        await this.recorder.initialize();
+        logger.info({ conversationId, format: this.recorder.constructor.name }, `Recording initialized for conversation ${conversationId}`);
+      } catch (error) {
+        logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to initialize recording for conversation ${conversationId}`);
+      }
+    }
   }
 
   async startConversation() {
@@ -1154,9 +1109,7 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
-      if (this.isRecordingInput()) {
-        this.recordingInputChunks.push(voiceData);
-      }
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
       } else if (this.vadProcessor) {
@@ -1193,9 +1146,7 @@ export class ConversationRunner {
     }
 
     try {
-      if (this.isRecordingInput()) {
-        this.recordingInputChunks.push(voiceData);
-      }
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         // Route through the inbound converter; the converter's 'data' handler forwards to ASR
         this.inboundConverter.push(voiceData);
@@ -1305,6 +1256,9 @@ export class ConversationRunner {
         await cleanupProvider(transformerData.llmProvider, `transformer LLM provider (${transformerData.transformer.id})`);
       }
     }
+
+    this.recorder?.destroy();
+    this.recorder = null;
 
     logger.info({ conversationId }, 'ConversationRunner cleanup complete');
   }
@@ -2928,7 +2882,7 @@ export class ConversationRunner {
 
     const TERMINAL_STATES = ['finished', 'aborted', 'failed'] as const;
     if (TERMINAL_STATES.includes(newState as (typeof TERMINAL_STATES)[number])) {
-      await this.flushRecordings();
+      await this.recorder?.flush();
       try {
         await this.session.clientConnection?.close();
       } catch (error) {

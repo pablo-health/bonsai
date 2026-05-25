@@ -24,6 +24,7 @@ Each project includes:
 | `timezone` | Default IANA timezone for the project (e.g. `America/New_York`) |
 | `languageCode` | Optional ISO language code for the project (e.g. `en-US`, `pl-PL`). Exposed in conversation context as `project.languageCode` and `project.language`. |
 | `startingStageId` | Optional default starting stage ID. Used as fallback when the client omits `stageId` in the `startConversation` WebSocket message. Set to `null` to clear. |
+| `recordingConfig` | Audio recording configuration for conversation debugging |
 | `userProfileVariableDescriptors` | Typed schema describing the fields expected on a user's profile |
 | `version` | Optimistic locking version number |
 
@@ -91,6 +92,34 @@ When a conversation is timed out:
 ```
 
 This example aborts any conversation that has been inactive for 5 minutes.
+
+## Recording Configuration
+
+The optional `recordingConfig` enables per-project audio recording of conversation sessions. When enabled, both user voice input and AI voice output are accumulated throughout the conversation and saved as separate audio files to the project's configured storage provider.
+
+```json
+{
+  "recordingConfig": {
+    "enabled": true,
+    "recordInput": true,
+    "recordOutput": true,
+    "format": "pcm_16000"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | — | Whether recording is active for the project |
+| `recordInput` | `boolean` | `true` | Record user voice input |
+| `recordOutput` | `boolean` | `true` | Record AI voice output |
+| `format` | `string` | `pcm_16000` | Target audio format for saved recordings |
+
+Two separate files are produced per conversation: one for the user's voice (`user_voice`) and one for the AI's voice (`ai_voice`). This avoids format conflicts when input and output use different sample rates or encodings.
+
+The source audio (which may be any format from the ASR/TTS providers) is automatically converted to the configured recording format. If the source format already matches the target, no conversion is performed.
+
+Recordings are uploaded as conversation artifacts to the project's storage provider (S3, GCS, Azure Blob, or Local). If no storage provider is configured, recordings are skipped with a warning log.
 
 ## User Profile Variable Descriptors
 

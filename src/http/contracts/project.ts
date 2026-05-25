@@ -13,6 +13,7 @@ import { speechmaticsAsrSettingsSchema } from '../../services/providers/asr/Spee
 import { listParamsSchema } from './common';
 import { serverVadConfigSchema } from './vad';
 import { costManagementConfigSchema } from './costManagement';
+import { audioFormatValues } from '../../types/audio';
 
 extendZodWithOpenApi(z);
 
@@ -80,6 +81,7 @@ export const recordingConfigSchema = z.object({
   enabled: z.boolean().describe('Whether audio recording is enabled for this project'),
   recordInput: z.boolean().optional().default(true).describe('Whether to record user voice input. Defaults to true.'),
   recordOutput: z.boolean().optional().default(true).describe('Whether to record AI voice output. Defaults to true.'),
+  format: z.enum(audioFormatValues).optional().default('pcm_16000').describe('Audio format for saved recordings. Defaults to pcm_16000.'),
 }).openapi('RecordingConfig').optional().describe('Audio recording configuration for conversation debugging. When enabled, records full conversation audio to project storage.');
 
 export type RecordingConfig = z.infer<typeof recordingConfigSchema>;
