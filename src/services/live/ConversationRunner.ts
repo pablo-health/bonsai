@@ -2108,6 +2108,9 @@ export class ConversationRunner {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to update conversation status in database via ConversationService`);
     }
 
+    // Flush recorder before closing connection
+    await this.recorder?.flush();
+
     // Close client connection on terminal state
     try {
       await this.session.clientConnection?.close();

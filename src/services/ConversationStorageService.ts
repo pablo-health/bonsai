@@ -34,11 +34,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async uploadArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, projectId: string, conversationId: string, artifactType: ArtifactType, data: Buffer, metadata?: StorageMetadata, eventId?: string, inputTurnId?: string, outputTurnId?: string, errorCallback?: ErrorCallback): Promise<{ id: string; url: string }> {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const key = this.generateArtifactKey(conversationId, artifactType);
     const url = await provider.upload(key, data, metadata);
 
@@ -74,11 +74,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async downloadArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<Buffer> {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const key = this.generateArtifactKey(conversationId, artifactType);
     const data = await provider.download(key);
 
@@ -95,11 +95,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async deleteArtifact(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<void> {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const key = this.generateArtifactKey(conversationId, artifactType);
     await provider.delete(key);
 
@@ -117,11 +117,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async getSignedUrl(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, expiresIn: number = 3600, errorCallback?: ErrorCallback): Promise<string> {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const key = this.generateArtifactKey(conversationId, artifactType);
     const url = await provider.getSignedUrl(key, expiresIn);
 
@@ -139,11 +139,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async artifactExists(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, artifactType: string, errorCallback?: ErrorCallback): Promise<boolean> {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const key = this.generateArtifactKey(conversationId, artifactType);
     return await provider.exists(key);
   }
@@ -157,11 +157,11 @@ export class ConversationStorageService {
    * @throws NotConfiguredError if storage is not configured for the project
    */
   async listArtifacts(storageConfig: { storageProviderId?: string; settings?: unknown } | null | undefined, conversationId: string, errorCallback?: ErrorCallback) {
-    if (!storageConfig?.storageProviderId || !storageConfig?.settings) {
+    if (!storageConfig?.storageProviderId) {
       throw new NotConfiguredError('Storage provider not configured for this project');
     }
 
-    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings, errorCallback);
+    const provider = await this.getStorageProvider(storageConfig.storageProviderId, storageConfig.settings as Record<string, unknown>, errorCallback);
     const prefix = `${conversationId}/`;
     return await provider.list(prefix);
   }
