@@ -1,11 +1,12 @@
 import { injectable, inject } from 'tsyringe';
 import { eq, and, like, SQL, desc } from 'drizzle-orm';
 import { db } from '../db/index';
-import { conversations, conversationEvents } from '../db/schema';
-import type { ConversationResponse, ConversationListResponse, ConversationEventResponse, ConversationEventListResponse } from '../http/contracts/conversation';
+import { conversations, conversationEvents, conversationArtifacts } from '../db/schema';
+import type { ConversationResponse, ConversationListResponse, ConversationEventResponse, ConversationEventListResponse, ArtifactResponse, ArtifactListResponse, ListArtifactsQuery } from '../http/contracts/conversation';
 import type { ListParams } from '../http/contracts/common';
-import { conversationResponseSchema, conversationListResponseSchema, conversationEventResponseSchema, conversationEventListResponseSchema } from '../http/contracts/conversation';
+import { conversationResponseSchema, conversationListResponseSchema, conversationEventResponseSchema, conversationEventListResponseSchema, artifactResponseSchema, artifactListResponseSchema } from '../http/contracts/conversation';
 import { AuditService } from './AuditService';
+import { ConversationStorageService } from './ConversationStorageService';
 import { NotFoundError } from '../errors';
 import { buildFilterCondition, buildOrderBy } from '../utils/queryBuilder';
 import { countRows, normalizeListLimit } from '../utils/pagination';
@@ -40,7 +41,8 @@ export type CreateConversationInput = {
 @injectable()
 export class ConversationService extends BaseService {
   constructor(
-    @inject(AuditService) private readonly auditService: AuditService
+    @inject(AuditService) private readonly auditService: AuditService,
+    @inject(ConversationStorageService) private readonly conversationStorageService: ConversationStorageService
   ) {
     super();
   }
@@ -265,8 +267,18 @@ export class ConversationService extends BaseService {
         throw new NotFoundError(`Conversation with id ${id} not found`);
       }
 
+      const artifacts = await db.select({
+        id: conversationArtifacts.id,
+        artifactType: conversationArtifacts.artifactType,
+        fileSize: conversationArtifacts.fileSize,
+        createdAt: conversationArtifacts.createdAt,
+      })
+        .from(conversationArtifacts)
+        .where(and(eq(conversationArtifacts.projectId, projectId), eq(conversationArtifacts.conversationId, id)))
+        .orderBy(desc(conversationArtifacts.createdAt));
+
       const archived = !(await this.isProjectActive(projectId));
-      return conversationResponseSchema.parse({ ...conversation, archived });
+      return conversationResponseSchema.parse({ ...conversation, archived, artifacts });
     } catch (error) {
       logger.error({ error, conversationId: id }, 'Failed to fetch conversation');
       throw error;
@@ -606,6 +618,176 @@ export class ConversationService extends BaseService {
       return await this.auditService.getEntityAuditLogs('conversation', conversationId, projectId);
     } catch (error) {
       logger.error({ error, conversationId, projectId }, 'Failed to fetch conversation audit logs');
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves all artifacts for a specific conversation
+   * @param projectId - The project the conversation belongs to
+   * @param conversationId - The unique identifier of the conversation
+   * @param params - List parameters including filters, sorting, and pagination
+   * @returns Paginated array of conversation artifacts
+   * @throws {NotFoundError} When conversation is not found
+   */
+  async listConversationArtifacts(projectId: string, conversationId: string, params?: ListArtifactsQuery): Promise<ArtifactListResponse> {
+    logger.debug({ conversationId, params }, 'Fetching conversation artifacts');
+
+    try {
+      const conversation = await db.query.conversations.findFirst({ where: and(eq(conversations.projectId, projectId), eq(conversations.id, conversationId)) });
+
+      if (!conversation) {
+        throw new NotFoundError(`Conversation with id ${conversationId} not found`);
+      }
+
+      const conditions: SQL[] = [eq(conversationArtifacts.projectId, projectId), eq(conversationArtifacts.conversationId, conversationId)];
+      const offset = params?.offset ?? 0;
+      const limit = normalizeListLimit(params?.limit);
+
+      if (params?.type) {
+        conditions.push(eq(conversationArtifacts.artifactType, params.type));
+      }
+
+      const columnMap = {
+        id: conversationArtifacts.id,
+        artifactType: conversationArtifacts.artifactType,
+        fileSize: conversationArtifacts.fileSize,
+        createdAt: conversationArtifacts.createdAt,
+        updatedAt: conversationArtifacts.updatedAt,
+      };
+
+      if (params?.filters) {
+        for (const [field, filter] of Object.entries(params.filters)) {
+          const condition = buildFilterCondition(field, filter, columnMap, logger);
+          if (condition) {
+            conditions.push(condition);
+          }
+        }
+      }
+
+      if (params?.textSearch) {
+        const searchTerm = `%${params.textSearch}%`;
+        conditions.push(like(conversationArtifacts.artifactType, searchTerm));
+      }
+
+      const orderByClause = buildOrderBy(params?.orderBy, columnMap);
+      const whereCondition = conditions.length > 0 ? and(...conditions) : undefined;
+
+      const total = await countRows(conversationArtifacts, whereCondition);
+
+      const queryBuilder = db.select({
+        id: conversationArtifacts.id,
+        projectId: conversationArtifacts.projectId,
+        conversationId: conversationArtifacts.conversationId,
+        artifactType: conversationArtifacts.artifactType,
+        eventId: conversationArtifacts.eventId,
+        inputTurnId: conversationArtifacts.inputTurnId,
+        outputTurnId: conversationArtifacts.outputTurnId,
+        storageKey: conversationArtifacts.storageKey,
+        storageUrl: conversationArtifacts.storageUrl,
+        data: conversationArtifacts.data,
+        mimeType: conversationArtifacts.mimeType,
+        fileSize: conversationArtifacts.fileSize,
+        metadata: conversationArtifacts.metadata,
+        createdAt: conversationArtifacts.createdAt,
+        updatedAt: conversationArtifacts.updatedAt,
+      })
+        .from(conversationArtifacts)
+        .where(whereCondition);
+
+      if (orderByClause.length > 0) {
+        orderByClause.forEach(order => queryBuilder.orderBy(order));
+      } else {
+        queryBuilder.orderBy(desc(conversationArtifacts.createdAt));
+      }
+
+      const artifactList = await queryBuilder.limit(limit).offset(offset);
+
+      return artifactListResponseSchema.parse({
+        items: artifactList,
+        total,
+        offset,
+        limit,
+      });
+    } catch (error) {
+      logger.error({ error, conversationId, params }, 'Failed to fetch conversation artifacts');
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves a specific artifact by ID
+   * @param projectId - The project the conversation belongs to
+   * @param conversationId - The unique identifier of the conversation
+   * @param artifactId - The unique identifier of the artifact
+   * @returns The conversation artifact if found
+   * @throws {NotFoundError} When conversation or artifact is not found
+   */
+  async getConversationArtifactById(projectId: string, conversationId: string, artifactId: string): Promise<ArtifactResponse> {
+    logger.debug({ conversationId, artifactId }, 'Fetching conversation artifact by ID');
+
+    try {
+      const conversation = await db.query.conversations.findFirst({ where: and(eq(conversations.projectId, projectId), eq(conversations.id, conversationId)) });
+
+      if (!conversation) {
+        throw new NotFoundError(`Conversation with id ${conversationId} not found`);
+      }
+
+      const artifact = await db.select().from(conversationArtifacts).where(and(eq(conversationArtifacts.projectId, projectId), eq(conversationArtifacts.id, artifactId), eq(conversationArtifacts.conversationId, conversationId))).limit(1);
+
+      if (artifact.length === 0) {
+        throw new NotFoundError(`Artifact with id ${artifactId} not found for conversation ${conversationId}`);
+      }
+
+      return artifactResponseSchema.parse(artifact[0]);
+    } catch (error) {
+      logger.error({ error, conversationId, artifactId }, 'Failed to fetch conversation artifact');
+      throw error;
+    }
+  }
+
+  /**
+   * Downloads the binary data for a specific artifact
+   * @param projectId - The project the conversation belongs to
+   * @param conversationId - The unique identifier of the conversation
+   * @param artifactId - The unique identifier of the artifact
+   * @returns Buffer containing the artifact data
+   * @throws {NotFoundError} When conversation or artifact is not found
+   */
+  async downloadConversationArtifact(projectId: string, conversationId: string, artifactId: string): Promise<{ data: Buffer; mimeType: string }> {
+    logger.debug({ conversationId, artifactId }, 'Downloading conversation artifact');
+
+    try {
+      const conversation = await db.query.conversations.findFirst({ where: and(eq(conversations.projectId, projectId), eq(conversations.id, conversationId)) });
+
+      if (!conversation) {
+        throw new NotFoundError(`Conversation with id ${conversationId} not found`);
+      }
+
+      const artifact = await db.select().from(conversationArtifacts).where(and(eq(conversationArtifacts.projectId, projectId), eq(conversationArtifacts.id, artifactId), eq(conversationArtifacts.conversationId, conversationId))).limit(1);
+
+      if (artifact.length === 0) {
+        throw new NotFoundError(`Artifact with id ${artifactId} not found for conversation ${conversationId}`);
+      }
+
+      const record = artifact[0];
+
+      // If data is stored inline (legacy), return it
+      if (record.data) {
+        return { data: Buffer.from(record.data, 'base64'), mimeType: record.mimeType };
+      }
+
+      // Otherwise download from storage
+      const project = await db.query.projects.findFirst({ where: eq(conversations.projectId, projectId) });
+      const data = await this.conversationStorageService.downloadArtifact(
+        project?.storageConfig,
+        conversationId,
+        record.artifactType,
+      );
+
+      return { data, mimeType: record.mimeType };
+    } catch (error) {
+      logger.error({ error, conversationId, artifactId }, 'Failed to download conversation artifact');
       throw error;
     }
   }
