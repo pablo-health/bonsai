@@ -188,6 +188,7 @@ export const projectResponseSchema = z.object({
   sampleCopyConfig: sampleCopyConfigSchema.nullable().describe('Sample copy configuration including the default classifier used to evaluate prompt triggers.'),
   startingStageId: z.string().nullable().describe('ID of the stage to start new conversations at when no stageId is provided at conversation start time. Null means no default is set.'),
   conversationTimeoutSeconds: z.number().int().nullable().describe('Timeout in seconds for active conversations with no activity. Null or 0 means no timeout.'),
+  recordingConfig: recordingConfigSchema.nullable().describe('Audio recording configuration for conversation debugging'),
   version: z.number().describe('The version number of the project'),
   createdAt: z.coerce.date().describe('The timestamp when the project was created'),
   updatedAt: z.coerce.date().describe('The timestamp when the project was last updated'),
