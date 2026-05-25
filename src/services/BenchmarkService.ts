@@ -1,4 +1,4 @@
-import { singleton } from 'tsyringe';
+import { singleton, inject } from 'tsyringe';
 import { eq, desc, and } from 'drizzle-orm';
 import { db } from '../db/index';
 import { benchmarkSuites, benchmarkProviderConfigs, benchmarkConfigs, benchmarkRuns, benchmarkConfigExecutions } from '../db/schema';
@@ -12,12 +12,17 @@ import { PERMISSIONS } from '../permissions';
 import { generateId, ID_PREFIXES } from '../utils/idGenerator';
 import { normalizeListLimit, countRows } from '../utils/pagination';
 
+import { BenchmarkExecutorService } from './BenchmarkExecutorService';
+
 /**
  * Service for managing benchmark suites, provider configs, and test configs.
  * Provides full CRUD operations for all three benchmark entity types.
  */
 @singleton()
 export class BenchmarkService extends BaseService {
+  constructor(@inject(BenchmarkExecutorService) private readonly executorService: BenchmarkExecutorService) {
+    super();
+  }
   /**
    * Creates a new benchmark suite.
    * @param input - Suite creation data
@@ -39,6 +44,7 @@ export class BenchmarkService extends BaseService {
       createdBy: context.operatorId ?? null,
     }).returning();
 
+    this.executorService.refreshSuiteSchedule(row.id, row.cronExpression ?? null, row.isActive);
     return this.mapSuiteResponse(row);
   }
 
@@ -69,6 +75,7 @@ export class BenchmarkService extends BaseService {
     const [updated] = await db.update(benchmarkSuites).set(updates).where(and(eq(benchmarkSuites.id, id), eq(benchmarkSuites.version, expectedVersion))).returning();
 
     if (!updated) throw new OptimisticLockError(`Failed to update benchmark suite due to version conflict`);
+    this.executorService.refreshSuiteSchedule(updated.id, updated.cronExpression ?? null, updated.isActive);
     return this.mapSuiteResponse(updated);
   }
 
@@ -84,6 +91,7 @@ export class BenchmarkService extends BaseService {
     if (existingRun) throw new ConflictError(`Benchmark suite ${id} cannot be deleted because it has existing runs. Delete all runs first.`);
     logger.info({ id, operatorId: context.operatorId }, 'Deleting benchmark suite');
     await db.delete(benchmarkSuites).where(eq(benchmarkSuites.id, id));
+    this.executorService.refreshSuiteSchedule(id, null, false);
   }
 
   /**
@@ -276,9 +284,8 @@ export class BenchmarkService extends BaseService {
   async deleteConfig(id: string, context: RequestContext): Promise<void> {
     this.requirePermission(context, PERMISSIONS.BENCHMARK_WRITE);
     await this.getConfigOrThrow(id);
-    const [existingExecution] = await db.select({ id: benchmarkConfigExecutions.id }).from(benchmarkConfigExecutions).where(eq(benchmarkConfigExecutions.configId, id)).limit(1);
-    if (existingExecution) throw new ConflictError(`Benchmark config ${id} cannot be deleted because it has existing executions. Delete the associated runs first.`);
     logger.info({ id, operatorId: context.operatorId }, 'Deleting benchmark config');
+    await db.delete(benchmarkConfigExecutions).where(eq(benchmarkConfigExecutions.configId, id));
     await db.delete(benchmarkConfigs).where(eq(benchmarkConfigs.id, id));
   }
 
