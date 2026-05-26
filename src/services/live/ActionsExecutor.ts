@@ -689,6 +689,56 @@ export class ActionsExecutor {
 
       logger.debug({ conversationId: context.conversationId, toolId: effect.toolId, parameters: resolvedParameters }, `Input parameters resolved for tool`);
 
+      // For asynchronous execution, fire the tool without blocking the conversation.
+      // Parameters are already resolved above using the current turn's context.
+      // Mutable context fields are snapshotted to prevent the background execution from
+      // corrupting the live context (IsolatedScriptExecutor writes back by reference).
+      // Result, flow control, and context mutations are discarded.
+      if (effect.asynchronous) {
+        const asyncContext: ConversationContext = {
+          ...context,
+          vars: JSON.parse(JSON.stringify(context.vars ?? {})),
+          userProfile: JSON.parse(JSON.stringify(context.userProfile ?? {})),
+        };
+
+        void (async () => {
+          try {
+            const executionResult = await this.toolExecutor.executeTool(tool as any, asyncContext, resolvedParameters);
+            if (!executionResult.success) {
+              logger.warn({ conversationId: context.conversationId, toolId: tool.id, toolName: tool.name, reason: executionResult.failureReason }, `Async tool call failed: ${tool.name}`);
+            } else {
+              logger.info({ conversationId: context.conversationId, toolId: tool.id, toolName: tool.name }, `Async tool call completed: ${tool.name}`);
+            }
+            try {
+              await emitEvent('tool_call', {
+                toolId: tool.id,
+                toolName: tool.name,
+                toolType: tool.type,
+                parameters: resolvedParameters,
+                success: executionResult.success,
+                result: executionResult.result,
+                error: executionResult.failureReason,
+                sourceActionName: actionName,
+                metadata: {
+                  systemPrompt: executionResult.renderedPrompt,
+                  llmUsage: executionResult.llmUsage,
+                  durationMs: executionResult.durationMs,
+                  startMs: executionResult.startMs,
+                  endMs: executionResult.endMs,
+                },
+              });
+            } catch (emitError) {
+              logger.warn({ conversationId: context.conversationId, toolId: tool.id, error: emitError instanceof Error ? emitError.message : String(emitError) }, `Failed to emit tool_call event for async tool`);
+            }
+          } catch (error) {
+            logger.error({ conversationId: context.conversationId, toolId: tool.id, toolName: tool.name, error: error instanceof Error ? error.message : String(error) }, `Async tool call threw an error: ${tool.name}`);
+          }
+        })();
+
+        logger.info({ conversationId: context.conversationId, toolId: tool.id, toolName: tool.name }, `Async tool call dispatched: ${tool.name}`);
+        return { shouldEndConversation: false, shouldAbortConversation: false };
+      }
+
       // 4. Execute the tool using ToolExecutor
       // ToolExecutor will:
       // - Load the LLM provider
@@ -703,7 +753,7 @@ export class ActionsExecutor {
 
       logger.debug({ conversationId: context.conversationId, toolId: effect.toolId, hasResult: !!executionResult.result }, `Tool executed successfully`);
 
-      // 4. Store the result in context.results.tools
+      // 5. Store the result in context.results.tools
       if (!context.results) {
         context.results = { webhooks: {}, tools: {} };
       }
@@ -729,7 +779,7 @@ export class ActionsExecutor {
 
       logger.info({ conversationId: context.conversationId, toolId: effect.toolId, toolName: tool.name, toolType: tool.type }, `Tool called successfully and result stored: ${tool.name}`);
 
-      // Emit tool_call event inline now that the effect has been applied
+      // 6. Emit tool_call event inline now that the effect has been applied
       await emitEvent('tool_call', {
         toolId: tool.id,
         toolName: tool.name,
@@ -748,7 +798,7 @@ export class ActionsExecutor {
         },
       });
 
-      // For script tools, propagate flow control and mutable-state change flags onto the outcome
+      // 7. For script tools, propagate flow control and mutable-state change flags onto the outcome
       const flowControl = executionResult.flowControl ?? {};
       return {
         shouldEndConversation: flowControl.shouldEndConversation ?? false,
