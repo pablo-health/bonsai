@@ -67,7 +67,7 @@ export class ConversationService extends BaseService {
         sessionId: input.sessionId,
         stageId: input.stageId,
         startingStageId: input.stageId,
-        stageVars: {},
+        stageVars: input.stageVars ?? {},
         status: input.status ?? 'initialized',
         statusDetails: input.statusDetails ?? null,
         direction: input.direction ?? 'incoming',

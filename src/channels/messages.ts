@@ -51,6 +51,7 @@ export const calStartConversationRequestSchema = calBaseInputMessageSchema.omit(
   direction: z.enum(['incoming', 'outgoing']).optional().describe('Direction of the conversation. Defaults to incoming when not specified.'),
   existingConversationId: z.string().optional().describe('When set, the handler attaches to this pre-created conversation instead of creating a new one. Used for outgoing call flows where the conversation record is created at call initiation time.'),
   userProfile: z.record(z.string(), z.unknown()).optional().describe('Optional user profile data to inject and deep-merge into the user\'s existing profile on the users table.'),
+  stageVariables: z.record(z.string(), z.unknown()).optional().describe('Optional initial stage variable values to set for the starting stage when the conversation is created. Merged into stageVars for the resolved starting stage.'),
 });
 
 /**
