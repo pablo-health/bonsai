@@ -22,6 +22,9 @@ export const serverVadConfigSchema = z.object({
   autoEndSilenceDurationMs: z.number().int().min(100).max(5000).optional().describe(
     'Duration of silence (in ms) after speech that triggers end-of-utterance detection. Default: 800.'
   ),
+  gracePeriodMs: z.number().int().min(0).max(5000).optional().describe(
+    'Duration (in ms) after VAD initialization during which speech_start is suppressed. Prevents false positives from phone connection noise. Default: 1000.'
+  ),
 }).openapi('ServerVadConfig');
 
 /** Server-side VAD configuration type */

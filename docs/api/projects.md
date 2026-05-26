@@ -170,6 +170,7 @@ When `serverVad` is present in `asrConfig`, the server continuously monitors inc
 | `frameDurationMs` | `10` \| `20` \| `30` | No | Duration of each VAD analysis frame in milliseconds. Default: `20`. |
 | `silencePaddingMs` | `integer` (0–1000) | No | Milliseconds of audio to include before the detected speech start (pre-roll). Default: `300`. |
 | `autoEndSilenceDurationMs` | `integer` (100–5000) | No | Milliseconds of silence after speech that triggers end-of-utterance detection. Default: `800`. |
+| `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Prevents false positives from phone connection noise. Default: `1000`. |
 
 ## Storage Config
 

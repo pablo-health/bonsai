@@ -51,6 +51,7 @@ export class VadProcessor extends EventEmitter {
   private vad: RealTimeVAD | null = null;
   private readonly sampleRate: number;
   private readonly config: Required<ServerVadConfig>;
+  private gracePeriodEnd: number = 0;
 
   /**
    * @param sampleRate Sample rate of the incoming 16-bit PCM audio
@@ -64,6 +65,7 @@ export class VadProcessor extends EventEmitter {
       frameDurationMs: config.frameDurationMs ?? 20,
       silencePaddingMs: config.silencePaddingMs ?? 300,
       autoEndSilenceDurationMs: config.autoEndSilenceDurationMs ?? 800,
+      gracePeriodMs: config.gracePeriodMs ?? 1000,
     };
   }
 
@@ -76,6 +78,7 @@ export class VadProcessor extends EventEmitter {
     const redemptionFrames = Math.round(this.config.autoEndSilenceDurationMs / this.config.frameDurationMs);
     const preSpeechPadFrames = Math.round(this.config.silencePaddingMs / this.config.frameDurationMs);
 
+    this.gracePeriodEnd = Date.now() + this.config.gracePeriodMs;
     this.vad = await RealTimeVAD.new({
       sampleRate: this.sampleRate,
       positiveSpeechThreshold: pos,
@@ -83,7 +86,10 @@ export class VadProcessor extends EventEmitter {
       frameSamples,
       redemptionFrames,
       preSpeechPadFrames,
-      onSpeechStart: () => { this.emit('speech_start'); },
+      onSpeechStart: () => {
+        if (Date.now() < this.gracePeriodEnd) return;
+        this.emit('speech_start');
+      },
       onSpeechEnd: (audio: Float32Array) => {
         this.emit('data', float32ToPcm16(audio));
         this.emit('end_of_utterance');

@@ -95,6 +95,7 @@ export const projects = pgTable('projects', {
       frameDurationMs?: 10 | 20 | 30;
       silencePaddingMs?: number;
       autoEndSilenceDurationMs?: number;
+      gracePeriodMs?: number;
     };
   }>(),
   acceptVoice: boolean('accept_voice').notNull().default(true),
