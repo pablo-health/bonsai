@@ -690,6 +690,8 @@ export class MigrationService extends BaseService {
 
     for (const p of allAgentRows) {
       if (p.ttsProviderId) referencedProviderIds.add(p.ttsProviderId);
+      const fillerLlmId = (p.fillerSettings as any)?.llmProviderId;
+      if (fillerLlmId) referencedProviderIds.add(fillerLlmId);
     }
     for (const row of [...finalClassifierRows, ...allCtRows, ...toolRows, ...stageRows]) {
       if (row.llmProviderId) referencedProviderIds.add(row.llmProviderId);
