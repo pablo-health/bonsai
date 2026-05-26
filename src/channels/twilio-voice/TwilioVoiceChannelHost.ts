@@ -327,6 +327,7 @@ export class TwilioVoiceChannelHost {
 
     // Per-connection mutable state.
     let session: Session | null = null;
+    let connection: TwilioVoiceConnection | null = null;
     let inputTurnId: string | null = null;
     const pendingMarkCallbacks = new Map<string, () => Promise<void>>();
 
@@ -411,7 +412,8 @@ export class TwilioVoiceChannelHost {
             const registerMarkCallback = (name: string, cb: () => Promise<void>) => { pendingMarkCallbacks.set(name, cb); };
             const clearMarkCallbacks = () => { pendingMarkCallbacks.clear(); };
 
-            const connection = new TwilioVoiceConnection(ws, startData.streamSid, this.sessionManager, onAiTurnEnd, registerMarkCallback, clearMarkCallbacks);
+            const conn = new TwilioVoiceConnection(ws, startData.streamSid, this.sessionManager, onAiTurnEnd, registerMarkCallback, clearMarkCallbacks);
+            connection = conn;
             const sessionId = this.sessionManager.registerSession(connection);
             const newSession = this.sessionManager.getSession(sessionId);
             connection.attachSession(newSession);
@@ -443,10 +445,14 @@ export class TwilioVoiceChannelHost {
           case 'mark': {
             const markName = msg.mark?.name;
             if (markName) {
-              const cb = pendingMarkCallbacks.get(markName);
-              if (cb) {
-                pendingMarkCallbacks.delete(markName);
-                await cb();
+              if (connection?.isClosing) {
+                connection.handleMarkEcho(markName);
+              } else {
+                const cb = pendingMarkCallbacks.get(markName);
+                if (cb) {
+                  pendingMarkCallbacks.delete(markName);
+                  await cb();
+                }
               }
             }
             break;
