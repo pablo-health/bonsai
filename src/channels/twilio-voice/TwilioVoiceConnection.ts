@@ -29,6 +29,9 @@ export class TwilioVoiceConnection implements IClientConnection {
 
   private session: Session;
   private markCounter = 0;
+  private pendingMarkName: string | null = null;
+  isClosing = false;
+  private pendingCloseResolve: (() => void) | null = null;
 
   constructor(
     /** The active Twilio Media Streams WebSocket for this call. */
@@ -60,10 +63,27 @@ export class TwilioVoiceConnection implements IClientConnection {
     this.session = session;
   }
 
-  /**
-   * Closes the Media Streams WebSocket and unregisters the associated session.
-   */
+ /**
+    * Closes the Media Streams WebSocket and unregisters the associated session.
+    * If a TTS mark is pending (audio still buffered at Twilio), defers the `<Hangup/>`
+    * until Twilio echoes the mark, ensuring all audio finishes playing before disconnect.
+    */
   async close(): Promise<void> {
+    if (this.pendingMarkName) {
+      this.isClosing = true;
+      this.onClearMarkCallbacks();
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const resolveOnce = () => {
+          if (done) return;
+          done = true;
+          this.pendingCloseResolve = null;
+          resolve();
+        };
+        this.pendingCloseResolve = resolveOnce;
+        setTimeout(resolveOnce, 5000);
+      });
+    }
     try {
       const { WebSocket: WS } = await import('ws');
       if (this.ws.readyState === WS.OPEN) {
@@ -79,6 +99,24 @@ export class TwilioVoiceConnection implements IClientConnection {
     if (this.session) {
       await this.sessionManager.unregisterSession(this.session.id);
     }
+  }
+
+  /**
+    * Called by the host when a Twilio mark echo arrives during closing.
+    * Sends `<Hangup/>` and resolves the pending close promise if the mark name matches.
+    * @param markName - The mark name from the Twilio echo.
+    */
+  handleMarkEcho(markName: string): void {
+    if (!this.isClosing || this.pendingCloseResolve === null) return;
+    if (markName !== this.pendingMarkName) return;
+    try {
+      this.ws.send(JSON.stringify({
+        event: 'twiml',
+        streamSid: this.streamSid,
+        twiml: '<Response><Hangup/></Response>'
+      }));
+    } catch { /* ignore */ }
+    this.pendingCloseResolve();
   }
 
   /**
@@ -119,6 +157,7 @@ export class TwilioVoiceConnection implements IClientConnection {
         // Send a mark to Twilio; Twilio will echo it back once all buffered audio has played.
         // Only then do we open the next user voice input turn to avoid a race condition.
         const markName = `bonsai-turn-end-${this.markCounter++}`;
+        this.pendingMarkName = markName;
         const markFrame = JSON.stringify({ event: 'mark', streamSid: this.streamSid, mark: { name: markName } });
         this.ws.send(markFrame);
         this.onRegisterMarkCallback(markName, this.onAiTurnEnd);
