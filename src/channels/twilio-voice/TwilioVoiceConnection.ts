@@ -38,6 +38,12 @@ export class TwilioVoiceConnection implements IClientConnection {
     private readonly ws: WebSocket,
     /** The Twilio stream SID for this call, required by the Media Streams wire format. */
     private readonly streamSid: string,
+    /** The Twilio call SID, used to end the call via REST API. */
+    private readonly callSid: string,
+    /** Twilio Account SID for REST API authentication. */
+    private readonly accountSid: string,
+    /** Twilio Auth Token for REST API authentication. */
+    private readonly authToken: string,
     private readonly sessionManager: SessionManager,
     /** Called when Twilio confirms all buffered AI audio has finished playing. */
     private readonly onAiTurnEnd: () => Promise<void>,
@@ -64,11 +70,14 @@ export class TwilioVoiceConnection implements IClientConnection {
   }
 
  /**
-    * Closes the Media Streams WebSocket and unregisters the associated session.
-    * If a TTS mark is pending (audio still buffered at Twilio), defers the `<Hangup/>`
-    * until Twilio echoes the mark, ensuring all audio finishes playing before disconnect.
-    */
+     * Ends the call via Twilio REST API and closes the Media Streams WebSocket.
+     * If a TTS mark is pending (audio still buffered at Twilio), waits for the mark
+     * echo before hanging up so all audio finishes playing. Falls back to WebSocket
+     * close if the REST API call fails.
+     */
   async close(): Promise<void> {
+    logger.info({ callSid: this.callSid, sessionId: this.session?.id }, 'TwilioVoice: close() called, ending call');
+
     if (this.pendingMarkName) {
       this.isClosing = true;
       this.onClearMarkCallbacks();
@@ -84,38 +93,43 @@ export class TwilioVoiceConnection implements IClientConnection {
         setTimeout(resolveOnce, 5000);
       });
     }
+
+    try {
+      const twilioModule = await import('twilio');
+      const TwilioConstructor = (twilioModule as any).default?.Twilio ?? (twilioModule as any).Twilio ?? (twilioModule as any).default ?? twilioModule;
+      const twilioClient = new TwilioConstructor(this.accountSid, this.authToken);
+
+      await twilioClient.calls(this.callSid).update({ status: 'completed' });
+      logger.info({ callSid: this.callSid }, 'TwilioVoice: call completed via REST API');
+    } catch (error) {
+      logger.warn({ callSid: this.callSid, error }, 'TwilioVoice: REST hangup failed, falling back to WebSocket close');
+    }
+
     try {
       const { WebSocket: WS } = await import('ws');
       if (this.ws.readyState === WS.OPEN) {
-        this.ws.send(JSON.stringify({
-          event: 'twiml',
-          streamSid: this.streamSid,
-          twiml: '<Response><Hangup/></Response>'
-        }));
+        this.ws.close();
       }
     } catch {
       // ignore close errors
     }
+
     if (this.session) {
       await this.sessionManager.unregisterSession(this.session.id);
     }
+
+    logger.info({ callSid: this.callSid, sessionId: this.session?.id }, 'TwilioVoice: close() completed');
   }
 
-  /**
-    * Called by the host when a Twilio mark echo arrives during closing.
-    * Sends `<Hangup/>` and resolves the pending close promise if the mark name matches.
-    * @param markName - The mark name from the Twilio echo.
-    */
+/**
+     * Called by the host when a Twilio mark echo arrives during closing.
+     * Resolves the pending close promise so the REST API hangup can proceed.
+     * @param markName - The mark name from the Twilio echo.
+     */
   handleMarkEcho(markName: string): void {
     if (!this.isClosing || this.pendingCloseResolve === null) return;
     if (markName !== this.pendingMarkName) return;
-    try {
-      this.ws.send(JSON.stringify({
-        event: 'twiml',
-        streamSid: this.streamSid,
-        twiml: '<Response><Hangup/></Response>'
-      }));
-    } catch { /* ignore */ }
+    logger.info({ callSid: this.callSid, markName }, 'TwilioVoice: mark echo received during close, proceeding with hangup');
     this.pendingCloseResolve();
   }
 
