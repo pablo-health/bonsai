@@ -1,16 +1,36 @@
 import { EventEmitter } from 'events';
 import { RealTimeVAD } from 'avr-vad';
-import type { ServerVadConfig } from '../../http/contracts/vad';
+import type { ServerVadConfig, LegacyVadConfig, SileroVadConfig } from '../../http/contracts/vad';
 import type { AudioFormat } from '../../types/audio';
 import { isPcmFormat, pcmSampleRate } from './AudioFormatUtils';
 
 /** VAD aggressiveness mode → positive/negative speech probability thresholds. */
 const MODE_THRESHOLDS = [
-  { pos: 0.3, neg: 0.2 },  // mode 0 — permissive
-  { pos: 0.4, neg: 0.3 },  // mode 1 — moderate-low
-  { pos: 0.5, neg: 0.35 }, // mode 2 — moderate (default)
-  { pos: 0.7, neg: 0.5 },  // mode 3 — aggressive
+  { pos: 0.3, neg: 0.2 },
+  { pos: 0.4, neg: 0.3 },
+  { pos: 0.5, neg: 0.35 },
+  { pos: 0.7, neg: 0.5 },
 ] as const;
+
+/** Default values for legacy VAD configuration */
+const LEGACY_DEFAULTS = {
+  mode: 2,
+  frameDurationMs: 20,
+  silencePaddingMs: 300,
+  autoEndSilenceDurationMs: 800,
+  gracePeriodMs: 1000,
+} as const;
+
+/** Default values for Silero VAD configuration */
+const SILERO_DEFAULTS = {
+  positiveSpeechThreshold: 0.5,
+  negativeSpeechThreshold: 0.35,
+  frameSamples: 1536,
+  redemptionFrames: 8,
+  preSpeechPadFrames: 1,
+  minSpeechFrames: 3,
+  gracePeriodMs: 1000,
+} as const;
 
 /**
  * Converts a Buffer of 16-bit signed little-endian PCM samples to a Float32Array in the range [-1, 1].
@@ -50,7 +70,7 @@ function float32ToPcm16(float32: Float32Array): Buffer {
 export class VadProcessor extends EventEmitter {
   private vad: RealTimeVAD | null = null;
   private readonly sampleRate: number;
-  private readonly config: Required<ServerVadConfig>;
+  private readonly config: ServerVadConfig;
   private gracePeriodEnd: number = 0;
 
   /**
@@ -60,25 +80,29 @@ export class VadProcessor extends EventEmitter {
   constructor(sampleRate: 8000 | 16000 | 32000 | 48000, config: ServerVadConfig) {
     super();
     this.sampleRate = sampleRate;
-    this.config = {
-      mode: config.mode ?? 2,
-      frameDurationMs: config.frameDurationMs ?? 20,
-      silencePaddingMs: config.silencePaddingMs ?? 300,
-      autoEndSilenceDurationMs: config.autoEndSilenceDurationMs ?? 800,
-      gracePeriodMs: config.gracePeriodMs ?? 1000,
-    };
+    this.config = config;
   }
 
   /**
    * Asynchronously initializes the underlying RealTimeVAD model. Must be called before push().
    */
   async init(): Promise<void> {
-    const { pos, neg } = MODE_THRESHOLDS[this.config.mode];
-    const frameSamples = Math.round(this.sampleRate * this.config.frameDurationMs / 1000);
-    const redemptionFrames = Math.round(this.config.autoEndSilenceDurationMs / this.config.frameDurationMs);
-    const preSpeechPadFrames = Math.round(this.config.silencePaddingMs / this.config.frameDurationMs);
+    if (this.config.algorithm === 'silero') {
+      await this.initSilero(this.config);
+    } else {
+      await this.initLegacy(this.config);
+    }
+  }
 
-    this.gracePeriodEnd = Date.now() + this.config.gracePeriodMs;
+  async initLegacy(config: LegacyVadConfig): Promise<void> {
+    const mode = config.mode ?? LEGACY_DEFAULTS.mode;
+    const frameDurationMs = config.frameDurationMs ?? LEGACY_DEFAULTS.frameDurationMs;
+    const { pos, neg } = MODE_THRESHOLDS[mode];
+    const frameSamples = Math.round(this.sampleRate * frameDurationMs / 1000);
+    const redemptionFrames = Math.round((config.autoEndSilenceDurationMs ?? LEGACY_DEFAULTS.autoEndSilenceDurationMs) / frameDurationMs);
+    const preSpeechPadFrames = Math.round((config.silencePaddingMs ?? LEGACY_DEFAULTS.silencePaddingMs) / frameDurationMs);
+
+    this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? LEGACY_DEFAULTS.gracePeriodMs);
     this.vad = await RealTimeVAD.new({
       sampleRate: this.sampleRate,
       positiveSpeechThreshold: pos,
@@ -86,6 +110,32 @@ export class VadProcessor extends EventEmitter {
       frameSamples,
       redemptionFrames,
       preSpeechPadFrames,
+      onSpeechStart: () => {
+        if (Date.now() < this.gracePeriodEnd) return;
+        this.emit('speech_start');
+      },
+      onSpeechEnd: (audio: Float32Array) => {
+        this.emit('data', float32ToPcm16(audio));
+        this.emit('end_of_utterance');
+      },
+      onFrameProcessed: () => {},
+      onVADMisfire: () => {},
+    });
+    this.vad.start();
+  }
+
+  async initSilero(config: SileroVadConfig): Promise<void> {
+    this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? SILERO_DEFAULTS.gracePeriodMs);
+    this.vad = await RealTimeVAD.new({
+      sampleRate: this.sampleRate,
+      model: config.model,
+      positiveSpeechThreshold: config.positiveSpeechThreshold ?? SILERO_DEFAULTS.positiveSpeechThreshold,
+      negativeSpeechThreshold: config.negativeSpeechThreshold ?? SILERO_DEFAULTS.negativeSpeechThreshold,
+      frameSamples: config.frameSamples ?? SILERO_DEFAULTS.frameSamples,
+      redemptionFrames: config.redemptionFrames ?? SILERO_DEFAULTS.redemptionFrames,
+      preSpeechPadFrames: config.preSpeechPadFrames ?? SILERO_DEFAULTS.preSpeechPadFrames,
+      minSpeechFrames: config.minSpeechFrames ?? SILERO_DEFAULTS.minSpeechFrames,
+      submitUserSpeechOnPause: config.submitUserSpeechOnPause,
       onSpeechStart: () => {
         if (Date.now() < this.gracePeriodEnd) return;
         this.emit('speech_start');

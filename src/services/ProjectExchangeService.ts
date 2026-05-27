@@ -114,7 +114,10 @@ export class ProjectExchangeService extends BaseService {
       settings: project.asrConfig.settings as any,
       unintelligiblePlaceholder: project.asrConfig.unintelligiblePlaceholder,
       voiceActivityDetection: project.asrConfig.voiceActivityDetection,
-      serverVad: project.asrConfig.serverVad,
+      serverVad: project.asrConfig.serverVad ? {
+        algorithm: project.asrConfig.serverVad.algorithm ?? 'legacy',
+        ...project.asrConfig.serverVad,
+      } : undefined,
     } : undefined;
 
     // Transform storageConfig
