@@ -91,11 +91,20 @@ export const projects = pgTable('projects', {
     unintelligiblePlaceholder?: string;
     voiceActivityDetection?: boolean;
     serverVad?: {
+      algorithm?: 'legacy' | 'silero';
       mode?: number;
       frameDurationMs?: 10 | 20 | 30;
       silencePaddingMs?: number;
       autoEndSilenceDurationMs?: number;
       gracePeriodMs?: number;
+      model?: 'v5' | 'legacy';
+      positiveSpeechThreshold?: number;
+      negativeSpeechThreshold?: number;
+      frameSamples?: number;
+      redemptionFrames?: number;
+      preSpeechPadFrames?: number;
+      minSpeechFrames?: number;
+      submitUserSpeechOnPause?: boolean;
     };
   }>(),
   acceptVoice: boolean('accept_voice').notNull().default(true),

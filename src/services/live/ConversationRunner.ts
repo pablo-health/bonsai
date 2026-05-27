@@ -45,6 +45,7 @@ import type { IAudioConverter } from '../audio/IAudioConverter';
 import type { AudioFormat } from '../../types/audio';
 import { AudioConverterFactory } from '../audio/AudioConverterFactory';
 import { VadProcessor } from '../audio/VadProcessor';
+import type { ServerVadConfig } from '../../http/contracts/vad';
 import { SampleCopyDistributor } from "./SampleCopyDistributor";
 import { SpeechCompletionDetector } from "./SpeechCompletionDetector";
 
@@ -1804,7 +1805,10 @@ export class ConversationRunner {
       return;
     }
 
-    this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, serverVadConfig);
+    this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, {
+        algorithm: serverVadConfig.algorithm ?? 'legacy',
+        ...serverVadConfig,
+      } as ServerVadConfig);
     await this.vadProcessor.init();
 
     // Serialize all VAD event handlers via a promise chain. This prevents the race where
@@ -1823,7 +1827,7 @@ export class ConversationRunner {
     // via the inbound converter / receiveUserVoiceData path while state === 'receiving_user_voice'.
     this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent(() => this.handleVadEndOfUtterance()));
 
-    logger.info({ conversationId, asrFormat, sampleRate, mode: serverVadConfig.mode ?? 2 }, `Server VAD processor initialized for conversation ${conversationId}`);
+    logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
   }
 
   /**

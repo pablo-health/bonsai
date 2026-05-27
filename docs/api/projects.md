@@ -164,13 +164,37 @@ DELETE /api/projects/:id
 
 When `serverVad` is present in `asrConfig`, the server continuously monitors incoming audio for speech and manages the ASR turn lifecycle autonomously. Clients do not need to call `start_user_voice_input` or `end_user_voice_input` — they simply send audio via `send_user_voice_chunk` and let the server detect utterance boundaries.
 
+The `algorithm` field determines which VAD configuration variant is used. Existing configurations without `algorithm` are automatically treated as `legacy`.
+
+### Legacy Algorithm (`algorithm: "legacy"`)
+
+Millisecond-based parameters with mode-based threshold selection. This is the original configuration format.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `algorithm` | `"legacy"` | Yes | Selects the legacy VAD algorithm |
 | `mode` | `integer` (0–3) | No | VAD aggressiveness. Higher values reduce false positives at the cost of cutting off soft speech. Default: `2`. |
 | `frameDurationMs` | `10` \| `20` \| `30` | No | Duration of each VAD analysis frame in milliseconds. Default: `20`. |
 | `silencePaddingMs` | `integer` (0–1000) | No | Milliseconds of audio to include before the detected speech start (pre-roll). Default: `300`. |
 | `autoEndSilenceDurationMs` | `integer` (100–5000) | No | Milliseconds of silence after speech that triggers end-of-utterance detection. Default: `800`. |
 | `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Prevents false positives from phone connection noise. Default: `1000`. |
+
+### Silero Algorithm (`algorithm: "silero"`)
+
+Frame-based parameters that map directly to the underlying Silero VAD processor settings. This provides fine-grained control over all VAD behavior.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `algorithm` | `"silero"` | Yes | Selects the Silero VAD algorithm |
+| `model` | `"v5"` \| `"legacy"` | No | Silero VAD model version. Default: `v5`. |
+| `positiveSpeechThreshold` | `number` (0–1) | No | Probability threshold above which a frame is considered speech. Default: `0.5`. |
+| `negativeSpeechThreshold` | `number` (0–1) | No | Probability threshold below which a frame is considered silence. Default: `0.35`. |
+| `frameSamples` | `integer` | No | Number of audio samples per VAD frame. Silero was trained on 512, 1024, 1536 samples at 16kHz. Default: `1536`. |
+| `redemptionFrames` | `integer` | No | Number of silent frames after speech before end-of-utterance is triggered. Default: `8`. |
+| `preSpeechPadFrames` | `integer` | No | Number of frames of pre-roll silence prepended to the audio segment on speech start. Default: `1`. |
+| `minSpeechFrames` | `integer` | No | Minimum frames required to consider a segment as speech. Default: `3`. |
+| `submitUserSpeechOnPause` | `boolean` | No | Whether to submit partial speech when VAD is paused. Default: library default. |
+| `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Default: `1000`. |
 
 ## Storage Config
 
