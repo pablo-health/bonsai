@@ -200,9 +200,22 @@ export class TwilioMessagingChannelHost {
     const phoneKey = `${projectId}:${senderNumber}`;
     const existingSessionId = this.phoneSessionMap.get(phoneKey);
 
-    if (existingSessionId) {
-      this.scheduleTimeout(existingSessionId, phoneKey);
-      await this.dispatchTextInput(existingSessionId, messageText);
+    let sessionId = existingSessionId;
+    if (sessionId) {
+      const existing = this.sessionManager.getSession(sessionId);
+      if (!existing?.conversationId) {
+        logger.info({ sessionId }, 'Twilio Messaging: existing session inactive, creating new session');
+        this.phoneSessionMap.delete(phoneKey);
+        const timer = this.sessionTimeoutMap.get(sessionId);
+        if (timer) clearTimeout(timer);
+        this.sessionTimeoutMap.delete(sessionId);
+        sessionId = undefined;
+      }
+    }
+
+    if (sessionId) {
+      this.scheduleTimeout(sessionId, phoneKey);
+      await this.dispatchTextInput(sessionId, messageText);
     } else {
       const connection = new TwilioMessagingConnection(senderNumber, recipientNumber, accountSid, authToken, this.sessionManager);
       const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
