@@ -3,6 +3,7 @@ import { RealTimeVAD } from 'avr-vad';
 import type { ServerVadConfig, LegacyVadConfig, SileroVadConfig } from '../../http/contracts/vad';
 import type { AudioFormat } from '../../types/audio';
 import { isPcmFormat, pcmSampleRate } from './AudioFormatUtils';
+import logger from '../../utils/logger';
 
 /** VAD aggressiveness mode → positive/negative speech probability thresholds. */
 const MODE_THRESHOLDS = [
@@ -87,6 +88,7 @@ export class VadProcessor extends EventEmitter {
    * Asynchronously initializes the underlying RealTimeVAD model. Must be called before push().
    */
   async init(): Promise<void> {
+    logger.info({ sampleRate: this.sampleRate, config: this.config }, 'Initializing VadProcessor with configuration');
     if (this.config.algorithm === 'silero') {
       await this.initSilero(this.config);
     } else {
