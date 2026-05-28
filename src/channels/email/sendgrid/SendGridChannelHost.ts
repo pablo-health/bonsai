@@ -23,6 +23,7 @@ import { SecretRefUtils } from '../../../services/secrets/SecretRefUtils';
 import { sendGridSendBodySchema, sendGridSendResponseSchema } from '../../../http/contracts/sendgrid-outgoing';
 import type { SendGridSendResponse } from '../../../http/contracts/sendgrid-outgoing';
 import { ThreadIdResolver } from '../shared/ThreadIdResolver';
+import { NotFoundError } from '../../../errors';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -158,7 +159,7 @@ export class SendGridChannelHost {
       this.scheduleTimeout(existingSessionId, emailKey);
       await this.dispatchTextInput(existingSessionId, messageText);
     } else {
-      const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, apiKey);
+      const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey);
       const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
       const sessionId = this.sessionManager.registerSession(connection);
       const session = this.sessionManager.getSession(sessionId);
@@ -227,14 +228,47 @@ export class SendGridChannelHost {
         return;
       }
     }
+    const resolvedAgentId = body.agentId ?? queryAgentId;
 
-    await this.userService.ensureUserExists(projectId, body.to);
+    try {
+      await this.userService.getUserById(projectId, body.to);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        const project = await this.projectService.getProjectById(projectId);
+        if (!project.autoCreateUsers) {
+          res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
+          return;
+        }
+        await this.userService.ensureUserExists(projectId, body.to);
+      } else {
+        throw err;
+      }
+    }
 
     if (body.userProfile && Object.keys(body.userProfile).length > 0) {
       await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
     }
 
-    const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
+    const subject = body.subject ?? 'New Conversation';
+    const connection = new SendGridConnection(
+      body.to,
+      body.fromAddress ?? fromAddress,
+      'messageId',
+      this.sessionManager,
+      subject,
+      apiKey,
+    );
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    const emailKey = `${projectId}:${body.to}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+
+    logger.info({ sessionId, projectId, to: body.to }, 'SendGrid: outgoing virtual session created');
+
     const conversation = await this.conversationService.createConversation({
       projectId,
       userId: body.to,
@@ -245,33 +279,12 @@ export class SendGridChannelHost {
       metadata: body.metadata ?? null,
     });
 
-    const sgMail = await import('@sendgrid/mail');
-    sgMail.default.setApiKey(apiKey);
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
-    const subject = body.subject ?? 'New Conversation';
-    const mail = {
-      to: [{ email: body.to }],
-      from: { email: body.fromAddress ?? fromAddress },
-      subject,
-      text: 'Starting a new conversation...',
-    };
+    logger.info({ projectId, conversationId: conversation.id, to: body.to }, 'SendGrid: outgoing conversation started');
 
-    let messageId: string;
-    try {
-      const result = await sgMail.default.send(mail);
-      messageId = (result[0]?.headers as Record<string, string>)?.['message-id'] ?? `sg_${Date.now()}`;
-    } catch (error) {
-      logger.error({ error, projectId, to: body.to }, 'SendGrid: failed to send outbound email');
-      try {
-        await this.conversationService.failConversation(projectId, conversation.id, 'Failed to send outbound email');
-      } catch { /* best effort */ }
-      res.status(502).json({ error: 'Failed to send outbound email via SendGrid API' });
-      return;
-    }
-
-    logger.info({ projectId, conversationId: conversation.id, messageId, to: body.to }, 'SendGrid: outbound email sent');
-
-    const response: SendGridSendResponse = { messageId, conversationId: conversation.id };
+    const response: SendGridSendResponse = { conversationId: conversation.id };
     res.status(201).json(response);
   }
 

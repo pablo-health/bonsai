@@ -21,6 +21,7 @@ import { ConversationService } from '../../services/ConversationService';
 import { ProjectService } from '../../services/ProjectService';
 import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
+import { NotFoundError } from '../../errors';
 import { whatsAppSendBodySchema, whatsAppSendResponseSchema } from '../../http/contracts/whatsapp-outgoing';
 import type { WhatsAppSendResponse } from '../../http/contracts/whatsapp-outgoing';
 
@@ -389,8 +390,21 @@ export class WhatsAppChannelHost {
       }
     }
 
-    // Ensure the user exists (create if not)
-    await this.userService.ensureUserExists(projectId, body.to);
+    // Ensure the user exists (create if not, only if project allows it)
+    try {
+      await this.userService.getUserById(projectId, body.to);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        const project = await this.projectService.getProjectById(projectId);
+        if (!project.autoCreateUsers) {
+          res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
+          return;
+        }
+        await this.userService.ensureUserExists(projectId, body.to);
+      } else {
+        throw err;
+      }
+    }
 
     // Deep-merge injected userProfile into existing user profile
     if (body.userProfile && Object.keys(body.userProfile).length > 0) {

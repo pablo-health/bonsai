@@ -14,6 +14,8 @@ export class SesConnection extends EmailConnectionBase {
     fromAddress: string,
     threadingStrategy: 'messageId' | 'senderSubject',
     sessionManager: SessionManager,
+    /** Subject line for outgoing emails. */
+    private readonly subject: string,
     /** AWS Access Key ID. */
     private readonly accessKeyId: string,
     /** AWS Secret Access Key. */
@@ -48,7 +50,7 @@ export class SesConnection extends EmailConnectionBase {
 
     await this.sendEmail(
       this.toAddress,
-      'Re: Conversation',
+      this.subject,
       body,
     );
   }

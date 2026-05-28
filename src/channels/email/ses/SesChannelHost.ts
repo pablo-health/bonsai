@@ -23,7 +23,7 @@ import { SecretRefUtils } from '../../../services/secrets/SecretRefUtils';
 import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contracts/ses-outgoing';
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { ThreadIdResolver } from '../shared/ThreadIdResolver';
-import { SESClient, SendRawEmailCommand } from '@aws-sdk/client-ses';
+import { NotFoundError } from '../../../errors';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -202,6 +202,7 @@ export class SesChannelHost {
         fromAddress,
         threadingStrategy ?? 'messageId',
         this.sessionManager,
+        commonHeaders.subject ?? 'Re: Conversation',
         accessKeyId,
         secretAccessKey,
         region,
@@ -274,14 +275,49 @@ export class SesChannelHost {
         return;
       }
     }
+    const resolvedAgentId = body.agentId ?? queryAgentId;
 
-    await this.userService.ensureUserExists(projectId, body.to);
+    try {
+      await this.userService.getUserById(projectId, body.to);
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        const project = await this.projectService.getProjectById(projectId);
+        if (!project.autoCreateUsers) {
+          res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
+          return;
+        }
+        await this.userService.ensureUserExists(projectId, body.to);
+      } else {
+        throw err;
+      }
+    }
 
     if (body.userProfile && Object.keys(body.userProfile).length > 0) {
       await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
     }
 
-    const sessionId = `session_${Math.random().toString(36).substr(2, 9)}`;
+    const subject = body.subject ?? 'New Conversation';
+    const connection = new SesConnection(
+      body.to,
+      body.fromAddress ?? fromAddress,
+      'messageId',
+      this.sessionManager,
+      subject,
+      accessKeyId,
+      secretAccessKey,
+      region,
+    );
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    const emailKey = `${projectId}:${body.to}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+
+    logger.info({ sessionId, projectId, to: body.to }, 'SES: outgoing virtual session created');
+
     const conversation = await this.conversationService.createConversation({
       projectId,
       userId: body.to,
@@ -292,30 +328,12 @@ export class SesChannelHost {
       metadata: body.metadata ?? null,
     });
 
-    const sesClient = new SESClient({
-      region,
-      credentials: { accessKeyId, secretAccessKey },
-    });
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
-    const subject = body.subject ?? 'New Conversation';
-    const rawEmailString = `From: ${body.fromAddress ?? fromAddress}\r\nTo: ${body.to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nStarting a new conversation...`;
+    logger.info({ projectId, conversationId: conversation.id, to: body.to }, 'SES: outgoing conversation started');
 
-    let messageId: string;
-    try {
-      const result = await sesClient.send(new SendRawEmailCommand({ RawMessage: { Data: Buffer.from(rawEmailString) } }));
-      messageId = result.MessageId ?? `ses_${Date.now()}`;
-    } catch (error) {
-      logger.error({ error, projectId, to: body.to }, 'SES: failed to send outbound email');
-      try {
-        await this.conversationService.failConversation(projectId, conversation.id, 'Failed to send outbound email');
-      } catch { /* best effort */ }
-      res.status(502).json({ error: 'Failed to send outbound email via SES API' });
-      return;
-    }
-
-    logger.info({ projectId, conversationId: conversation.id, messageId, to: body.to }, 'SES: outbound email sent');
-
-    const response: SesSendResponse = { messageId, conversationId: conversation.id };
+    const response: SesSendResponse = { conversationId: conversation.id };
     res.status(201).json(response);
   }
 

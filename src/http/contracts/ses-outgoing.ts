@@ -18,7 +18,6 @@ export const sesSendBodySchema = z.object({
 });
 
 export const sesSendResponseSchema = z.object({
-  messageId: z.string().describe('SES message ID of the sent email'),
   conversationId: z.string().describe('ID of the pre-created conversation record'),
 });
 

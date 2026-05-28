@@ -12,6 +12,8 @@ export class SendGridConnection extends EmailConnectionBase {
     fromAddress: string,
     threadingStrategy: 'messageId' | 'senderSubject',
     sessionManager: SessionManager,
+    /** Subject line for outgoing emails. */
+    private readonly subject: string,
     /** SendGrid API key for authentication. */
     private readonly apiKey: string,
   ) {
@@ -38,7 +40,7 @@ export class SendGridConnection extends EmailConnectionBase {
 
     await this.sendEmail(
       this.toAddress,
-      'Re: Conversation',
+      this.subject,
       body,
     );
   }

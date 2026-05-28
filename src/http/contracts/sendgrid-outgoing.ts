@@ -18,7 +18,6 @@ export const sendGridSendBodySchema = z.object({
 });
 
 export const sendGridSendResponseSchema = z.object({
-  messageId: z.string().describe('SendGrid message ID of the sent email'),
   conversationId: z.string().describe('ID of the pre-created conversation record'),
 });
 
