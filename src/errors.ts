@@ -100,6 +100,16 @@ export class ContentModerationError extends Error {
 }
 
 /**
+ * Error thrown when a benchmark runner iteration fails
+ */
+export class BenchmarkExecutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BenchmarkExecutionError';
+  }
+}
+
+/**
  * Error thrown when a rate limit has been exceeded
  */
 export class TooManyRequestsError extends Error {

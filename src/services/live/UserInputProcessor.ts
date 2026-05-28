@@ -91,7 +91,8 @@ export class UserInputProcessor {
           classifier.classifier.id,
           userInput,
           originalUserInput,
-          classifierKnowledgeCategories
+          classifierKnowledgeCategories,
+          session.clientConnection.connectionType,
         );
         return this.classifyTextInput(session, classifier, classifierContext);
       });
@@ -99,7 +100,7 @@ export class UserInputProcessor {
       // Build guardrail classification promise if a guardrail classifier is configured and there are active guardrails
       const guardrailPromise = guardrailClassifier && guardrails.length > 0
         ? (async () => {
-          const guardrailContext = await this.contextBuilder.buildContextForGuardrailClassifier(conversation, stage, guardrails, userInput, originalUserInput);
+          const guardrailContext = await this.contextBuilder.buildContextForGuardrailClassifier(conversation, stage, guardrails, userInput, originalUserInput, session.clientConnection.connectionType);
           return this.classifyTextInput(session, guardrailClassifier, guardrailContext);
         })()
         : Promise.resolve(null);
@@ -107,7 +108,7 @@ export class UserInputProcessor {
       // Build sample copy classification promise if a classifier is configured and there are applicable sample copies for this stage
       const sampleCopyPromise = sampleCopyClassifier && sampleCopies.length > 0
         ? (async () => {
-          const sampleCopyContext = await this.contextBuilder.buildContextForSampleCopyClassifier(conversation, stage, sampleCopies, userInput, originalUserInput);
+          const sampleCopyContext = await this.contextBuilder.buildContextForSampleCopyClassifier(conversation, stage, sampleCopies, userInput, originalUserInput, session.clientConnection.connectionType);
           return this.classifyCopyForInput(session, sampleCopyContext);
         })()
         : Promise.resolve(null);

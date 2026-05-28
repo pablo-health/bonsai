@@ -111,7 +111,10 @@ export class StartConversationHandler implements ClientMessageHandler<CALStartCo
       const profileTimezone = user.profile.timezone as string | undefined;
       const resolvedTimezone = message.timezone ?? profileTimezone ?? project.timezone ?? null;
 
-      const conversation = await this.conversationService.createConversation({ projectId: stage.projectId, userId: message.userId, stageId: resolvedStageId, sessionId: context.session.id, status: 'initialized', metadata: resolvedTimezone ? { timezone: resolvedTimezone } : null });
+      const initialStageVars = message.stageVariables && Object.keys(message.stageVariables).length > 0
+        ? { [resolvedStageId]: message.stageVariables }
+        : undefined;
+      const conversation = await this.conversationService.createConversation({ projectId: stage.projectId, userId: message.userId, stageId: resolvedStageId, sessionId: context.session.id, status: 'initialized', stageVars: initialStageVars, metadata: resolvedTimezone ? { timezone: resolvedTimezone } : null });
       conversationId = conversation.id;
 
       await this.sessionManager.attachConversationToSession(context.session.id, conversationId);

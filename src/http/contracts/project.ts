@@ -13,6 +13,7 @@ import { speechmaticsAsrSettingsSchema } from '../../services/providers/asr/Spee
 import { listParamsSchema } from './common';
 import { serverVadConfigSchema } from './vad';
 import { costManagementConfigSchema } from './costManagement';
+import { audioFormatValues } from '../../types/audio';
 
 extendZodWithOpenApi(z);
 
@@ -74,6 +75,18 @@ export const sampleCopyConfigSchema = z.object({
 export type SampleCopyConfig = z.infer<typeof sampleCopyConfigSchema>;
 
 /**
+ * Schema for recording configuration
+ */
+export const recordingConfigSchema = z.object({
+  enabled: z.boolean().describe('Whether audio recording is enabled for this project'),
+  recordInput: z.boolean().optional().default(true).describe('Whether to record user voice input. Defaults to true.'),
+  recordOutput: z.boolean().optional().default(true).describe('Whether to record AI voice output. Defaults to true.'),
+  format: z.enum(audioFormatValues).optional().default('pcm_16000').describe('Audio format for saved recordings. Defaults to pcm_16000.'),
+}).openapi('RecordingConfig').optional().describe('Audio recording configuration for conversation debugging. When enabled, records full conversation audio to project storage.');
+
+export type RecordingConfig = z.infer<typeof recordingConfigSchema>;
+
+/**
  * Schema for ASR provider settings (union of all ASR provider settings)
  */
 export const asrSettingsSchema = z.union([
@@ -117,6 +130,7 @@ export const createProjectSchema = z.object({
   sampleCopyConfig: sampleCopyConfigSchema.describe('Sample copy configuration including the default classifier used to evaluate prompt triggers.'),
   startingStageId: z.string().nullable().optional().describe('ID of the stage to start new conversations at when no stageId is provided at conversation start time. Acts as the project-level default starting stage.'),
   conversationTimeoutSeconds: z.number().int().min(0).optional().describe('Timeout in seconds for active conversations with no activity. Set to 0 or omit to disable. Conversations that have been inactive for longer than this value will be automatically aborted.'),
+  recordingConfig: recordingConfigSchema.describe('Audio recording configuration for conversation debugging'),
 });
 
 export type CreateProjectRequest = z.infer<typeof createProjectSchema>;
@@ -145,6 +159,7 @@ export const updateProjectSchema = z.object({
   sampleCopyConfig: sampleCopyConfigSchema.nullable().describe('Updated sample copy configuration. Set to null to clear.'),
   startingStageId: z.string().nullable().optional().describe('Updated ID of the stage to start new conversations at when no stageId is provided at conversation start time. Set to null to remove the default starting stage.'),
   conversationTimeoutSeconds: z.number().int().min(0).nullable().optional().describe('Timeout in seconds for active conversations with no activity. Set to 0 or null to disable. Conversations that have been inactive for longer than this value will be automatically aborted.'),
+  recordingConfig: recordingConfigSchema.nullable().describe('Updated audio recording configuration. Set to null to disable.'),
   version: z.number().describe('The current version number for optimistic locking'),
 });
 
@@ -173,6 +188,7 @@ export const projectResponseSchema = z.object({
   sampleCopyConfig: sampleCopyConfigSchema.nullable().describe('Sample copy configuration including the default classifier used to evaluate prompt triggers.'),
   startingStageId: z.string().nullable().describe('ID of the stage to start new conversations at when no stageId is provided at conversation start time. Null means no default is set.'),
   conversationTimeoutSeconds: z.number().int().nullable().describe('Timeout in seconds for active conversations with no activity. Null or 0 means no timeout.'),
+  recordingConfig: recordingConfigSchema.nullable().describe('Audio recording configuration for conversation debugging'),
   version: z.number().describe('The version number of the project'),
   createdAt: z.coerce.date().describe('The timestamp when the project was created'),
   updatedAt: z.coerce.date().describe('The timestamp when the project was last updated'),

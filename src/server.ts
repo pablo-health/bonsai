@@ -59,6 +59,11 @@ import { TesterController } from './http/controllers/TesterController';
 import { ScenarioController } from './http/controllers/ScenarioController';
 import { ScenarioRunController } from './http/controllers/ScenarioRunController';
 import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
+import { BenchmarkSuiteController } from './http/controllers/BenchmarkSuiteController';
+import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkProviderConfigController';
+import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
+import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
+import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
 
 // Register the OpenAPI spec provider before the IoC container is used.
 // This breaks the circular module dependency that would arise from VersionService
@@ -132,6 +137,14 @@ export function createApp(): express.Application {
     const schemaUrl = new URL('../schemas/websocket-contracts.json', import.meta.url);
     const schemaPath = fileURLToPath(schemaUrl);
     res.sendFile(schemaPath);
+  });
+
+  // LLM-ingestible guide endpoint
+  app.get('/llms.txt', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    const llmsUrl = new URL('../llms.txt', import.meta.url);
+    const llmsPath = fileURLToPath(llmsUrl);
+    res.sendFile(llmsPath);
   });
 
   // Unauthenticated system endpoints — registered before auth middleware intentionally
@@ -252,6 +265,11 @@ export function createApp(): express.Application {
   const scenarioConversationController = container.resolve(ScenarioConversationController);
   scenarioConversationController.registerRoutes(app);
 
+  container.resolve(BenchmarkSuiteController).registerRoutes(app);
+  container.resolve(BenchmarkProviderConfigController).registerRoutes(app);
+  container.resolve(BenchmarkConfigController).registerRoutes(app);
+  container.resolve(BenchmarkRunController).registerRoutes(app);
+
   container.resolve(WebRTCChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
@@ -262,6 +280,7 @@ export function createApp(): express.Application {
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();
+  container.resolve(BenchmarkExecutorService).start();
 
   app.use(errorHandler);
 

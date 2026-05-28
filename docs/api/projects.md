@@ -35,6 +35,7 @@ Content-Type: application/json
 | `autoCreateUsers` | `boolean` | No (default: `false`) | When enabled, users are automatically created on first WebSocket connection if they do not exist |
 | `defaultGuardrailClassifierId` | `string` | No | ID of the classifier used to evaluate guardrails for all conversations in this project |
 | `startingStageId` | `string` | No | ID of the stage to start new conversations at when no `stageId` is provided at conversation start time. Acts as the project-level default starting stage. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) | No | Audio recording configuration for conversation debugging |
 
 **Response** `201 Created` — [Project Response](#project-response)
 
@@ -101,6 +102,7 @@ All fields from the create body are optional. `version` is required for optimist
 | `autoCreateUsers` | `boolean` | No | Updated auto-create users setting |
 | `defaultGuardrailClassifierId` | `string` or `null` | No | Updated guardrail classifier ID. Set to `null` to disable. |
 | `startingStageId` | `string` or `null` | No | Updated default starting stage ID. Set to `null` to remove. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) or `null` | No | Updated recording configuration. Set to `null` to disable. |
 
 **Response** `200 OK` — [Project Response](#project-response)
 
@@ -141,6 +143,7 @@ DELETE /api/projects/:id
 | `autoCreateUsers` | `boolean` | No | Whether users are auto-created on first WebSocket connection |
 | `defaultGuardrailClassifierId` | `string` | Yes | Classifier ID for evaluating guardrails |
 | `startingStageId` | `string` | Yes | Default starting stage ID. `null` means no project-level default is set. |
+| `recordingConfig` | [`RecordingConfig`](#recording-config) | Yes | Audio recording configuration. `null` means recording is not configured. |
 | `version` | `integer` | No | Version number |
 | `createdAt` | `string` | No | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | No | ISO 8601 last update timestamp |
@@ -161,12 +164,37 @@ DELETE /api/projects/:id
 
 When `serverVad` is present in `asrConfig`, the server continuously monitors incoming audio for speech and manages the ASR turn lifecycle autonomously. Clients do not need to call `start_user_voice_input` or `end_user_voice_input` — they simply send audio via `send_user_voice_chunk` and let the server detect utterance boundaries.
 
+The `algorithm` field determines which VAD configuration variant is used. Existing configurations without `algorithm` are automatically treated as `legacy`.
+
+### Legacy Algorithm (`algorithm: "legacy"`)
+
+Millisecond-based parameters with mode-based threshold selection. This is the original configuration format.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `algorithm` | `"legacy"` | Yes | Selects the legacy VAD algorithm |
 | `mode` | `integer` (0–3) | No | VAD aggressiveness. Higher values reduce false positives at the cost of cutting off soft speech. Default: `2`. |
 | `frameDurationMs` | `10` \| `20` \| `30` | No | Duration of each VAD analysis frame in milliseconds. Default: `20`. |
 | `silencePaddingMs` | `integer` (0–1000) | No | Milliseconds of audio to include before the detected speech start (pre-roll). Default: `300`. |
 | `autoEndSilenceDurationMs` | `integer` (100–5000) | No | Milliseconds of silence after speech that triggers end-of-utterance detection. Default: `800`. |
+| `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Prevents false positives from phone connection noise. Default: `1000`. |
+
+### Silero Algorithm (`algorithm: "silero"`)
+
+Frame-based parameters that map directly to the underlying Silero VAD processor settings. This provides fine-grained control over all VAD behavior.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `algorithm` | `"silero"` | Yes | Selects the Silero VAD algorithm |
+| `model` | `"v5"` \| `"legacy"` | No | Silero VAD model version. Default: `v5`. |
+| `positiveSpeechThreshold` | `number` (0–1) | No | Probability threshold above which a frame is considered speech. Default: `0.5`. |
+| `negativeSpeechThreshold` | `number` (0–1) | No | Probability threshold below which a frame is considered silence. Default: `0.35`. |
+| `frameSamples` | `integer` | No | Number of audio samples per VAD frame. Silero was trained on 512, 1024, 1536 samples at 16kHz. Default: `1536`. |
+| `redemptionFrames` | `integer` | No | Number of silent frames after speech before end-of-utterance is triggered. Default: `8`. |
+| `preSpeechPadFrames` | `integer` | No | Number of frames of pre-roll silence prepended to the audio segment on speech start. Default: `1`. |
+| `minSpeechFrames` | `integer` | No | Minimum frames required to consider a segment as speech. Default: `3`. |
+| `submitUserSpeechOnPause` | `boolean` | No | Whether to submit partial speech when VAD is paused. Default: library default. |
+| `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Default: `1000`. |
 
 ## Storage Config
 
@@ -194,6 +222,17 @@ Describes a single field in a typed schema. Used in `userProfileVariableDescript
 | `llmProviderId` | `string` | Yes | ID of the LLM provider used for moderation (must support moderation API, e.g. OpenAI or Mistral) |
 | `blockedCategories` | `string[]` | No | List of category names that should cause the input to be blocked. If omitted or empty, any flagged category will block the input. Category names are provider-specific. |
 | `mode` | `string` | No | Execution mode: `strict` (default) or `standard`. In `strict` mode, moderation runs before any other processing. In `standard` mode, moderation runs in parallel with classification after filler generation, reducing latency. See [Content Moderation](../guide/moderation#moderation-mode). |
+
+## Recording Config
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | `boolean` | Yes | Whether audio recording is enabled for this project |
+| `recordInput` | `boolean` | No (default: `true`) | Whether to record user voice input |
+| `recordOutput` | `boolean` | No (default: `true`) | Whether to record AI voice output |
+| `format` | `string` | No (default: `pcm_16000`) | Audio format for saved recordings (e.g. `pcm_16000`, `pcm_48000`, `g711_ulaw`, `opus`) |
+
+When enabled, two separate audio files are produced per conversation: `user_voice` and `ai_voice`. Source audio is automatically converted to the configured recording format. Recordings are uploaded as conversation artifacts to the project's configured storage provider.
 
 ## Archive Project
 
