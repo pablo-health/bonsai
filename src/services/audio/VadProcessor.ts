@@ -26,7 +26,7 @@ const LEGACY_DEFAULTS = {
 const SILERO_DEFAULTS = {
   positiveSpeechThreshold: 0.5,
   negativeSpeechThreshold: 0.35,
-  frameSamples: 1536,
+  frameSamples: 512,
   redemptionFrames: 8,
   preSpeechPadFrames: 1,
   minSpeechFrames: 3,
@@ -105,13 +105,17 @@ export class VadProcessor extends EventEmitter {
     const preSpeechPadFrames = Math.round((config.silencePaddingMs ?? LEGACY_DEFAULTS.silencePaddingMs) / frameDurationMs);
 
     this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? LEGACY_DEFAULTS.gracePeriodMs);
-    this.vad = await RealTimeVAD.new({
+    const legacyOptions = {
       sampleRate: this.sampleRate,
       positiveSpeechThreshold: pos,
       negativeSpeechThreshold: neg,
       frameSamples,
       redemptionFrames,
       preSpeechPadFrames,
+    };
+    logger.info({ options: legacyOptions }, 'RealTimeVAD init (legacy)');
+    this.vad = await RealTimeVAD.new({
+      ...legacyOptions,
       onSpeechStart: () => {
         if (Date.now() < this.gracePeriodEnd) return;
         this.emit('speech_start');
@@ -127,8 +131,8 @@ export class VadProcessor extends EventEmitter {
   }
 
   async initSilero(config: SileroVadConfig): Promise<void> {
-    this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? SILERO_DEFAULTS.gracePeriodMs);
-    this.vad = await RealTimeVAD.new({
+   this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? SILERO_DEFAULTS.gracePeriodMs);
+    const sileroOptions = {
       sampleRate: this.sampleRate,
       model: config.model,
       positiveSpeechThreshold: config.positiveSpeechThreshold ?? SILERO_DEFAULTS.positiveSpeechThreshold,
@@ -138,6 +142,10 @@ export class VadProcessor extends EventEmitter {
       preSpeechPadFrames: config.preSpeechPadFrames ?? SILERO_DEFAULTS.preSpeechPadFrames,
       minSpeechFrames: config.minSpeechFrames ?? SILERO_DEFAULTS.minSpeechFrames,
       submitUserSpeechOnPause: config.submitUserSpeechOnPause,
+    };
+    logger.info({ options: sileroOptions }, 'RealTimeVAD init (silero)');
+    this.vad = await RealTimeVAD.new({
+      ...sileroOptions,
       onSpeechStart: () => {
         if (Date.now() < this.gracePeriodEnd) return;
         this.emit('speech_start');
