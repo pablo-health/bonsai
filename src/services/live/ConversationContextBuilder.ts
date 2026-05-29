@@ -383,9 +383,14 @@ export class ConversationContextBuilder {
    * Filters actions to only include those that can be triggered by user input.
    */
   private async buildStageContext(stage: Stage, rawContext: ConversationContext): Promise<ConversationContext['stage']> {
-    const availableActions = Object.entries(stage.actions || {})
-      .filter(async ([_, action]) => action.triggerOnUserInput && await isActionActive(action, rawContext, this.scriptExecutor))
-      .map(([_, action]) => ({
+    const entries = Object.entries(stage.actions || {});
+    const filtered: [string, typeof entries[0][1]][] = [];
+    for (const entry of entries) {
+      if (entry[1].triggerOnUserInput && await isActionActive(entry[1], rawContext, this.scriptExecutor)) {
+        filtered.push(entry);
+      }
+    }
+    const availableActions = filtered.map(([_, action]) => ({
         name: action.name,
         trigger: action.classificationTrigger,
         examples: action.examples || undefined,

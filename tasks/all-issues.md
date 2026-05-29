@@ -2275,6 +2275,8 @@ No issues found.
 
 - **MEDIUM** | Line 47: Missing ellipsis handling.
 
+- **MEDIUM** | Lines 47-117: Heuristics are English-only and fragile. Words like "so", "when", "where", "as" are treated as incomplete endings but are common in complete utterances ("So" as an answer, "When" as a question). Fragment detector (line 96) returns `false` for single words, so a lone "so" or "if" falls through to `ambiguous` rather than being caught as incomplete. No language detection — non-English transcripts will produce incorrect verdicts with no fallback.
+
 
 ### src/services/live/ContextTransformerExecutor.ts
 
@@ -2324,7 +2326,7 @@ No issues found.
 
 ### src/services/live/ConversationContextBuilder.ts
 
-- **CRITICAL** | Line 387: `.filter(async (async callback))`. Every action passes filter.
+- **[DONE] CRITICAL** | Line 387: `.filter(async (async callback))`. Every action passes filter. (Fixed: replaced with explicit `for` loop with per-entry `await`.)
 
 - **HIGH** | Line 1: `param` imported but never used.
 
