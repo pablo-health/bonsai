@@ -1202,10 +1202,6 @@ export class ConversationRunner {
     }
   }
 
-  async receiveCommand(command: string, data: any) {
-    throw new Error("Method not implemented.");
-  }
-
   /**
    * Saves a command event for the current conversation.
    * @param command - The type of command received
@@ -1301,7 +1297,7 @@ export class ConversationRunner {
       const onLeaveAction = oldStageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_LEAVE];
       if (onLeaveAction) {
         logger.debug({ conversationId: this.conversation.id, stageId: fromStageId }, 'Executing __on_leave lifecycle action');
-        const context = await this.contextBuilder.buildContextForUserInput(oldStageData.conversation, oldStageData.stage, [/** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
+        const context = await this.contextBuilder.buildContextForLifecycleAction(oldStageData.conversation, oldStageData.stage, this.channel?.connectionType);
         const leaveOutcome = await this.actionsExecutor.executeActions([onLeaveAction], context, oldStageData.id, 'on_leave', this.saveAndSendEvent.bind(this));
 
         await this.applyActionOutcome(context, leaveOutcome);
@@ -1379,7 +1375,7 @@ export class ConversationRunner {
       await this.saveAndSendEvent('jump_to_stage', eventData);
 
       // Execute __on_enter lifecycle action if defined on new stage
-      const enterContext = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [ /** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
+      const enterContext = await this.contextBuilder.buildContextForLifecycleAction(this.stageData.conversation, this.stageData.stage, this.channel?.connectionType);
       let enterOutcome: ActionsExecutionOutcome | null = null;
       const onEnterAction = this.stageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_ENTER];
       if (onEnterAction) {

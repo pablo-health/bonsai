@@ -1520,9 +1520,9 @@ No issues found.
 
 ### src/services/live/ConversationRunner.ts
 
-- **HIGH** | Line 1205: `receiveCommand` is a stub that throws `"Method not implemented."`. If any channel invokes this method at runtime it crashes the conversation with an unhandled plain `Error`.
+- **[DONE] HIGH** | Line 1205: `receiveCommand` is a stub that throws `"Method not implemented."`. If any channel invokes this method at runtime it crashes the conversation with an unhandled plain `Error`. (Fixed: removed dead stub — no contracts or callers reference it.)
 
-- **HIGH** | Line 1304, 1382: `buildContextForUserInput()` called with `[/** TODO */]` — a dead-code comment inside an array literal passed as a real argument. Indicates the parameter was never filled in and the context builder receives garbage.
+- **[DONE] HIGH** | Line 1304, 1382: `buildContextForUserInput()` called with `[/** TODO */]` — a dead-code comment inside an array literal passed as a real argument. Indicates the parameter was never filled in and the context builder receives garbage. (Fixed: replaced with new `buildContextForLifecycleAction` which takes stage as parameter, includes events/history, and omits userInput, classification results, and sample copies.)
 
 - **HIGH** | Line 308: `lastCompletionResult: null` — type declares optional, not nullable. Type mismatch.
 
