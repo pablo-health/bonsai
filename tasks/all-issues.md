@@ -1532,7 +1532,7 @@ No issues found.
 
 - **[DONE] HIGH** | Line 365: `llmProviderEntity` used without null check. `findFirst()` returns undefined. (Fixed: see above.)
 
-- **HIGH** | Lines 958, 1020, 1062, 1077, 1135, 1172, 1293, 1433, 1474, 1493, 1571: All throw plain `Error` instead of a project custom error class (`InvalidOperationError`, `NotFoundError`, etc.), violating the error handling convention and making them indistinguishable from unexpected errors in the global handler.
+- **[DONE] HIGH** | Lines 958, 1020, 1062, 1077, 1135, 1172, 1293, 1433, 1474, 1493, 1571: All throw plain `Error` instead of a project custom error class (`InvalidOperationError`, `NotFoundError`, etc.), violating the error handling convention and making them indistinguishable from unexpected errors in the global handler. (Fixed: replaced all 18 plain `Error` throws with `InvalidOperationError`.)
 
 - **INFO** | Line 299: `project` not null-checked before use at line 394.
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { inject, injectable } from "tsyringe";
-import { NotFoundError } from "../../errors";
+import { NotFoundError, InvalidOperationError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
 import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS } from "../../types/actions";
 import type { LifecycleContext } from "../../types/actions";
@@ -259,7 +259,7 @@ export class ConversationRunner {
 
     // Check if conversation is active
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Conversation with ID ${conversationId} is not active`);
+      throw new InvalidOperationError(`Conversation with ID ${conversationId} is not active`);
     }
 
     // Load sample copy data
@@ -971,7 +971,7 @@ export class ConversationRunner {
     this.responseGeneratedInTurn = false;
     this.resetTurnData();
     if (this.conversation.status !== 'initialized') {
-      throw new Error(`Cannot start conversation in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start conversation in current state: ${this.conversation.status}`);
     }
 
     const eventData: ConversationStartEventData = {
@@ -1032,7 +1032,7 @@ export class ConversationRunner {
   async resumeConversation() {
     // Validate conversation can be resumed (should already be checked in prepareConversation, but double-check)
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Cannot resume conversation in state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot resume conversation in state: ${this.conversation.status}`);
     }
 
     const previousStatus = this.conversation.status;
@@ -1072,7 +1072,7 @@ export class ConversationRunner {
 
   async receiveUserTextInput(userInput: string): Promise<string> {
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot receive user input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
     }
 
     this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
@@ -1087,13 +1087,13 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1145,17 +1145,17 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot receive user voice data in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user voice data in current state: ${this.conversation.status}`);
     }
 
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1182,16 +1182,16 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
     }
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1299,7 +1299,7 @@ export class ConversationRunner {
         ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input' || this.conversation.status === 'initialized'
         : this.conversation.status === 'awaiting_user_input';
       if (!allowed) {
-        throw new Error(`Cannot navigate to stage in current state: ${this.conversation.status}`);
+        throw new InvalidOperationError(`Cannot navigate to stage in current state: ${this.conversation.status}`);
       }
 
       const fromStageId = this.stageData.id;
@@ -1439,10 +1439,10 @@ export class ConversationRunner {
    */
   async setVariable(stageId: string, variableName: string, variableValue: any): Promise<void> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot set variable in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot set variable in current state: ${this.conversation.status}`);
     }
 
 
@@ -1480,7 +1480,7 @@ export class ConversationRunner {
    */
   async getVariable(stageId: string, variableName: string): Promise<any> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId, variableName }, `Getting variable ${variableName}`);
@@ -1499,7 +1499,7 @@ export class ConversationRunner {
    */
   async getAllVariables(stageId: string): Promise<Record<string, any>> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId }, `Getting all variables`);
@@ -1577,7 +1577,7 @@ export class ConversationRunner {
     logger.info({ conversationId: this.conversation.id, actionName, parameterCount: parameters.length }, `Running action ${actionName}`);
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot run action in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot run action in current state: ${this.conversation.status}`);
     }
 
     // Reset per-turn data so timing fields are clean for this client-initiated action turn,
