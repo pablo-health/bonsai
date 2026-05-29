@@ -2556,7 +2556,7 @@ No issues found.
 
 ### src/http/middleware/errorHandler.ts
 
-- **CRITICAL** | Line 11: `JSON.parse(err.message)` crashes. ZodError.message not JSON.
+- **[DONE] CRITICAL** | Line 11: `JSON.parse(err.message)` crashes. ZodError.message not JSON.
 
 - **HIGH** | Line 9: `err: any` loses type safety.
 
