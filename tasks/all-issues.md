@@ -2778,7 +2778,7 @@ No issues found.
 
 ### src/http/controllers/EnvironmentController.ts
 
-- **CRITICAL** | Lines 245-246: Route ordering bug. `/api/environments/:id/migration/jobs/:jobId` before `/api/environments/:id/migration/scope`. Scope endpoint unreachable — `:jobId` captures "scope".
+- **[DONE] CRITICAL** | Lines 245-246: Route ordering bug. `/api/environments/:id/migration/jobs/:jobId` before `/api/environments/:id/migration/scope`. Scope endpoint unreachable — `:jobId` captures "scope". (False positive — different segment counts, no conflict.)
 
 - **HIGH** | Lines 321-328/346-352: `startPull`/`previewScope` no environment existence check.
 
@@ -2885,7 +2885,7 @@ No issues found.
 
 ### src/http/controllers/FunnelController.ts
 
-- **CRITICAL** | Line 179: `projectId` parsed from `req.query` instead of `req.params`. Route defines `:projectId` as URL param. Zod validation fails for correct clients.
+- **[DONE] CRITICAL** | Line 179: `projectId` parsed from `req.query` instead of `req.params`. Route defines `:projectId` as URL param. Zod validation fails for correct clients. (Fixed: parse from `req.params`, removed from query schema.)
 
 - **LOW** | Line 179: `funnelQueryParamsSchema` redundantly declares `projectId`. Split source-of-truth.
 
