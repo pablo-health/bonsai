@@ -40,6 +40,10 @@ export class SendUserTextInputHandler implements ClientMessageHandler<CALSendUse
         throw new InvalidOperationError('Conversation ID mismatch');
       }
 
+      if (!context.session.runner) {
+        throw new InvalidOperationError('Conversation runner not initialized');
+      }
+
       inputTurnId = await context.session.runner.receiveUserTextInput(message.text);
 
       const response: CALSendUserTextInputResponse = { 
