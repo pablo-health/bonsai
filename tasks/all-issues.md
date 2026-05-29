@@ -2255,7 +2255,7 @@ No issues found.
 
 ### src/services/live/SpeechCompletionDetector.ts
 
-- **CRITICAL** | Line 47: Regex `[.!?]` includes `'`. Matches apostrophes as sentence endings.
+- **[DONE] CRITICAL** | Line 47: Regex `[.!?]` includes `'`. Matches apostrophes as sentence endings. (Fixed: removed ASCII apostrophe from optional closing character class at line 47.)
 
 - **HIGH** | Line 96: Docstring says "single word" is fragment, but returns false.
 
