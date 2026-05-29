@@ -36,6 +36,10 @@ export class AbortAiGenerationHandler implements ClientMessageHandler<CALAbortAi
         throw new InvalidOperationError('Conversation ID mismatch');
       }
 
+      if (!context.session.runner) {
+        throw new InvalidOperationError('No active conversation runner');
+      }
+
       await context.session.runner.abortCurrentResponse();
 
       const response = { type: 'abort_ai_generation', conversationId: message.conversationId, correlationId: message.correlationId, success: true };

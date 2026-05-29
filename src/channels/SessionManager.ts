@@ -10,11 +10,11 @@ export type Session = {
   /** Unique identifier for the session. */
   id: string;
   /** ID of the project this session is authenticated for. */
-  projectId: string;
+  projectId: string | null;
   /** ID of the conversation currently active in this session, null if none. */
-  conversationId: string;
+  conversationId: string | null;
   /** Conversation runner instance for managing the conversation. */
-  runner: ConversationRunner;
+  runner: ConversationRunner | null;
   /** Communication channel used to send messages to this session. */
   clientConnection: IClientConnection;
   /** Session settings configured during authentication. */
