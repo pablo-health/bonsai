@@ -277,7 +277,8 @@ export class ContextTransformerService extends BaseService {
    * @param projectId - The project ID the context transformer belongs to
    * @returns Array of audit log entries for the context transformer
    */
-  async getContextTransformerAuditLogs(transformerId: string, projectId: string): Promise<any[]> {
+  async getContextTransformerAuditLogs(transformerId: string, projectId: string, context: RequestContext): Promise<any[]> {
+    this.requirePermission(context, PERMISSIONS.AUDIT_READ);
     logger.debug({ transformerId, projectId }, 'Fetching audit logs for context transformer');
 
     try {
