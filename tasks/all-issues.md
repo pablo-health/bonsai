@@ -2573,7 +2573,7 @@ No issues found.
 
 ### src/http/middleware/rateLimiter.ts
 
-- **CRITICAL** | Lines 16/37: `ipKeyGenerator` expects Request, called with string.
+- **[DONE] CRITICAL** | Lines 16/37: `ipKeyGenerator` expects Request, called with string. (False positive — `ipKeyGenerator` takes a string IP, not a Request. Original code was correct.)
 
 - **LOW** | Line 12: `createAuthRateLimiter` may be unused.
 
@@ -2733,7 +2733,7 @@ No issues found.
 
 ### src/http/controllers/ProviderController.ts
 
-- **CRITICAL** | Line 206: `createdBy` client-settable. Operator impersonation.
+- **[DONE] CRITICAL** | Line 206: `createdBy` client-settable. Operator impersonation. (Fixed: removed from create schema, service always uses `context.operatorId`.)
 
 - **HIGH** | Lines 237-242: TOCTOU race in `updateProvider`.
 
