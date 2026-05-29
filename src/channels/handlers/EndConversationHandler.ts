@@ -37,26 +37,30 @@ export class EndConversationHandler implements ClientMessageHandler<CALEndConver
         await session.runner.executeEndLifecycleAction();
       }
 
+      if (!session) {
+        throw new Error('No active session');
+      }
+
       // Save event and send WebSocket message BEFORE detaching conversation
       const eventData = { reason: '', stageId, metadata: { currentVariables: conversation?.stageVars?.[stageId] || {} } };
       await this.conversationService.saveConversationEvent(projectId, message.conversationId, 'conversation_end', eventData, stageId);
-      await context.session?.clientConnection?.sendMessage({ type: 'conversation_event', conversationId: message.conversationId, eventType: 'conversation_end', eventData });
-      
-      // Now detach, finish, and disconnect
-      this.sessionManager.detachConversationFromSession(context.session!.id);
-      await this.conversationService.finishConversation(projectId, message.conversationId);
-      try {
-        await context.session?.clientConnection?.close();
-      } catch { /* best effort */ }
+      await session.clientConnection?.sendMessage({ type: 'conversation_event', conversationId: message.conversationId, eventType: 'conversation_end', eventData });
 
-      const response: CALEndConversationResponse = { 
+      const response: CALEndConversationResponse = {
         type: 'end_conversation',
-        conversationId: message.conversationId, 
-        success: true, 
+        conversationId: message.conversationId,
+        success: true,
         correlationId: message.correlationId };
       context.send(response);
 
-      logger.info({ sessionId: context.session?.id, conversationId: message.conversationId }, 'Conversation ended successfully');
+      // Now detach, finish, and disconnect
+      this.sessionManager.detachConversationFromSession(session.id);
+      await this.conversationService.finishConversation(projectId, message.conversationId);
+      try {
+        await session.clientConnection?.close();
+      } catch { /* best effort */ }
+
+      logger.info({ sessionId: session.id, conversationId: message.conversationId }, 'Conversation ended successfully');
     } catch (error) {
       logger.error({ error: error instanceof Error ? error.message : String(error), sessionId: context.session?.id, conversationId: message.conversationId }, 'Failed to end conversation');
       const response: CALEndConversationResponse = { 

@@ -59,7 +59,7 @@ export class OperatorService extends BaseService {
 
       logger.info({ operatorId: createdOperator.id }, 'Operator created successfully');
 
-      return operatorResponseSchema.parse(createdOperator);
+      return operatorResponseSchema.parse(safeCreatedOperator);
     } catch (error) {
       logger.error({ error, operatorId: input.id }, 'Failed to create operator');
       throw error;
@@ -82,7 +82,8 @@ export class OperatorService extends BaseService {
         throw new NotFoundError(`Operator with id ${id} not found`);
       }
 
-      return operatorResponseSchema.parse(operator);
+      const { password: _pw, ...safeOperator } = operator;
+      return operatorResponseSchema.parse(safeOperator);
     } catch (error) {
       logger.error({ error, operatorId: id }, 'Failed to fetch operator');
       throw error;
@@ -152,7 +153,7 @@ export class OperatorService extends BaseService {
       });
 
       return operatorListResponseSchema.parse({
-        items: operatorList,
+        items: operatorList.map(({ password: _pw, ...op }) => op),
         total,
         offset,
         limit,
@@ -220,7 +221,7 @@ export class OperatorService extends BaseService {
 
       logger.info({ operatorId: operator.id, newVersion: operator.version }, 'Operator updated successfully');
 
-      return operatorResponseSchema.parse(operator);
+      return operatorResponseSchema.parse(safeOperator);
     } catch (error) {
       logger.error({ error, operatorId: id }, 'Failed to update operator');
       throw error;
@@ -311,7 +312,8 @@ export class OperatorService extends BaseService {
         throw new NotFoundError(`Operator with id ${context.operatorId} not found`);
       }
 
-      return profileResponseSchema.parse(operator);
+      const { password: _pw, ...safeOperator } = operator;
+      return profileResponseSchema.parse(safeOperator);
     } catch (error) {
       logger.error({ error, operatorId: context.operatorId }, 'Failed to fetch profile');
       throw error;
@@ -382,7 +384,7 @@ export class OperatorService extends BaseService {
 
       logger.info({ operatorId: operator.id, newVersion: operator.version }, 'Profile updated successfully');
 
-      return profileResponseSchema.parse(operator);
+      return profileResponseSchema.parse(safeOperator);
     } catch (error) {
       logger.error({ error, operatorId: context.operatorId }, 'Failed to update profile');
       throw error;

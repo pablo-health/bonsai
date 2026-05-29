@@ -248,7 +248,7 @@ export const calGoToStageResponseSchema = calBaseOutputMessageSchema.extend({
  * Result of a set_var command.
  */
 export const calSetVarResponseSchema = calBaseOutputMessageSchema.extend({
-  type: z.literal('set_var_result'),
+  type: z.literal('set_var'),
   success: z.boolean().describe('Whether the variable was successfully set'),
   error: z.string().optional().describe('Error message if setting the variable failed'),
 });

@@ -45,7 +45,7 @@ export class ProviderService extends BaseService {
 
     try {
       const secretizedConfig = await this.secretRefUtils.secretizeObject(input.config as Record<string, unknown>, SENSITIVE_PROVIDER_CONFIG_FIELDS);
-      const provider = await db.insert(providers).values({ id: providerId, name: input.name, description: input.description, providerType: input.providerType, apiType: input.apiType, config: secretizedConfig as typeof input.config, createdBy: input.createdBy || context?.operatorId, tags: input.tags, version: 1 }).returning();
+      const provider = await db.insert(providers).values({ id: providerId, name: input.name, description: input.description, providerType: input.providerType, apiType: input.apiType, config: secretizedConfig as typeof input.config, createdBy: context?.operatorId, tags: input.tags, version: 1 }).returning();
 
       const createdProvider = provider[0];
 

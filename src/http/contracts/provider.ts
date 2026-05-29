@@ -134,7 +134,6 @@ export const createProviderSchema = z.object({
   providerType: providerTypeSchema.describe('Provider category: asr, tts, llm, or embeddings'),
   apiType: providerNameSchema.describe('Specific provider implementation (e.g., openai, anthropic, azure, elevenlabs)'),
   config: providerConfigSchema.describe('Provider-specific configuration object (varies by providerType and apiType)'),
-  createdBy: z.string().optional().describe('Operator user ID who created the provider'),
   tags: z.array(z.string()).optional().describe('Searchable tags for organization (e.g., ["production", "low-latency"])'),
 });
 

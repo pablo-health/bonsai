@@ -126,6 +126,16 @@ export class ToolExecutor {
 
       const renderedUrl = await this.templatingEngine.render(tool.url, templateContext);
 
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(renderedUrl);
+      } catch {
+        throw new Error(`Webhook tool "${tool.name}" rendered to an invalid URL`);
+      }
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new Error(`Webhook tool "${tool.name}" URL scheme "${parsedUrl.protocol}" is not allowed. Only http and https are permitted.`);
+      }
+
       const renderedHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (tool.webhookHeaders) {
         for (const [key, value] of Object.entries(tool.webhookHeaders)) {
@@ -158,6 +168,11 @@ export class ToolExecutor {
       const result = { status: response.status, statusText: response.statusText, headers: headersObj, data };
       const endMs = Date.now();
       const durationMs = endMs - toolStartMs;
+
+      if (!response.ok) {
+        return { success: false, toolId: tool.id, parameters, failureReason: `HTTP ${response.status}: ${response.statusText}`, result, durationMs, startMs: toolStartMs, endMs };
+      }
+
       return { success: true, toolId: tool.id, parameters, result, durationMs, startMs: toolStartMs, endMs };
     } catch (error) {
       logger.error({ toolId: tool.id, url: tool.url, error }, `Error executing webhook tool "${tool.name}"`);

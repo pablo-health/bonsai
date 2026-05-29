@@ -44,7 +44,7 @@ export class SpeechCompletionDetector {
 
   /** Ends with terminal punctuation (. ! ?) possibly followed by closing quote/paren. */
   private isCompletePunctuation(text: string): boolean {
-    return /[.!?]['")\u201D\u2019]?$/u.test(text);
+    return /[.!?][")\u201D\u2019]?$/u.test(text);
   }
 
   /** Ends with a conjunction, coordinating word, or trailing preposition. */
