@@ -39,6 +39,10 @@ export class StartUserVoiceInputHandler implements ClientMessageHandler<CALStart
         throw new InvalidOperationError('Conversation ID mismatch');
       }
 
+      if (!context.session.runner) {
+        throw new InvalidOperationError('No active conversation runner');
+      }
+
       const inputTurnId = await context.session.runner.startUserVoiceInput();
 
       const response: CALStartUserVoiceInputResponse = {
