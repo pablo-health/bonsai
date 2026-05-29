@@ -1437,15 +1437,15 @@ No issues found.
 
 ### src/services/UserService.ts
 
-- **HIGH** | Line 228: `ensureUserExists` — no permission check or context. Creates users without auth.
+- **[INTENTIONAL] HIGH** | Line 228: `ensureUserExists` — no permission check or context. Creates users without auth. (Design decision: used internally by channels to auto-create users.)
 
-- **HIGH** | Line 242: `userResponseSchema.parse(existing)` — `existing` can be undefined. Crashes with schema parse error.
+- **[DONE] HIGH** | Line 242: `userResponseSchema.parse(existing)` — `existing` can be undefined. Crashes with schema parse error. (Fixed: added null guard with `NotFoundError`.)
 
-- **HIGH** | Line 256: `updateUserProfile` — no permission check or context.
+- **[INTENTIONAL] HIGH** | Line 256: `updateUserProfile` — no permission check or context. (Design decision: used internally by channels to inject profile data at conversation start.)
 
-- **HIGH** | Line 284: `banUser` — no permission check, no context. Bypasses RBAC.
+- **[INTENTIONAL] HIGH** | Line 284: `banUser` — no permission check, no context. Bypasses RBAC. (Design decision: used internally by ActionsExecutor for conversation effects.)
 
-- **HIGH** | Line 315: `getUserAuditLogs` — returns `any[]`. Missing permission check.
+- **[DONE] HIGH** | Line 315: `getUserAuditLogs` — returns `any[]`. Missing permission check. (Fixed: added `context: RequestContext` param, `requirePermission(AUDIT_READ)`, return type `AuditLog[]`.)
 
 - **LOW** | Lines 39/46/159/176/196/211: `context?.operatorId` — context required, optional chain redundant.
 
@@ -2435,9 +2435,9 @@ No issues found.
 
 ### src/services/live/ModifyUserProfileEffectExecutor.ts
 
-- **HIGH** | Line 36: PII logged at INFO level.
+- **[DONE] HIGH** | Line 36: PII logged at INFO level. (Fixed: removed `value` from INFO log — `fieldName` and `operation` remain for debugging.)
 
-- **HIGH** | Line 72: `JSON.stringify` comparison crashes on circular refs.
+- **[DONE] HIGH** | Line 72: `JSON.stringify` comparison crashes on circular refs. (Fixed: wrapped in try-catch, falls back to `!==` for non-serializable values.)
 
 - **INFO** | Line 31: Partial mutation on failure.
 
