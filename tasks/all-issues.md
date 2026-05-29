@@ -1524,9 +1524,9 @@ No issues found.
 
 - **[DONE] HIGH** | Line 1304, 1382: `buildContextForUserInput()` called with `[/** TODO */]` — a dead-code comment inside an array literal passed as a real argument. Indicates the parameter was never filled in and the context builder receives garbage. (Fixed: replaced with new `buildContextForLifecycleAction` which takes stage as parameter, includes events/history, and omits userInput, classification results, and sample copies.)
 
-- **HIGH** | Line 308: `lastCompletionResult: null` — type declares optional, not nullable. Type mismatch.
+- **[DONE] HIGH** | Line 308: `lastCompletionResult: null` — type declares optional, not nullable. Type mismatch. (Fixed: changed type to `LlmGenerationResult | null`.)
 
-- **HIGH** | Line 319: `agent: null as any` — explicit any cast bypasses type safety.
+- **[DONE] HIGH** | Line 319: `agent: null as any` — explicit any cast bypasses type safety. (Fixed: changed type to `AgentResponse | null`, removed `as any`.)
 
 - **HIGH** | Line 364: `llmProviderEntity` may be undefined. Dereferenced without guard.
 

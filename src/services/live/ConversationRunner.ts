@@ -129,7 +129,7 @@ export type StageRuntimeData = {
   stage: Stage;
   completionLlmProvider?: ILlmProvider;
   completionLlmProviderInfo?: LlmProviderInfo;
-  lastCompletionResult?: LlmGenerationResult;
+  lastCompletionResult: LlmGenerationResult | null;
   lastCompletionPrompt?: string;
   classifiers: ClassifierRuntimeData[];
   transformers: TransformerRuntimeData[];
@@ -141,7 +141,7 @@ export type StageRuntimeData = {
   asrProvider?: IAsrProvider;
   ttsProvider?: ITtsProvider;
   shouldEndConversation: boolean;
-  agent: AgentResponse;
+  agent: AgentResponse | null;
   fillerLlmProvider?: ILlmProvider;
   fillerLlmProviderInfo?: LlmProviderInfo;
   faq: FaqItem[];
@@ -316,7 +316,7 @@ export class ConversationRunner {
       asrProvider: undefined,
       ttsProvider: undefined,
       shouldEndConversation: false,
-      agent: null as any, // populated below after agentService.getAgentById
+      agent: null,
       faq: [],
       costManagementConfig: project?.costManagementConfig ?? null,
     };
