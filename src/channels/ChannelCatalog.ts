@@ -1,4 +1,5 @@
 import { inject, singleton } from 'tsyringe';
+import { NotFoundError } from '../errors';
 import { z } from 'zod';
 import type { ICommunicationChannel } from './IChannelDescriptor';
 import { WebSocketCommunicationChannel } from './websocket/WebSocketCommunicationChannel';
@@ -46,7 +47,7 @@ export class ChannelCatalog {
   getChannel(channelType: string): ICommunicationChannel {
     const channel = this.channels.get(channelType);
     if (!channel) {
-      throw new Error(`Unsupported channel type: ${channelType}`);
+      throw new NotFoundError(`Unsupported channel type: ${channelType}`);
     }
     return channel;
   }
