@@ -908,7 +908,7 @@ No issues found.
 
 ### src/channels/twilio-messaging/TwilioMessagingChannelHost.ts
 
-- **CRITICAL** | Lines 163, 281: No project ownership check on `channelProviderId`. Cross-project data exfiltration possible.
+- **[DONE] CRITICAL** | Lines 163, 281: No project ownership check on `channelProviderId`. Cross-project data exfiltration possible. (False positive — providers are global, not scoped to projects.)
 
 - **HIGH** | Line 65: `parseInt` on `TWILIO_MESSAGING_SESSION_TIMEOUT_MS` can produce `NaN`. All sessions time out instantly.
 
@@ -2151,9 +2151,9 @@ No issues found.
 
 ### src/services/live/ToolExecutor.ts
 
-- **CRITICAL** | Lines 127/145: SSRF via `renderedUrl`. No URL scheme validation.
+- **[DONE] CRITICAL** | Lines 127/145: SSRF via `renderedUrl`. No URL scheme validation. (Fixed: added URL parse + http/https-only check at line 129-137.)
 
-- **CRITICAL** | Lines 158/161: Webhook `success: true` regardless of HTTP status.
+- **[DONE] CRITICAL** | Lines 158/161: Webhook `success: true` regardless of HTTP status. (Fixed: added `response.ok` check at line 172, returns `success: false` with HTTP status failure reason.)
 
 - **HIGH** | Line 145: `fetch()` no timeout. Hangs indefinitely.
 
