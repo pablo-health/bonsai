@@ -7,6 +7,7 @@ import { logger } from '../../utils/logger';
 import { ChannelMessageHandler } from '../ClientMessageHandlerRegistry';
 import { ConversationService } from '../../services/ConversationService';
 import { SessionManager } from '../SessionManager';
+import { NotFoundError, InvalidOperationError } from '../../errors';
 
 /**
  * Handles end conversation requests.
@@ -28,21 +29,29 @@ export class EndConversationHandler implements ClientMessageHandler<CALEndConver
 
     try {
       const session = context.session;
-      const stageId = session?.runner?.getRuntimeData()?.stage?.id || '';
-      const conversation = session?.runner?.getRuntimeData()?.conversation;
+      if (!session) {
+        throw new NotFoundError('Session not found');
+      }
+
+      if (!session.conversationId || session.conversationId !== message.conversationId) {
+        throw new InvalidOperationError('Conversation ID mismatch');
+      }
+
+      const runner = session.runner;
+      if (!runner) {
+        throw new InvalidOperationError('No active conversation runner');
+      }
+
+      const runtimeData = runner.getRuntimeData();
+      const stageId = runtimeData?.stage?.id || '';
+      const conversation = runtimeData?.conversation;
       const projectId = conversation?.projectId || '';
 
       // Execute __conversation_end lifecycle global action before saving the event
-      if (session?.runner) {
-        await session.runner.executeEndLifecycleAction();
-      }
-
-      if (!session) {
-        throw new Error('No active session');
-      }
+      await runner.executeEndLifecycleAction();
 
       // Save event and send WebSocket message BEFORE detaching conversation
-      const eventData = { reason: '', stageId, metadata: { currentVariables: conversation?.stageVars?.[stageId] || {} } };
+      const eventData = { reason: 'client_requested', stageId, metadata: { currentVariables: conversation?.stageVars?.[stageId] || {} } };
       await this.conversationService.saveConversationEvent(projectId, message.conversationId, 'conversation_end', eventData, stageId);
       await session.clientConnection?.sendMessage({ type: 'conversation_event', conversationId: message.conversationId, eventType: 'conversation_end', eventData });
 
