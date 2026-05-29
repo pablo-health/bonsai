@@ -135,7 +135,10 @@ export class ApiKeyService extends BaseService {
    * @param params - List parameters including filters, sorting, pagination, and text search
    * @returns Paginated array of API keys matching the criteria
    */
-  async listApiKeys(projectId?: string, params?: ListParams): Promise<ApiKeyListResponse> {
+  async listApiKeys(projectId?: string, params?: ListParams, context?: RequestContext): Promise<ApiKeyListResponse> {
+    if (context) {
+      this.requirePermission(context, PERMISSIONS.API_KEY_READ);
+    }
     logger.debug({ projectId, params }, 'Listing API keys');
 
     try {
