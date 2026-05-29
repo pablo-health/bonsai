@@ -362,6 +362,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Classifier with ID ${classifierId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, classifier.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${classifier.llmProviderId} not found for classifier ${classifierId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, classifier.llmSettings);
       stageData.classifiers.push({ classifier, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -375,6 +378,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Transformer with ID ${transformerId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, transformer.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${transformer.llmProviderId} not found for transformer ${transformerId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, transformer.llmSettings);
       stageData.transformers.push({ transformer, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -437,6 +443,9 @@ export class ConversationRunner {
       });
       if (guardrailClassifierEntity) {
         const guardrailLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, guardrailClassifierEntity.llmProviderId) });
+        if (!guardrailLlmProviderEntity) {
+          throw new NotFoundError(`LLM Provider with ID ${guardrailClassifierEntity.llmProviderId} not found for guardrail classifier ${guardrailClassifierEntity.id}`);
+        }
         stageData.guardrailClassifier = {
           classifier: guardrailClassifierEntity,
           llmProvider: await this.llmProviderFactory.createProvider(guardrailLlmProviderEntity, guardrailClassifierEntity.llmSettings),
@@ -466,6 +475,9 @@ export class ConversationRunner {
         });
         if (sampleCopyClassifierEntity) {
           const sampleCopyLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, sampleCopyClassifierEntity.llmProviderId) });
+          if (!sampleCopyLlmProviderEntity) {
+            throw new NotFoundError(`LLM Provider with ID ${sampleCopyClassifierEntity.llmProviderId} not found for sample copy classifier ${sampleCopyClassifierEntity.id}`);
+          }
           stageData.sampleCopyClassifier = {
             classifier: sampleCopyClassifierEntity,
             llmProvider: await this.llmProviderFactory.createProvider(sampleCopyLlmProviderEntity, sampleCopyClassifierEntity.llmSettings),

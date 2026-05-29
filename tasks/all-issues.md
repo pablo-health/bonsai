@@ -1528,9 +1528,9 @@ No issues found.
 
 - **[DONE] HIGH** | Line 319: `agent: null as any` — explicit any cast bypasses type safety. (Fixed: changed type to `AgentResponse | null`, removed `as any`.)
 
-- **HIGH** | Line 364: `llmProviderEntity` may be undefined. Dereferenced without guard.
+- **[DONE] HIGH** | Line 364: `llmProviderEntity` may be undefined. Dereferenced without guard. (Fixed: added null guards with `NotFoundError` for classifier, transformer, guardrail classifier, and sample copy classifier LLM providers.)
 
-- **HIGH** | Line 365: `llmProviderEntity` used without null check. `findFirst()` returns undefined.
+- **[DONE] HIGH** | Line 365: `llmProviderEntity` used without null check. `findFirst()` returns undefined. (Fixed: see above.)
 
 - **HIGH** | Lines 958, 1020, 1062, 1077, 1135, 1172, 1293, 1433, 1474, 1493, 1571: All throw plain `Error` instead of a project custom error class (`InvalidOperationError`, `NotFoundError`, etc.), violating the error handling convention and making them indistinguishable from unexpected errors in the global handler.
 
