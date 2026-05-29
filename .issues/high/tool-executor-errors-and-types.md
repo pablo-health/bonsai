@@ -1,7 +1,7 @@
 ---
 title: "ToolExecutor bare Error throws and type safety bypasses"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
 updated: 2026-05-29
 assignee: ""
