@@ -90,7 +90,7 @@ export class WhatsAppChannelHost {
   /** Maps sessionId → active inactivity timer handle. */
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
 
-  private readonly timeoutMs = parseInt(process.env.WHATSAPP_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
+  private readonly timeoutMs = parseInt(process.env.WHATSAPP_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10) || DEFAULT_SESSION_TIMEOUT_MS;
 
   constructor(
     @inject(SessionManager) private readonly sessionManager: SessionManager,
@@ -567,11 +567,15 @@ export class WhatsAppChannelHost {
     const existing = this.sessionTimeoutMap.get(sessionId);
     if (existing) clearTimeout(existing);
 
-    const handle = setTimeout(async () => {
-      logger.info({ sessionId }, 'WhatsApp: session timed out due to inactivity');
-      this.phoneSessionMap.delete(phoneKey);
-      this.sessionTimeoutMap.delete(sessionId);
-      await this.sessionManager.unregisterSession(sessionId);
+    const handle = setTimeout(() => {
+      (async () => {
+        logger.info({ sessionId }, 'WhatsApp: session timed out due to inactivity');
+        this.phoneSessionMap.delete(phoneKey);
+        this.sessionTimeoutMap.delete(sessionId);
+        await this.sessionManager.unregisterSession(sessionId);
+      })().catch((err) => {
+        logger.error({ error: err, sessionId }, 'WhatsApp session timeout unhandled rejection');
+      });
     }, this.timeoutMs);
 
     handle.unref?.();

@@ -1,7 +1,7 @@
 ---
 title: "StartConversationHandler unawaited operations and session crash on error"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
 updated: 2026-05-29
 assignee: ""

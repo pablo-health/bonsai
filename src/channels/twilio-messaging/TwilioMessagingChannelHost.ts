@@ -62,7 +62,7 @@ export class TwilioMessagingChannelHost {
   /** Maps sessionId → active inactivity timer handle. */
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
 
-  private readonly timeoutMs = parseInt(process.env.TWILIO_MESSAGING_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
+  private readonly timeoutMs = parseInt(process.env.TWILIO_MESSAGING_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10) || DEFAULT_SESSION_TIMEOUT_MS;
 
   constructor(
     @inject(SessionManager) private readonly sessionManager: SessionManager,
@@ -231,7 +231,6 @@ export class TwilioMessagingChannelHost {
       const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderNumber, stageId, agentId, correlationId: undefined };
       const startContext = this.buildContext(sessionId);
       await this.dispatcher.dispatch(startMsg, startContext);
-
       await this.dispatchTextInput(sessionId, messageText);
     }
 

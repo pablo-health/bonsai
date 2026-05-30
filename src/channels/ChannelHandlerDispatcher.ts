@@ -34,10 +34,14 @@ export class ChannelHandlerDispatcher {
 
     for (const messageType of registryItems.keys()) {
       const registryItem = registryItems.get(messageType);
-      const handler = registryItem.handlerFactory();
-      if (handler) {
-        this.handlers.set(messageType, { instance: handler, requiresAuth: registryItem.requiresAuth, schema: registryItem.schema, requiredFeature: registryItem.requiredFeature });
-        logger.debug({ messageType: messageType, requiresAuth: registryItem.requiresAuth, requiredFeature: registryItem.requiredFeature }, 'Registered message handler');
+      try {
+        const handler = registryItem.handlerFactory();
+        if (handler) {
+          this.handlers.set(messageType, { instance: handler, requiresAuth: registryItem.requiresAuth, schema: registryItem.schema, requiredFeature: registryItem.requiredFeature });
+          logger.debug({ messageType: messageType, requiresAuth: registryItem.requiresAuth, requiredFeature: registryItem.requiredFeature }, 'Registered message handler');
+        }
+      } catch (error) {
+        logger.error({ error, messageType }, 'Failed to register message handler');
       }
     }
 

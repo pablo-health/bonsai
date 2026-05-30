@@ -1,7 +1,7 @@
 ---
 title: "ClientMessageHandlerRegistry exposes internal state and crashes at module load"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
 updated: 2026-05-29
 assignee: ""
