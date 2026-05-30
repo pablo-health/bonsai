@@ -1,7 +1,7 @@
 ---
 title: "ProviderService SQL injection and unconditional field overwrites"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
 updated: 2026-05-29
 assignee: ""
@@ -12,23 +12,9 @@ tags: [security, sql-injection, data-integrity]
 
 ## Description
 
-Multiple HIGH issues in `ProviderService.ts`:
+1. **Line 125**: Raw string interpolation for JSONB. SQL injection via user-controlled input. FIXED: parameterized with `sql.param()`.
 
-1. **Line 125**: Raw string interpolation for JSONB. SQL injection via user-controlled input.
-2. **Line 192-201**: `updatePayload` sets all fields unconditionally. Partial update overwrites with NULL.
-
-## Steps to Reproduce
-
-1. Update a provider with partial data
-2. Observe existing fields overwritten with NULL
-
-## Expected Behavior
-
-Parameterized queries. Partial updates should only touch provided fields.
-
-## Actual Behavior
-
-SQL injection via config. All fields overwritten on update.
+Note: The original claim about "partial update overwrites with NULL" was incorrect. Drizzle filters out `undefined` values in `mapUpdateSet()`, so the original code was safe.
 
 ## Notes
 

@@ -117,6 +117,11 @@ Uses **pino** logger. `LOG_LEVEL` env var controls verbosity (default: `info`). 
 
 Migrations run automatically on container startup via Drizzle migrator (SSL from `DB_SSL` env var). Migration files in `/drizzle/` are copied to the Docker image.
 
+### Drizzle Behavior
+
+- **`undefined` values are filtered out** — `mapUpdateSet()` in Drizzle filters out `undefined` values. Passing `{ name: undefined }` to `.set()` will NOT set the column to NULL; it will be ignored. Only explicitly provided values are included in the SQL UPDATE statement.
+- **Partial updates are safe** — you can pass all fields to `.set()` and Drizzle will only update the ones that are defined. No need for conditional update payloads.
+
 ## WebSocket Contracts
 
 When modifying `/src/channels/websocket/contracts/`: update `src/scripts/generateWebSocketSchemas.ts`, then run `npm run schemas:generate`. Build process (`npm run build`) does this automatically.
