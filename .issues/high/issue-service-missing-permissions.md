@@ -1,9 +1,9 @@
 ---
 title: "IssueService missing context and permission checks"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-30
 assignee: ""
 tags: [security]
 ---
