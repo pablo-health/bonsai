@@ -6,6 +6,7 @@ import type { AuthRequest, AuthResponse } from '../websocket/contracts/auth';
 import { SessionManager } from '../SessionManager';
 import { ApiKeyService } from '../../services/ApiKeyService';
 import { ProjectService } from '../../services/ProjectService';
+import { SYSTEM_CONTEXT } from '../../services/RequestContext';
 import { logger } from '../../utils/logger';
 import { ChannelMessageHandler } from '../ClientMessageHandlerRegistry';
 import type { ApiKeySettings } from '../../apiKeyFeatures';
@@ -95,7 +96,7 @@ export class AuthHandler implements ClientMessageHandler<AuthRequest> {
     this.sessionManager.setSessionProjectAndSettings(context.session!.id, apiKey.projectId, sessionSettingsSchema.parse(message.sessionSettings ?? {}), keySettings);
     logger.info({ sessionId: context.session!.id, projectId: apiKey.projectId, requestId: message.requestId }, 'WebSocket authentication successful, session created');
 
-    const project = await this.projectService.getProjectById(apiKey.projectId);
+    const project = await this.projectService.getProjectById(apiKey.projectId, SYSTEM_CONTEXT);
     const sendVoiceInput = message.sessionSettings?.sendVoiceInput !== false;
     const projectSettings = {
       projectId: project.id,

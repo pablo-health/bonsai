@@ -224,7 +224,7 @@ export class ApiKeyController {
     checkPermissions(req, [PERMISSIONS.API_KEY_READ]);
     const { projectId } = projectScopedParamsSchema.parse(req.params);
     const query = listParamsSchema.parse(req.query);
-    const result = await this.apiKeyService.listApiKeys(projectId, query, req.context);
+    const result = await this.apiKeyService.listApiKeys(req.context, projectId, query);
     res.status(200).json(result);
   }
 
@@ -234,7 +234,7 @@ export class ApiKeyController {
   private async listAllApiKeys(req: Request, res: Response): Promise<void> {
     checkPermissions(req, [PERMISSIONS.API_KEY_READ]);
     const query = listParamsSchema.parse(req.query);
-    const result = await this.apiKeyService.listApiKeys(undefined, query, req.context);
+    const result = await this.apiKeyService.listApiKeys(req.context, undefined, query);
     res.status(200).json(result);
   }
 

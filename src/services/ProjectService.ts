@@ -66,11 +66,9 @@ export class ProjectService extends BaseService {
    * @returns The project if found
    * @throws {NotFoundError} When project is not found
    */
-  async getProjectById(id: string, context?: RequestContext): Promise<ProjectResponse> {
-    if (context) {
-      this.requirePermission(context, PERMISSIONS.PROJECT_READ);
-    }
-    logger.debug({ projectId: id, operatorId: context?.operatorId }, 'Fetching project by ID');
+  async getProjectById(id: string, context: RequestContext): Promise<ProjectResponse> {
+    this.requirePermission(context, PERMISSIONS.PROJECT_READ);
+    logger.debug({ projectId: id, operatorId: context.operatorId }, 'Fetching project by ID');
 
     try {
       const project = await db.query.projects.findFirst({ where: eq(projects.id, id) });
@@ -91,11 +89,9 @@ export class ProjectService extends BaseService {
    * @param params - List parameters including filters, sorting, pagination, text search, and archived flag
    * @returns Paginated array of projects matching the criteria
    */
-  async listProjects(context?: RequestContext, params?: ListProjectsQuery): Promise<ProjectListResponse> {
-    if (context) {
-      this.requirePermission(context, PERMISSIONS.PROJECT_READ);
-    }
-    logger.debug({ params, operatorId: context?.operatorId }, 'Listing projects');
+  async listProjects(context: RequestContext, params?: ListProjectsQuery): Promise<ProjectListResponse> {
+    this.requirePermission(context, PERMISSIONS.PROJECT_READ);
+    logger.debug({ params, operatorId: context.operatorId }, 'Listing projects');
 
     try {
       const conditions: SQL[] = [];

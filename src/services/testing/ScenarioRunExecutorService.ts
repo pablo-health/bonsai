@@ -6,6 +6,7 @@ import { ScenarioConversationService } from './ScenarioConversationService';
 import { ScenarioConversationEvaluator } from './ScenarioConversationEvaluator';
 import { TestRunner } from './TestRunner';
 import { ConversationService } from '../ConversationService';
+import { SYSTEM_CONTEXT } from '../RequestContext';
 import { UserService } from '../UserService';
 import { logger } from '../../utils/logger';
 import { generateId, ID_PREFIXES } from '../../utils/idGenerator';
@@ -218,7 +219,7 @@ export class ScenarioRunExecutorService {
       const conversationId = generateId(ID_PREFIXES.CONVERSATION);
       const sessionId = generateId(ID_PREFIXES.SCENARIO_CONVERSATION);
 
-      await this.conversationService.createConversation({ id: conversationId, projectId: run.projectId, userId: syntheticUserId, sessionId, stageId: scenario.startingStageId, status: 'initialized' });
+      await this.conversationService.createConversation({ id: conversationId, projectId: run.projectId, userId: syntheticUserId, sessionId, stageId: scenario.startingStageId, status: 'initialized' }, SYSTEM_CONTEXT);
       await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'in_progress');
       await this.scenarioConversationService.linkConversation(slot.scenarioConversationId, run.projectId, conversationId);
 

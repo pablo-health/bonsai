@@ -5,6 +5,7 @@ import { calStartConversationRequestSchema } from '../messages';
 import type { CALStartConversationRequest, CALStartConversationResponse } from '../messages';
 import { SessionManager } from '../SessionManager';
 import { ConversationService } from '../../services/ConversationService';
+import { SYSTEM_CONTEXT } from '../../services/RequestContext';
 import { StageService } from '../../services/StageService';
 import { ProjectService } from '../../services/ProjectService';
 import { NotFoundError, InvalidOperationError, UserBannedError } from '../../errors';
@@ -71,7 +72,7 @@ export class StartConversationHandler implements ClientMessageHandler<CALStartCo
 
     try {
       // Get project first to check autoCreateUsers flag and resolve timezone later
-      const project = await this.projectService.getProjectById(context.session.projectId);
+      const project = await this.projectService.getProjectById(context.session.projectId, SYSTEM_CONTEXT);
 
       // Look up the user; auto-create if the project allows it
       let user;
@@ -116,7 +117,7 @@ export class StartConversationHandler implements ClientMessageHandler<CALStartCo
       const initialStageVars = message.stageVariables && Object.keys(message.stageVariables).length > 0
         ? { [resolvedStageId]: message.stageVariables }
         : undefined;
-      const conversation = await this.conversationService.createConversation({ projectId: stage.projectId, userId: message.userId, stageId: resolvedStageId, sessionId: context.session.id, status: 'initialized', stageVars: initialStageVars, metadata: resolvedTimezone ? { timezone: resolvedTimezone } : null });
+      const conversation = await this.conversationService.createConversation({ projectId: stage.projectId, userId: message.userId, stageId: resolvedStageId, sessionId: context.session.id, status: 'initialized', stageVars: initialStageVars, metadata: resolvedTimezone ? { timezone: resolvedTimezone } : null }, SYSTEM_CONTEXT);
       conversationId = conversation.id;
 
       await this.sessionManager.attachConversationToSession(context.session.id, conversationId);

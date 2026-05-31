@@ -53,9 +53,9 @@ export class ConversationService extends BaseService {
    * @param context - Optional request context for auditing
    * @returns The created conversation
    */
-  async createConversation(input: CreateConversationInput, context?: RequestContext): Promise<ConversationResponse> {
+  async createConversation(input: CreateConversationInput, context: RequestContext): Promise<ConversationResponse> {
     const conversationId = input.id ?? generateId(ID_PREFIXES.CONVERSATION);
-    logger.info({ conversationId, projectId: input.projectId, userId: input.userId, sessionId: input.sessionId, stageId: input.stageId, operatorId: context?.operatorId }, 'Creating conversation');
+    logger.info({ conversationId, projectId: input.projectId, userId: input.userId, sessionId: input.sessionId, stageId: input.stageId, operatorId: context.operatorId }, 'Creating conversation');
 
     await this.requireProjectNotArchived(input.projectId);
 
@@ -77,9 +77,7 @@ export class ConversationService extends BaseService {
       const result = await db.insert(conversations).values(conversationData).returning();
       const createdConversation = result[0];
 
-      if (context?.operatorId) {
-        await this.auditService.logCreate('conversation', createdConversation.id, createdConversation, context.operatorId);
-      }
+      await this.auditService.logCreate('conversation', createdConversation.id, createdConversation, context.operatorId);
 
       logger.info({ conversationId: createdConversation.id }, 'Conversation created successfully');
 

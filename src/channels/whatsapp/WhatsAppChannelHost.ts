@@ -18,6 +18,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
+import { SYSTEM_CONTEXT } from '../../services/RequestContext';
 import { ProjectService } from '../../services/ProjectService';
 import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
@@ -381,7 +382,7 @@ export class WhatsAppChannelHost {
     // Resolve stageId: body overrides query param, then project default
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
-      const project = await this.projectService.getProjectById(projectId);
+      const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
       if (!resolvedStageId) {
         res.status(422).json({ error: 'No stageId provided and project has no default starting stage' });
@@ -407,7 +408,7 @@ export class WhatsAppChannelHost {
       status: 'initialized',
       direction: 'outgoing',
       metadata: body.metadata ?? null,
-    });
+    }, SYSTEM_CONTEXT);
 
     // Build Meta WhatsApp Cloud API template message payload
     const components: Array<{ type: string; parameters: Array<{ type: string; text: string }> }> = [];

@@ -63,10 +63,8 @@ export class ProviderService extends BaseService {
    * @returns The provider if found
    * @throws {NotFoundError} When provider is not found
    */
-  async getProviderById(id: string, context?: RequestContext): Promise<ProviderResponse> {
-    if (context) {
-      this.requirePermission(context, PERMISSIONS.PROVIDER_READ);
-    }
+  async getProviderById(id: string, context: RequestContext): Promise<ProviderResponse> {
+    this.requirePermission(context, PERMISSIONS.PROVIDER_READ);
     logger.debug({ providerId: id }, 'Fetching provider by ID');
 
     const provider = await db.query.providers.findFirst({ where: eq(providers.id, id) });
@@ -84,10 +82,8 @@ export class ProviderService extends BaseService {
    * @param context - Request context for authorization
    * @returns Paginated array of providers matching the criteria
    */
-  async listProviders(params?: ListParams, context?: RequestContext): Promise<ProviderListResponse> {
-    if (context) {
-      this.requirePermission(context, PERMISSIONS.PROVIDER_READ);
-    }
+  async listProviders(context: RequestContext, params?: ListParams): Promise<ProviderListResponse> {
+    this.requirePermission(context, PERMISSIONS.PROVIDER_READ);
     logger.debug({ params }, 'Listing providers');
 
     const conditions: SQL[] = [];
@@ -273,10 +269,8 @@ export class ProviderService extends BaseService {
    * @param context - Request context for authorization
    * @returns Array of audit log entries for the provider
    */
-  async getProviderAuditLogs(providerId: string, context?: RequestContext): Promise<any[]> {
-    if (context) {
-      this.requirePermission(context, PERMISSIONS.AUDIT_READ);
-    }
+  async getProviderAuditLogs(providerId: string, context: RequestContext): Promise<any[]> {
+    this.requirePermission(context, PERMISSIONS.AUDIT_READ);
     logger.debug({ providerId }, 'Fetching audit logs for provider');
 
     return await this.auditService.getEntityAuditLogs('provider', providerId);

@@ -21,6 +21,7 @@ import type { ApiKeySettings } from '../../apiKeyFeatures';
 import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
+import { SYSTEM_CONTEXT } from '../../services/RequestContext';
 import { ProjectService } from '../../services/ProjectService';
 import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
@@ -539,7 +540,7 @@ export class TwilioVoiceChannelHost {
     // Resolve stageId: body overrides project default
     let resolvedStageId = body.stageId;
     if (!resolvedStageId) {
-      const project = await this.projectService.getProjectById(projectId);
+      const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
       if (!resolvedStageId) {
         res.status(422).json({ error: 'No stageId provided and project has no default starting stage' });
@@ -565,7 +566,7 @@ export class TwilioVoiceChannelHost {
       status: 'initialized',
       direction: 'outgoing',
       metadata: body.metadata ?? null,
-    });
+    }, SYSTEM_CONTEXT);
 
     // Place the outbound call via Twilio REST API
     // Build the webhook URL from the incoming request so Twilio can reach our handler when

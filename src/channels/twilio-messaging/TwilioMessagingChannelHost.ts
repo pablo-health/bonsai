@@ -16,6 +16,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import type { CALInputMessage } from '../messages';
 import type { ClientMessageHandlerContext } from '../ClientMessageHandlerContext';
 import { ConversationService } from '../../services/ConversationService';
+import { SYSTEM_CONTEXT } from '../../services/RequestContext';
 import { ProjectService } from '../../services/ProjectService';
 import { UserService } from '../../services/UserService';
 import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
@@ -295,7 +296,7 @@ export class TwilioMessagingChannelHost {
     // Resolve stageId: body overrides query param, then project default
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
-      const project = await this.projectService.getProjectById(projectId);
+      const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
       if (!resolvedStageId) {
         res.status(422).json({ error: 'No stageId provided and project has no default starting stage' });
@@ -336,7 +337,7 @@ export class TwilioMessagingChannelHost {
       status: 'initialized',
       direction: 'outgoing',
       metadata: body.metadata ?? null,
-    });
+    }, SYSTEM_CONTEXT);
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
