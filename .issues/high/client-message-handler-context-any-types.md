@@ -1,9 +1,9 @@
 ---
 title: "ClientMessageHandlerContext send and sendError use any and raw string types"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [type-safety, channels]
 ---

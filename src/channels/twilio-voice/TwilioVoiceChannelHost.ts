@@ -629,7 +629,7 @@ export class TwilioVoiceChannelHost {
     let capturedInputTurnId: string | null = null;
     const context: ClientMessageHandlerContext = {
       session,
-      send: (msg: any) => {
+      send: (msg) => {
         if (msg.type === 'start_user_voice_input' && msg.success && msg.inputTurnId) {
           capturedInputTurnId = msg.inputTurnId;
         }

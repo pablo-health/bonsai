@@ -155,7 +155,7 @@ export class WebSocketChannelHost {
     const context: ClientMessageHandlerContext = {
       session,
       // Translate CAL response → WS wire format: map correlationId → requestId and inject sessionId
-      send: (msg: any) => {
+      send: (msg) => {
         const wsMsg: Record<string, unknown> = { ...msg };
         if (!wsMsg.requestId && wsMsg.correlationId) wsMsg.requestId = wsMsg.correlationId;
         if (!wsMsg.sessionId && session?.id) wsMsg.sessionId = session.id;

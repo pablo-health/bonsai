@@ -314,7 +314,7 @@ export class WebRTCChannelHost {
 
     const context: ClientMessageHandlerContext = {
       session,
-      send: (msg: any) => {
+      send: (msg) => {
         const outMsg: Record<string, unknown> = { ...msg };
         if (!outMsg.requestId && outMsg.correlationId) outMsg.requestId = outMsg.correlationId;
         if (!outMsg.sessionId && session?.id) outMsg.sessionId = session.id;

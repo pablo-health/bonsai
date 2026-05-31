@@ -155,6 +155,15 @@ export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.exten
 });
 
 /**
+ * Result of an abort_ai_generation command.
+ */
+export const calAbortAiGenerationResponseSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  success: z.boolean().describe('Whether the AI generation was successfully aborted'),
+  error: z.string().optional().describe('Error message if abort failed'),
+});
+
+/**
  * Discriminated union of all inbound message types accepted by a communication channel.
  */
 export const calInputMessageSchema = z.discriminatedUnion('type', [
@@ -452,6 +461,7 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsResponseSchema,
   calRunActionResponseSchema,
   calCallToolResponseSchema,
+  calAbortAiGenerationResponseSchema,
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
   calAbortAiGenerationOutputMessageSchema,
@@ -497,6 +507,7 @@ export type CALGetVarResponse = z.infer<typeof calGetVarResponseSchema>;
 export type CALGetAllVarsResponse = z.infer<typeof calGetAllVarsResponseSchema>;
 export type CALRunActionResponse = z.infer<typeof calRunActionResponseSchema>;
 export type CALCallToolResponse = z.infer<typeof calCallToolResponseSchema>;
+export type CALAbortAiGenerationResponse = z.infer<typeof calAbortAiGenerationResponseSchema>;
 
 export type CALStartAiGenerationOutputMessage = z.infer<typeof calStartAiGenerationOutputMessageSchema>;
 export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessageSchema>;
