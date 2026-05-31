@@ -1,9 +1,9 @@
 ---
 title: "ProjectExchangeService cross-project data leaks and hardcoded values"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, data-integrity]
 ---
