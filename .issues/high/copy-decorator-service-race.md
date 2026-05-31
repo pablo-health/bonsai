@@ -1,9 +1,9 @@
 ---
 title: "CopyDecoratorService dead code and TOCTOU race"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [race-condition, data-integrity]
 ---
