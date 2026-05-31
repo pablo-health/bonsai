@@ -1,9 +1,9 @@
 ---
 title: "SampleCopyService undefined error messages and unsafe casts"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [type-safety, error-handling]
 ---
@@ -14,8 +14,8 @@ tags: [type-safety, error-handling]
 
 Multiple HIGH issues in `SampleCopyService.ts`:
 
-1. **Line 205**: `updateData.name` can be undefined. Error message shows 'undefined'.
-2. **Line 273**: Multiple unsafe `as` casts bypass type safety.
+1. **Line 205**: `updateData.name` can be undefined. Error message shows 'undefined'. FIXED: nullish coalescing to 'unknown'.
+2. **Line 273**: Multiple unsafe `as` casts bypass type safety. FIXED: parse through `sampleCopyResponseSchema` to normalize types before constructing create payload.
 
 ## Steps to Reproduce
 
