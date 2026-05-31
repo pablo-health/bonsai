@@ -1,9 +1,9 @@
 ---
 title: "ConversationStorageService bare Error and orphaned uploads"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [error-handling, resource-leak]
 ---
@@ -33,3 +33,8 @@ Bare Error throws. Orphaned files on DB failure.
 ## Notes
 
 File: `src/services/ConversationStorageService.ts`
+
+## Resolution
+
+1. **Line 176 — Bare `Error`**: Replaced `new Error(...)` with `new InvalidOperationError(...)` to follow project convention and map correctly through the global error handler (409 status).
+2. **Lines 44-62 — Orphaned uploads**: Wrapped the DB insert in a try/catch. If the insert fails, the service attempts to delete the already-uploaded storage object via `provider.delete(key)`. Cleanup failures are logged at error level without swallowing the original DB error, which is re-thrown.
