@@ -1,6 +1,6 @@
 ---
 title: "ConversationTimeoutService multiple issues: shutdown, concurrency, and stale timestamps"
-severity: high
+severity: medium
 status: in_progress
 created: 2026-05-29
 updated: 2026-05-31
