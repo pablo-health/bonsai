@@ -718,15 +718,19 @@ export class ConversationRunner {
             backfill.ttsEndMs = ttsEndMs;
             if (Object.keys(backfill).length > 0) {
               const updated = await this.conversationService.updateConversationEventMetadata(this.conversation.projectId, assistantMessageEventId, backfill);
-              const eventUpdateMessage: CALConversationEventUpdateMessage = {
-                type: 'conversation_event_update',
-                conversationId: this.conversation.id,
-                eventType: 'message',
-                eventData: updated.eventData,
-                inputTurnId: this.turnData.inputTurnId,
-                outputTurnId: this.turnData.outputTurnId,
-              };
-              await this.channel.sendMessage(eventUpdateMessage);
+              if (!updated) {
+                logger.warn({ conversationId: this.conversation.id, eventId: assistantMessageEventId }, 'Failed to backfill TTS timing metadata');
+              } else {
+                const eventUpdateMessage: CALConversationEventUpdateMessage = {
+                  type: 'conversation_event_update',
+                  conversationId: this.conversation.id,
+                  eventType: 'message',
+                  eventData: updated.eventData,
+                  inputTurnId: this.turnData.inputTurnId,
+                  outputTurnId: this.turnData.outputTurnId,
+                };
+                await this.channel.sendMessage(eventUpdateMessage);
+              }
             }
           }
 
@@ -746,9 +750,9 @@ export class ConversationRunner {
           await this.handlePostResponseAction();
         });
 
-      ttsProvider.setOnSpeechGenerating(async (chunk) => {
-           this.recorder?.pushOutput(chunk.audio);
-           if (!firstTtsChunkGenerated) {
+        ttsProvider.setOnSpeechGenerating(async (chunk) => {
+          this.recorder?.pushOutput(chunk.audio);
+          if (!firstTtsChunkGenerated) {
             logger.info({ conversationId, chunkId: chunk.chunkId }, `First TTS chunk generated for conversation ${conversationId}`);
             firstTtsChunkGenerated = true;
             // Reset per-turn outbound converter state on first chunk of each TTS turn
@@ -1814,9 +1818,9 @@ export class ConversationRunner {
     }
 
     this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, {
-        algorithm: serverVadConfig.algorithm ?? 'legacy',
-        ...serverVadConfig,
-      } as ServerVadConfig);
+      algorithm: serverVadConfig.algorithm ?? 'legacy',
+      ...serverVadConfig,
+    } as ServerVadConfig);
     await this.vadProcessor.init();
 
     // Serialize all VAD event handlers via a promise chain. This prevents the race where
@@ -2526,15 +2530,19 @@ export class ConversationRunner {
       stageTransitionEndMs: this.turnData.stageTransitionEndMs ?? undefined,
       stageTransitionDurationMs: this.turnData.stageTransitionStartMs !== null && this.turnData.stageTransitionEndMs !== null ? this.turnData.stageTransitionEndMs - this.turnData.stageTransitionStartMs : undefined,
     }, this.turnMessageVisibility);
-    const messageUpdateMessage: CALConversationEventUpdateMessage = {
-      type: 'conversation_event_update',
-      conversationId: this.conversation.id,
-      eventType: 'message',
-      eventData: updated.eventData,
-      inputTurnId: this.turnData.inputTurnId,
-      outputTurnId: this.turnData.outputTurnId,
-    };
-    await this.channel.sendMessage(messageUpdateMessage);
+    if (!updated) {
+      logger.warn({ conversationId: this.conversation.id, eventId: userMessageEventId }, 'Failed to update message event with processing metadata');
+    } else {
+      const messageUpdateMessage: CALConversationEventUpdateMessage = {
+        type: 'conversation_event_update',
+        conversationId: this.conversation.id,
+        eventType: 'message',
+        eventData: updated.eventData,
+        inputTurnId: this.turnData.inputTurnId,
+        outputTurnId: this.turnData.outputTurnId,
+      };
+      await this.channel.sendMessage(messageUpdateMessage);
+    }
 
     await this.generateResponse(context, executionOutcome);
   }
