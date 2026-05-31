@@ -1,9 +1,9 @@
 ---
 title: "SetupService race condition and duplicate operator creation"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, race-condition]
 ---
