@@ -87,11 +87,15 @@ export class BenchmarkService extends BaseService {
   async deleteSuite(id: string, context: RequestContext): Promise<void> {
     this.requirePermission(context, PERMISSIONS.BENCHMARK_WRITE);
     await this.getSuiteOrThrow(id);
+    const [existingConfig] = await db.select({ id: benchmarkConfigs.id }).from(benchmarkConfigs).where(eq(benchmarkConfigs.suiteId, id)).limit(1);
+    if (existingConfig) throw new ConflictError(`Benchmark suite ${id} cannot be deleted because it has existing configs. Delete all configs first.`);
     const [existingRun] = await db.select({ id: benchmarkRuns.id }).from(benchmarkRuns).where(eq(benchmarkRuns.suiteId, id)).limit(1);
     if (existingRun) throw new ConflictError(`Benchmark suite ${id} cannot be deleted because it has existing runs. Delete all runs first.`);
+    // Cancel the cron schedule before deleting the suite to prevent a race where the cron fires
+    // and tries to create a run for a suite that no longer exists.
+    this.executorService.refreshSuiteSchedule(id, null, false);
     logger.info({ id, operatorId: context.operatorId }, 'Deleting benchmark suite');
     await db.delete(benchmarkSuites).where(eq(benchmarkSuites.id, id));
-    this.executorService.refreshSuiteSchedule(id, null, false);
   }
 
   /**
@@ -230,6 +234,8 @@ export class BenchmarkService extends BaseService {
     logger.info({ id, suiteId: input.suiteId, name: input.name, operatorId: context.operatorId }, 'Creating benchmark config');
 
     await this.getSuiteOrThrow(input.suiteId);
+    // Validate that the provider config exists before inserting to avoid a raw DB FK constraint error.
+    await this.getProviderConfigOrThrow(input.providerConfigId);
 
     const [row] = await db.insert(benchmarkConfigs).values({
       id,
@@ -265,7 +271,11 @@ export class BenchmarkService extends BaseService {
     };
     if (updateData.name !== undefined) updates.name = updateData.name;
     if (updateData.description !== undefined) updates.description = updateData.description ?? null;
-    if (updateData.providerConfigId !== undefined) updates.providerConfigId = updateData.providerConfigId;
+    // Validate that the provider config exists before updating to avoid a raw DB FK constraint error.
+    if (updateData.providerConfigId !== undefined) {
+      await this.getProviderConfigOrThrow(updateData.providerConfigId);
+      updates.providerConfigId = updateData.providerConfigId;
+    }
     if (updateData.inputType !== undefined) updates.inputType = updateData.inputType;
     if (updateData.inputData !== undefined) updates.inputData = updateData.inputData as Record<string, unknown>;
     if (updateData.repeats !== undefined) updates.repeats = updateData.repeats;
