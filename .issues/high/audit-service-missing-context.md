@@ -1,9 +1,9 @@
 ---
 title: "AuditService missing RequestContext and crash on empty results"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, crash, audit]
 ---
@@ -14,8 +14,8 @@ tags: [security, crash, audit]
 
 Multiple HIGH issues in `AuditService.ts`:
 
-1. **Line 56**: `auditLog[0]` crashes if `.returning()` returns empty array. No guard.
-2. **Lines 33/80/108/138**: No `RequestContext` parameter. Bypasses defense-in-depth security pattern.
+1. **Line 56**: `auditLog[0]` crashes if `.returning()` returns empty array. FIXED: added length guard with error throw.
+2. **Lines 33/80/108/138**: No `RequestContext` parameter. FALSE POSITIVE: AuditService is a low-level logging utility called exclusively by other services that already enforce permissions via RequestContext. All callers pass `context.operatorId` as `userId`. Adding RequestContext would be redundant — the audit service is a system-level mechanism, not a REST-exposed endpoint.
 
 ## Steps to Reproduce
 
