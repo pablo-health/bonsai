@@ -67,6 +67,7 @@ Both are resolved from the IoC container and started via `.start()`.
 - Use `types` over `interfaces`; never `require()` for types; always top-level `import`
 - Private methods after public ones
 - Add new errors to `/src/errors.ts` (extends Error); use existing ones where applicable
+- Split long lines into more readable format
 
 ## Security Pattern — Defense in Depth
 

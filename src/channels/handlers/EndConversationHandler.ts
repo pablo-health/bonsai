@@ -63,7 +63,7 @@ export class EndConversationHandler implements ClientMessageHandler<CALEndConver
       context.send(response);
 
       // Now detach, finish, and disconnect
-      this.sessionManager.detachConversationFromSession(session.id);
+      await this.sessionManager.detachConversationFromSession(session.id);
       await this.conversationService.finishConversation(projectId, message.conversationId);
       try {
         await session.clientConnection?.close();

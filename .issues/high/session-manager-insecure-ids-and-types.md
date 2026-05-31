@@ -1,9 +1,9 @@
 ---
 title: "SessionManager insecure session IDs and type violations"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, type-safety, channels]
 ---
@@ -14,13 +14,15 @@ tags: [security, type-safety, channels]
 
 Multiple HIGH issues in `SessionManager.ts`:
 
-1. **Line 65**: Session ID uses `Math.random()` — not cryptographically secure, ~7.8 trillion values. Use `crypto.randomUUID()`.
-2. **Line 65**: `substr` is deprecated. Use `substring`.
-3. **Line 68**: `projectId: null` assigned but type is `string`. Runtime values violate declared Session type.
-4. **Lines 117-128**: `attachConversationToSession` doesn't clean up existing runner. Old runner abandoned.
-5. **Lines 124-125**: Dynamic import + `container.resolve(ConversationRunner)` — if singleton, all sessions share runner. Cross-session corruption.
-6. **Lines 135-143, 151-158**: `detachConversationFromSession` clears runner without calling `runner.cleanup()`. Resource leak.
-7. **Lines 68-69, 141-142, 154-155**: `projectId`/`conversationId` typed as `string` but assigned `null`. Type violation.
+1. **Line 65**: Session ID uses `Math.random()` — not cryptographically secure, ~7.8 trillion values. FIXED: replaced with `crypto.randomUUID()`.
+2. **Line 65**: `substr` is deprecated. FIXED: eliminated by switching to `randomUUID()`.
+3. **Line 68**: `projectId: null` assigned but type is `string`. FALSE POSITIVE: Session type already declares `projectId: string | null`.
+4. **Lines 117-128**: `attachConversationToSession` doesn't clean up existing runner. FIXED: added cleanup of existing runner before attaching new conversation.
+5. **Lines 124-125**: Dynamic import + `container.resolve(ConversationRunner)` — if singleton, all sessions share runner. FALSE POSITIVE: ConversationRunner is `@injectable()`, not `@singleton()`.
+6. **Lines 135-143, 151-158**: `detachConversationFromSession` clears runner without calling `runner.cleanup()`. FIXED: both detach methods now call `runner.cleanup()` with error handling.
+7. **Lines 68-69, 141-142, 154-155**: `projectId`/`conversationId` typed as `string` but assigned `null`. FALSE POSITIVE: Session type already declares `string | null`.
+
+Also updated callers in `ResumeConversationHandler` and `EndConversationHandler` to await the now-async `detachConversationFromSession`.
 
 ## Steps to Reproduce
 

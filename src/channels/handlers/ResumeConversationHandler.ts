@@ -66,7 +66,7 @@ export class ResumeConversationHandler implements ClientMessageHandler<CALResume
       } catch (cleanupError) {
         logger.error({ error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError), conversationId: message.conversationId }, 'Failed to save conversation_failed event during cleanup');
       }
-      this.sessionManager.detachConversationFromSession(context.session.id);
+      await this.sessionManager.detachConversationFromSession(context.session.id);
       const response: CALResumeConversationResponse = { type: 'resume_conversation', conversationId: message.conversationId, correlationId: message.correlationId, success: false, error: 'Failed to resume conversation' };
       context.send(response);
       return;
