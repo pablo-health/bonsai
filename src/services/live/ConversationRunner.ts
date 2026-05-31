@@ -144,6 +144,7 @@ export type StageRuntimeData = {
   agent: AgentResponse | null;
   fillerLlmProvider?: ILlmProvider;
   fillerLlmProviderInfo?: LlmProviderInfo;
+  moderationProvider?: ILlmProvider;
   faq: FaqItem[];
   costManagementConfig: CostManagementConfig | null;
 }
@@ -315,6 +316,7 @@ export class ConversationRunner {
       sampleCopyClassifier: undefined,
       asrProvider: undefined,
       ttsProvider: undefined,
+      moderationProvider: undefined,
       shouldEndConversation: false,
       agent: null,
       faq: [],
@@ -529,6 +531,17 @@ export class ConversationRunner {
       }
     } else if (this.session.sessionSettings.sendVoiceInput) {
       logger.warn({ conversationId: conversation.id, projectId: project?.id, acceptVoice: project?.acceptVoice, asrProviderId: project?.asrConfig?.asrProviderId ?? null }, `Session requests voice input but ASR provider will not be initialised (acceptVoice=${project?.acceptVoice}, asrProviderId=${project?.asrConfig?.asrProviderId ?? 'unset'}). Both must be set. Voice input will be unavailable.`);
+    }
+
+    // Initialize moderation provider if configured on the project
+    if (project.moderationConfig?.enabled && project.moderationConfig.llmProviderId) {
+      const moderationProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, project.moderationConfig.llmProviderId) });
+      if (moderationProviderEntity) {
+        stageData.moderationProvider = await this.llmProviderFactory.createProviderForEnumeration(moderationProviderEntity);
+        await stageData.moderationProvider.init();
+      } else {
+        logger.warn({ projectId: project.id, llmProviderId: project.moderationConfig.llmProviderId }, 'Moderation provider not found, moderation will be skipped');
+      }
     }
 
     return stageData;
@@ -2228,7 +2241,7 @@ export class ConversationRunner {
     if (isStrictModerationMode) {
       // Strict mode (default): moderation fully resolves before any LLM call that receives user-derived content.
       // This prevents inappropriate content from reaching provider APIs and risking account bans.
-      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
         if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
@@ -2349,7 +2362,7 @@ export class ConversationRunner {
     })();
 
     // Standard mode: fire moderation in parallel with both filler delivery and classification.
-    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
 
     // Kick off classification concurrently with filler delivery — neither depends on the other.
     const processingStartMs = Date.now();
