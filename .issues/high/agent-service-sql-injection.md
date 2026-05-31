@@ -1,9 +1,9 @@
 ---
 title: "AgentService SQL injection and undefined overwrites"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, sql-injection, data-integrity]
 ---
@@ -33,3 +33,7 @@ SQL injection via tags. All fields overwritten on update.
 ## Notes
 
 File: `src/services/AgentService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Undefined overwrites issue is resolved (Drizzle filters undefined), but SQL injection at line 108 persists. Uses `sql.join(tagsArray, ', ')` for raw string interpolation of user-supplied tag values instead of parameterized queries.

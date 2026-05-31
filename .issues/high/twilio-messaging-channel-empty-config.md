@@ -3,7 +3,7 @@ title: "TwilioMessagingCommunicationChannel empty config schema"
 severity: high
 status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [validation, twilio]
 ---
@@ -30,3 +30,7 @@ Empty schema accepts any configuration without validation.
 ## Notes
 
 File: `src/channels/twilio-messaging/TwilioMessagingCommunicationChannel.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issue persists. Line 26 still returns `z.object({})`. The proper schema `twilioMessagingChannelProviderConfigSchema` exists in the provider but is never imported or used.

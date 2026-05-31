@@ -1,7 +1,7 @@
 ---
 title: "ConversationTimeoutService multiple issues: shutdown, concurrency, and stale timestamps"
 severity: medium
-status: in_progress
+status: open
 created: 2026-05-29
 updated: 2026-05-31
 assignee: ""
@@ -53,3 +53,7 @@ Multiple issues in `ConversationTimeoutService.ts`:
 ## Notes
 
 File: `src/services/ConversationTimeoutService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issues #1 (cron handle) and #2 (concurrency guard) are fixed. Issues #3 (lastActivityAt reset on aborted conversations), #4 (sequential for loop), and #5 (race condition with requireProjectNotArchived) remain unresolved.

@@ -1,9 +1,9 @@
 ---
 title: "WebRTCConnection unguarded session access and timer leaks"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [crash, resource-leak, webrtc]
 ---
@@ -36,3 +36,7 @@ Uncaught TypeErrors. Timer leaks on dead connections.
 ## Notes
 
 File: `src/channels/webrtc/WebRTCConnection.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issues 2-5 are fixed (null guards and closed-state checks added), but issue #1 (`sendMessage` at line 125 is still `async` with no `await`) remains. This is likely intentional to satisfy the IClientConnection interface contract.

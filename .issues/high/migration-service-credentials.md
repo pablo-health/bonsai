@@ -3,7 +3,7 @@ title: "MigrationService plain-text credentials and argument bugs"
 severity: high
 status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, data-integrity]
 ---
@@ -36,3 +36,7 @@ Plaintext credentials. Wrong arguments. Fire-and-forget operations.
 ## Notes
 
 File: `src/services/MigrationService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issues 1 and 2 are resolved, but 3 issues remain: (1) plain-text credentials with no HTTPS enforcement, (2) `runPull` at line 306 is still fire-and-forget, (3) preview at line 354 passes empty string for `restSchemaHash` producing inconsistent bundles.

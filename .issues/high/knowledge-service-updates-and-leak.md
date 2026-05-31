@@ -3,7 +3,7 @@ title: "KnowledgeService unconditional updates and cross-project data leak"
 severity: high
 status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, data-integrity]
 ---
@@ -34,3 +34,7 @@ All fields overwritten. Cross-project data access. Crash on missing record.
 ## Notes
 
 File: `src/services/KnowledgeService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Unconditional updates are not an issue (Drizzle filters undefined). However: (1) missing `projectId` scope at line 175 in `updateKnowledgeCategory` post-update fetch is still present, (2) non-null assertion `category!` at line 177 still present.

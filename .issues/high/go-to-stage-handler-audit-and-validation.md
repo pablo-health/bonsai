@@ -1,9 +1,9 @@
 ---
 title: "GoToStageHandler audit log before execution and missing validation"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [audit-log, validation, websocket]
 ---
@@ -33,3 +33,7 @@ Empty stage ID passes through. Audit event persisted before execution.
 ## Notes
 
 File: `src/channels/handlers/GoToStageHandler.ts`
+
+## Verification
+
+Re-opened 2026-05-31: StageId validation fix is in place, but audit-log-before-execution issue persists: `saveCommandEvent` (line 46) still runs before `goToStage` (line 47), recording commands that never completed.

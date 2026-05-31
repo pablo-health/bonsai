@@ -3,7 +3,7 @@ title: "ClassifierService missing permission checks and extra DB queries"
 severity: high
 status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, performance]
 ---
@@ -33,3 +33,7 @@ Missing permission checks. Extra DB round-trips.
 ## Notes
 
 File: `src/services/ClassifierService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: None of the reported issues are fixed. `getClassifierById` (line 63) and `getClassifierAuditLogs` (line 279) still lack `context` parameter and `requirePermission()` calls. `isProjectActive()` extra DB query still present at lines 73 and 140.

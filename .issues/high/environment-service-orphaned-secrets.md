@@ -3,7 +3,7 @@ title: "EnvironmentService orphaned secrets on DB failure"
 severity: high
 status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, data-integrity]
 ---
@@ -33,3 +33,7 @@ Secret stored in vault but DB record fails, leaving orphaned secret.
 ## Notes
 
 File: `src/services/EnvironmentService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issue persists. At lines 46-47 (create) and 182-185 (update), `storeSecret()` is called before DB write. If DB insert/update fails, the secret remains orphaned in the vault. No transaction or compensation logic exists.

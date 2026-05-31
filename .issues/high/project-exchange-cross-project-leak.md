@@ -1,7 +1,7 @@
 ---
 title: "ProjectExchangeService cross-project data leaks and hardcoded values"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
 updated: 2026-05-31
 assignee: ""
@@ -34,3 +34,7 @@ Cross-project leaks. Data loss in export. Missing ownership checks.
 ## Notes
 
 File: `src/services/ProjectExchangeService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issue 3 (export no project ownership check) still present — line 64 fetches project without operatorId filter, allowing cross-project data leakage.

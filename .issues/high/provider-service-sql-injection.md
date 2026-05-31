@@ -1,9 +1,9 @@
 ---
 title: "ProviderService SQL injection and unconditional field overwrites"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, sql-injection, data-integrity]
 ---
@@ -19,3 +19,7 @@ Note: The original claim about "partial update overwrites with NULL" was incorre
 ## Notes
 
 File: `src/services/providers/ProviderService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: SQL injection still present. The inline JSONB query was refactored to shared utility `buildTextSearchCondition` in `src/utils/textSearch.ts:36`, but it still uses raw template literal interpolation with `JSON.stringify(parsed.value)` instead of `sql.param()`. User-controlled `textSearch` input can break out of JSON structure and inject SQL.

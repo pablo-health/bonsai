@@ -1,9 +1,9 @@
 ---
 title: "SetVarHandler sensitive data in audit log and persistence before execution"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, audit-log, websocket]
 ---
@@ -33,3 +33,7 @@ Values persisted in plaintext before execution completes.
 ## Notes
 
 File: `src/channels/handlers/SetVarHandler.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Both issues remain. `saveCommandEvent` (line 42) still runs before `setVariable` (line 43), leaving orphan command events on failure. `variableValue` is still passed directly without sanitization/redaction, persisting secrets/PII in plaintext.

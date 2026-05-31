@@ -1,9 +1,9 @@
 ---
 title: "ChannelHandlerDispatcher startup crash and type safety bypasses"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [crash, type-safety, websocket]
 ---
@@ -34,3 +34,7 @@ Startup crash on handler factory failure. Type safety bypassed via `as any` cast
 ## Notes
 
 File: `src/channels/ChannelHandlerDispatcher.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issue 1 (startup crash) is resolved, but issue 2 (`message as any` at line 92) and issue 3 (missing `correlationId` in catch-block `sendError` at line 96) remain unresolved.

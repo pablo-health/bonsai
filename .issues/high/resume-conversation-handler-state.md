@@ -1,9 +1,9 @@
 ---
 title: "ResumeConversationHandler inconsistent state and premature response"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [data-integrity, websocket]
 ---
@@ -35,3 +35,7 @@ Premature success response. No null guard on runner. Inconsistent state on error
 ## Notes
 
 File: `src/channels/handlers/ResumeConversationHandler.ts`
+
+## Verification
+
+Re-opened 2026-05-31: 3 of 4 issues remain. Issue 1: error message still says 'archived project' for archived conversation. Issue 2: `attachConversationToSession` has no try/catch. Issue 4: no null guard on `context.session.runner` before `resumeConversation()`.

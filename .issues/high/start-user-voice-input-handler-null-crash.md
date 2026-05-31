@@ -1,9 +1,9 @@
 ---
 title: "StartUserVoiceInputHandler null access crashes and double response"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [crash, error-handling, websocket]
 ---
@@ -35,3 +35,7 @@ Uncaught TypeErrors on null access. Double error responses on send failure.
 ## Notes
 
 File: `src/channels/handlers/StartUserVoiceInputHandler.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issues #1 and #2 (null checks) are fixed, but issues #3 and #4 remain: double response if `context.send()` at line 55 throws, and the catch block still swallows all errors including unexpected runtime errors from `runner.startUserVoiceInput()`.

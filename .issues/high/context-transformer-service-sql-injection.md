@@ -1,9 +1,9 @@
 ---
 title: "ContextTransformerService SQL injection and missing permissions"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, sql-injection]
 ---
@@ -33,3 +33,7 @@ SQL injection via tags. Missing permissions on audit access.
 ## Notes
 
 File: `src/services/ContextTransformerService.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Permission check issue is resolved, but SQL injection at line 110 persists. Still uses raw string interpolation with `JSON.stringify(tagsArray)` inside Drizzle's `sql` template literal instead of `sql.param()`.

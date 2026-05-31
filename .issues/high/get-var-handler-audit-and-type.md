@@ -1,9 +1,9 @@
 ---
 title: "GetVarHandler audit log before execution and type inconsistency"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [audit-log, websocket]
 ---
@@ -33,3 +33,7 @@ Command event persisted before execution completes. Inconsistent response type n
 ## Notes
 
 File: `src/channels/handlers/GetVarHandler.ts`
+
+## Verification
+
+Re-opened 2026-05-31: Issue 1 (audit before execution) still unresolved - `saveCommandEvent` at line 42 runs before `getVariable` at line 43, persisting orphan command events on failure. Issue 2 (response type naming) is actually a false positive - naming is consistent across all sibling handlers.
