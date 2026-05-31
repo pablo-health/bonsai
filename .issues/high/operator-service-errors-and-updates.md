@@ -1,9 +1,9 @@
 ---
 title: "OperatorService password hash leak and plain Error throws"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 assignee: ""
 tags: [security, error-handling]
 ---
