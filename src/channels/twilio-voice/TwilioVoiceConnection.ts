@@ -90,7 +90,7 @@ export class TwilioVoiceConnection implements IClientConnection {
           resolve();
         };
         this.pendingCloseResolve = resolveOnce;
-        setTimeout(resolveOnce, 5000);
+        setTimeout(resolveOnce, 60000);
       });
     }
 
