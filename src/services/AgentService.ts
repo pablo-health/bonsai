@@ -105,7 +105,8 @@ export class AgentService extends BaseService {
         for (const [field, filter] of Object.entries(params.filters)) {
           if (field === 'tags') {
             const tagsArray = Array.isArray(filter) ? filter as string[] : [filter as string];
-            conditions.push(sql`${agents.tags} @> jsonb_build_array(${sql.join(tagsArray, ', ')})`);
+            const taggedValues = tagsArray.map(tag => sql`${tag}`);
+            conditions.push(sql`${agents.tags} @> jsonb_build_array(${sql.join(taggedValues, ', ')})`);
             continue;
           }
           const condition = buildFilterCondition(field, filter, columnMap, logger);
