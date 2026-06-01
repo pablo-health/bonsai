@@ -1,7 +1,7 @@
 ---
 title: "TwilioVoiceChannelHost security vulnerabilities and API key exposure"
 severity: high
-status: open
+status: closed
 created: 2026-05-29
 updated: 2026-05-29
 assignee: ""
