@@ -107,7 +107,7 @@ export class ContextTransformerService extends BaseService {
         for (const [field, filter] of Object.entries(params.filters)) {
           if (field === 'tags') {
             const tagsArray = Array.isArray(filter) ? filter as string[] : [filter as string];
-            conditions.push(sql`${contextTransformers.tags} @> ${JSON.stringify(tagsArray)}::jsonb`);
+            conditions.push(sql`${contextTransformers.tags} @> ${sql.param(JSON.stringify(tagsArray))}::jsonb`);
             continue;
           }
           const condition = buildFilterCondition(field, filter, columnMap, logger);
