@@ -25,7 +25,7 @@ import { conversationEventTypeSchema, conversationEventDataSchema } from '../typ
  * Base fields shared by all inbound (input) messages.
  */
 export const calBaseInputMessageSchema = z.object({
-  conversationId: z.string().describe('Unique identifier of the conversation'),
+  conversationId: z.string().min(1).describe('Unique identifier of the conversation'),
   correlationId: z.string().optional().describe('Optional caller-supplied identifier echoed back in the corresponding result message'),
 });
 

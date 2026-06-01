@@ -35,6 +35,10 @@ export class ResumeConversationHandler implements ClientMessageHandler<CALResume
       throw new InvalidOperationError('A conversation is already active in this session');
     }
 
+    if (!message.conversationId) {
+      throw new InvalidOperationError('conversationId is required to resume a conversation');
+    }
+
     const conversation = await this.conversationService.getConversationById(context.session.projectId, message.conversationId);
     if (!conversation) {
       throw new NotFoundError('Conversation not found');
