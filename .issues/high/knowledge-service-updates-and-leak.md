@@ -1,9 +1,9 @@
 ---
 title: "KnowledgeService unconditional updates and cross-project data leak"
 severity: high
-status: open
+status: resolved
 created: 2026-05-29
-updated: 2026-05-31
+updated: 2026-06-01
 assignee: ""
 tags: [security, data-integrity]
 ---
