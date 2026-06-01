@@ -1,11 +1,11 @@
 ---
 title: "Knowledge base FAQ entries not passed to prompt builder"
 severity: medium
-status: open
+status: resolved
 created: 2026-06-01
 updated: 2026-06-01
 assignee: ""
-tags: [bug, investigation-needed]
+tags: [misconfiguration, knowledge-base]
 ---
 
 # Knowledge base FAQ entries not passed to prompt builder
@@ -30,4 +30,4 @@ No FAQ entries are passed to the prompt builder/renderer.
 
 ## Notes
 
-Not 100% certain this is a bug — could be a project misconfiguration. Further investigation needed to determine whether the issue is in the backend logic or in how the project is configured.
+Likely a project misconfiguration: the stage prompt template is missing `{{faq}}` placeholders. The `faq` variable is available in the context at `buildContextForUserInput` (`src/services/live/ConversationContextBuilder.ts:1088`), but if the prompt template doesn't reference it, FAQ items are silently ignored. No code change needed — the user needs to add `{{faq}}` to their stage prompt template.
