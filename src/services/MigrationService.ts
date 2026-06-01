@@ -67,6 +67,9 @@ export class MigrationService extends BaseService {
    */
   private readonly jobs = new Map<string, MigrationJob>();
 
+  /** Tracked promises for active pull jobs so they aren't lost on process exit. */
+  private readonly activePullPromises = new Map<string, Promise<void>>();
+
   constructor(
     @inject(VersionService) private readonly versionService: VersionService,
     @inject(AuditService) private readonly auditService: AuditService,
@@ -253,6 +256,10 @@ export class MigrationService extends BaseService {
 
     const resolvedEnv = await this.secretRefUtils.resolveObject(env as any) as typeof env;
 
+    if (!env.url.startsWith('https://')) {
+      throw new InvalidOperationError('Remote environment URL must use HTTPS to protect credentials during authentication');
+    }
+
     const authRes = await this.safeFetch(`${env.url}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -303,9 +310,10 @@ export class MigrationService extends BaseService {
 
     this.jobs.set(jobId, job);
 
-    this.runPull(jobId, environmentId, input, context).catch(err => {
-      logger.error({ jobId, error: err.message }, 'Unexpected error in migration pull background task');
+    const pullPromise = this.runPull(jobId, environmentId, input, context).finally(() => {
+      this.activePullPromises.delete(jobId);
     });
+    this.activePullPromises.set(jobId, pullPromise);
 
     logger.info({ jobId, environmentId, selection, dryRun: input.dryRun }, 'Migration pull job queued');
 
@@ -351,7 +359,8 @@ export class MigrationService extends BaseService {
       savedFunnelQueryIds: query.savedFunnelQueryIds,
     };
 
-    const bundle = await this.resolveBundle(selection, '', selection);
+    const { restSchemaHash } = this.versionService.getVersion();
+    const bundle = await this.resolveBundle(selection, restSchemaHash, selection);
 
     const toStub = (r: Record<string, any>): EntityStub => ({ id: r.id as string, name: r.name as string });
     const toProjectStub = (r: Record<string, any>): EntityStub => ({ id: r.id as string, name: r.name as string, projectId: r.projectId as string });
@@ -777,6 +786,10 @@ export class MigrationService extends BaseService {
 
       // Resolve any encrypted secret references in credentials
       const resolvedEnv = await this.secretRefUtils.resolveObject(env as any) as typeof env;
+
+      if (!env.url.startsWith('https://')) {
+        throw new InvalidOperationError('Remote environment URL must use HTTPS to protect credentials during authentication');
+      }
 
       // 2. Authenticate against source instance
       const authRes = await this.safeFetch(`${env.url}/api/auth/login`, {
