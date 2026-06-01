@@ -39,8 +39,8 @@ export class SetVarHandler implements ClientMessageHandler<CALSetVarRequest> {
         throw new InvalidOperationError('No active conversation runner');
       }
 
-      await context.session.runner.saveCommandEvent('set_var', { stageId: message.stageId, variableName: message.variableName, variableValue: message.variableValue });
       await context.session.runner.setVariable(message.stageId, message.variableName, message.variableValue);
+      await context.session.runner.saveCommandEvent('set_var', { stageId: message.stageId, variableName: message.variableName });
 
       const response: CALSetVarResponse = { type: 'set_var', conversationId: message.conversationId, correlationId: message.correlationId, success: true };
       context.send(response);

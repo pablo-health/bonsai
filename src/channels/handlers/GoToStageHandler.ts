@@ -43,8 +43,8 @@ export class GoToStageHandler implements ClientMessageHandler<CALGoToStageReques
         throw new InvalidOperationError('No active conversation runner');
       }
 
-      await context.session.runner.saveCommandEvent('go_to_stage', { stageId: message.stageId });
       await context.session.runner.goToStage(message.stageId);
+      await context.session.runner.saveCommandEvent('go_to_stage', { stageId: message.stageId });
 
       const response: CALGoToStageResponse = { type: 'go_to_stage', conversationId: message.conversationId, correlationId: message.correlationId, success: true };
       context.send(response);

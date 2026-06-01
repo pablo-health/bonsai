@@ -39,8 +39,8 @@ export class GetVarHandler implements ClientMessageHandler<CALGetVarRequest> {
         throw new InvalidOperationError('No active conversation runner');
       }
 
-      await context.session.runner.saveCommandEvent('get_var', { stageId: message.stageId, variableName: message.variableName });
       const variableValue = await context.session.runner.getVariable(message.stageId, message.variableName);
+      await context.session.runner.saveCommandEvent('get_var', { stageId: message.stageId, variableName: message.variableName });
 
       const response: CALGetVarResponse = { type: 'get_var', conversationId: message.conversationId, correlationId: message.correlationId, success: true, variableName: message.variableName, variableValue };
       context.send(response);
