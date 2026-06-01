@@ -1,7 +1,7 @@
 ---
 title: "SetVarHandler sensitive data in audit log and persistence before execution"
 severity: high
-status: resolved
+status: open
 created: 2026-05-29
 updated: 2026-06-01
 assignee: ""
@@ -37,3 +37,5 @@ File: `src/channels/handlers/SetVarHandler.ts`
 ## Verification
 
 Re-opened 2026-05-31: Both issues remain. `saveCommandEvent` (line 42) still runs before `setVariable` (line 43), leaving orphan command events on failure. `variableValue` is still passed directly without sanitization/redaction, persisting secrets/PII in plaintext.
+
+Re-evaluated 2026-06-01: Issue 1 (audit before execution) is FIXED — `setVariable` now runs before `saveCommandEvent` (lines 42-43). Issue 2 (no sanitization) remains NOT_FIXED — `variableValue` is still passed directly to `saveCommandEvent` without redaction (line 43).

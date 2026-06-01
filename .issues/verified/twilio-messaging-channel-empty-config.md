@@ -1,7 +1,7 @@
 ---
 title: "TwilioMessagingCommunicationChannel empty config schema"
 severity: high
-status: resolved
+status: closed
 created: 2026-05-29
 updated: 2026-06-01
 assignee: ""
