@@ -46,10 +46,20 @@ export class ResumeConversationHandler implements ClientMessageHandler<CALResume
     }
 
     if (conversation.archived) {
-      throw new ArchivedProjectError('Cannot resume a conversation belonging to an archived project');
+      throw new ArchivedProjectError('Cannot resume an archived conversation');
     }
 
-    await this.sessionManager.attachConversationToSession(context.session.id, message.conversationId);
+    try {
+      await this.sessionManager.attachConversationToSession(context.session.id, message.conversationId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to attach conversation to session';
+      logger.error({ error: errorMessage, sessionId: context.session.id, conversationId: message.conversationId }, 'Failed to attach conversation to session');
+      throw error;
+    }
+
+    if (!context.session.runner) {
+      throw new InvalidOperationError('No active conversation runner');
+    }
 
     // Resume the conversation
     try {
