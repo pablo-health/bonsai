@@ -53,6 +53,7 @@
     "handlebars": "^4.7.9",
     "isolated-vm": "^5.0.4",
     "jsonwebtoken": "^9.0.3",
+    "mailparser": "^3.9.9",
     "microsoft-cognitiveservices-speech-sdk": "^1.47.0",
     "node-cron": "^4.2.1",
     "openai": "^6.15.0",

@@ -24,6 +24,8 @@ import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contract
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { ThreadIdResolver } from '../shared/ThreadIdResolver';
 import { NotFoundError } from '../../../errors';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { simpleParser } from 'mailparser';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -57,7 +59,13 @@ type SesReceiptMessage = {
     spamVerdict?: { status: string };
     virusVerdict?: { status: string };
     disposition?: string;
+    action?: {
+      type?: string;
+      bucketName?: string;
+      objectKey?: string;
+    };
   };
+  content?: string;
 };
 
 @singleton()
@@ -149,7 +157,7 @@ export class SesChannelHost {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'SES webhook: channel provider config is invalid');
       return;
     }
-    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy } = configResult.data;
+    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName } = configResult.data;
 
     const snsNotification = req.body as SnsNotification;
 
@@ -190,12 +198,15 @@ export class SesChannelHost {
       references: commonHeaders.references,
     });
 
+    const rawMime = await this.getRawMime(sesMessage, inboundMode, s3BucketName, accessKeyId, secretAccessKey, region, projectId);
+    const emailBody = await this.extractEmailBody(rawMime, senderEmail);
+
     const emailKey = `${projectId}:${threadId}`;
     let existingSessionId = this.emailSessionMap.get(emailKey);
 
     if (existingSessionId) {
       this.scheduleTimeout(existingSessionId, emailKey);
-      await this.dispatchTextInput(existingSessionId, senderEmail);
+      await this.dispatchTextInput(existingSessionId, emailBody);
     } else {
       const connection = new SesConnection(
         senderEmail,
@@ -220,7 +231,7 @@ export class SesChannelHost {
       const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
       await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
-      await this.dispatchTextInput(sessionId, senderEmail);
+      await this.dispatchTextInput(sessionId, emailBody);
     }
   }
 
@@ -337,7 +348,7 @@ export class SesChannelHost {
     res.status(201).json(response);
   }
 
-  private async dispatchTextInput(sessionId: string, senderEmail: string): Promise<void> {
+  private async dispatchTextInput(sessionId: string, text: string): Promise<void> {
     const session = this.sessionManager.getSession(sessionId);
     if (!session?.conversationId) {
       logger.warn({ sessionId }, 'SES: cannot dispatch message — no active conversation');
@@ -349,8 +360,90 @@ export class SesChannelHost {
       return;
     }
 
-    const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text: `Email from ${senderEmail}`, correlationId: undefined };
+    const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text, correlationId: undefined };
     await this.dispatcher.dispatch(msg, this.buildContext(sessionId));
+  }
+
+  private async getRawMime(
+    sesMessage: SesReceiptMessage,
+    inboundMode: 'sns' | 's3',
+    s3BucketName: string | undefined,
+    accessKeyId: string,
+    secretAccessKey: string,
+    region: string,
+    projectId: string,
+  ): Promise<string | null> {
+    if (inboundMode === 'sns') {
+      const content = sesMessage.content;
+      if (!content) {
+        logger.warn({ projectId }, 'SES webhook (sns mode): no "content" field in notification — receipt rule may not use an SNS action');
+        return null;
+      }
+      return content;
+    }
+
+    const action = sesMessage.receipt?.action;
+    if (!action?.objectKey) {
+      logger.warn({ projectId }, 'SES webhook (s3 mode): no action.objectKey in notification — receipt rule may not use an S3 action');
+      return null;
+    }
+
+    const bucket = action.bucketName;
+    if (!bucket) {
+      logger.warn({ projectId }, 'SES webhook (s3 mode): no action.bucketName in notification');
+      return null;
+    }
+
+    if (s3BucketName && bucket !== s3BucketName) {
+      logger.warn({ projectId, expectedBucket: s3BucketName, actualBucket: bucket }, 'SES webhook (s3 mode): notification bucket does not match configured s3BucketName');
+      return null;
+    }
+
+    try {
+      const s3Client = new S3Client({
+        region,
+        credentials: { accessKeyId, secretAccessKey },
+      });
+      const command = new GetObjectCommand({ Bucket: bucket, Key: action.objectKey });
+      const response = await s3Client.send(command);
+
+      if (!response.Body) {
+        logger.warn({ projectId, objectKey: action.objectKey }, 'SES webhook (s3 mode): no body returned from S3');
+        return null;
+      }
+
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks).toString('utf8');
+    } catch (error) {
+      logger.error({ error, projectId, bucket, objectKey: action.objectKey }, 'SES webhook (s3 mode): failed to fetch email from S3');
+      return null;
+    }
+  }
+
+  private async extractEmailBody(rawMime: string | null, senderEmail: string): Promise<string> {
+    if (!rawMime) {
+      return `Email from ${senderEmail}`;
+    }
+
+    try {
+      const parsed = await simpleParser(rawMime);
+      if (parsed.text) {
+        return parsed.text.trim();
+      }
+      if (parsed.textAsHtml) {
+        return parsed.textAsHtml.trim();
+      }
+      if (parsed.html) {
+        return parsed.html.trim();
+      }
+    } catch (error) {
+      logger.warn({ error }, 'SES webhook: failed to parse MIME content');
+    }
+
+    return `Email from ${senderEmail}`;
   }
 
   private scheduleTimeout(sessionId: string, emailKey: string): void {
