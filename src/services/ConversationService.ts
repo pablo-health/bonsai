@@ -53,9 +53,9 @@ export class ConversationService extends BaseService {
    * @param context - Optional request context for auditing
    * @returns The created conversation
    */
-  async createConversation(input: CreateConversationInput, context?: RequestContext): Promise<ConversationResponse> {
+  async createConversation(input: CreateConversationInput, context: RequestContext): Promise<ConversationResponse> {
     const conversationId = input.id ?? generateId(ID_PREFIXES.CONVERSATION);
-    logger.info({ conversationId, projectId: input.projectId, userId: input.userId, sessionId: input.sessionId, stageId: input.stageId, operatorId: context?.operatorId }, 'Creating conversation');
+    logger.info({ conversationId, projectId: input.projectId, userId: input.userId, sessionId: input.sessionId, stageId: input.stageId, operatorId: context.operatorId }, 'Creating conversation');
 
     await this.requireProjectNotArchived(input.projectId);
 
@@ -77,9 +77,7 @@ export class ConversationService extends BaseService {
       const result = await db.insert(conversations).values(conversationData).returning();
       const createdConversation = result[0];
 
-      if (context?.operatorId) {
-        await this.auditService.logCreate('conversation', createdConversation.id, createdConversation, context.operatorId);
-      }
+      await this.auditService.logCreate('conversation', createdConversation.id, createdConversation, context.operatorId);
 
       logger.info({ conversationId: createdConversation.id }, 'Conversation created successfully');
 
@@ -185,6 +183,8 @@ export class ConversationService extends BaseService {
    * @param metadata - The metadata object to store on the conversation
    */
   async setConversationMetadata(projectId: string, conversationId: string, metadata: Record<string, any>): Promise<void> {
+    await this.requireProjectNotArchived(projectId);
+
     try {
       await db.update(conversations).set({ metadata, updatedAt: new Date() }).where(and(eq(conversations.projectId, projectId), eq(conversations.id, conversationId)));
       logger.debug({ conversationId }, 'Conversation metadata updated');
@@ -205,9 +205,9 @@ export class ConversationService extends BaseService {
   async updateConversationEventMetadata(projectId: string, eventId: string, metadataUpdate: Record<string, any>): Promise<ConversationEventResponse | null> {
     try {
       const existing = await db.query.conversationEvents.findFirst({ where: and(eq(conversationEvents.projectId, projectId), eq(conversationEvents.id, eventId)) });
-      if (!existing) {
+     if (!existing) {
         logger.warn({ projectId, eventId }, 'Cannot update metadata: conversation event not found');
-        return;
+        return null;
       }
       const existingData = existing.eventData as Record<string, any>;
       const updatedEventData = { ...existingData, metadata: { ...(existingData.metadata || {}), ...metadataUpdate } };
@@ -216,12 +216,13 @@ export class ConversationService extends BaseService {
       return result.length > 0 ? result[0] : null;
     } catch (error) {
       logger.error({ error, projectId, eventId }, 'Failed to update conversation event metadata');
+      return null;
     }
   }
 
   /**
-   * Updates the userInput field of an existing message event's eventData.
-   * Used to fill in the user input for a message event that was initially saved with empty userInput when the user message is received,
+    * Updates the userInput field of an existing message event's eventData.
+    * Used to fill in the user input for a message event that was initially saved with empty userInput when the user message is received,
    * and then updated once ASR processing completes and the final transcribed text is available.
    * @param projectId - The project the event belongs to
    * @param eventId - The unique identifier of the event to update
@@ -234,11 +235,11 @@ export class ConversationService extends BaseService {
       const existing = await db.query.conversationEvents.findFirst({ where: and(eq(conversationEvents.projectId, projectId), eq(conversationEvents.id, eventId)) });
       if (!existing) {
         logger.warn({ projectId, eventId }, 'Cannot update message event: conversation event not found');
-        return;
+        return null;
       }
       if (existing.eventType !== 'message') {
         logger.warn({ projectId, eventId, eventType: existing.eventType }, 'Cannot update message event: event is not of type "message"');
-        return;
+        return null;
       }
 
       const existingData = existing.eventData as MessageEventData;
@@ -248,6 +249,7 @@ export class ConversationService extends BaseService {
       return result.length > 0 ? conversationEventResponseSchema.parse(result[0]) : null;
     } catch (error) {
       logger.error({ error, projectId, eventId }, 'Failed to update conversation event message ID');
+      return null;
     }
   }
 

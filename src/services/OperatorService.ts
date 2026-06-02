@@ -1,8 +1,10 @@
 import { injectable, inject } from 'tsyringe';
 import { eq, ilike, or, and, SQL, desc, sql } from 'drizzle-orm';
+import type { InferSelectModel } from 'drizzle-orm';
 import { parseTextSearch } from '../utils/textSearch';
 import { db } from '../db/index';
 import { operators } from '../db/schema';
+type OperatorRow = InferSelectModel<typeof operators>;
 import type { CreateOperatorRequest, UpdateOperatorRequest, OperatorResponse, OperatorListResponse, UpdateProfileRequest, ProfileResponse } from '../http/contracts/operator';
 import type { ListParams } from '../http/contracts/common';
 import { operatorResponseSchema, operatorListResponseSchema, profileResponseSchema } from '../http/contracts/operator';
@@ -195,7 +197,7 @@ export class OperatorService extends BaseService {
       }
 
       // Hash password if it's being updated
-      const updatePayload: any = {
+      const updatePayload: Partial<OperatorRow> = {
         name: updateData.name,
         roles: updateData.roles ? Array.from(new Set(updateData.roles)) : undefined,
         metadata: updateData.metadata,
@@ -292,7 +294,7 @@ export class OperatorService extends BaseService {
     const invalidRoles = roles.filter(role => !(role in ROLES));
 
     if (invalidRoles.length > 0) {
-      throw new Error(`Invalid roles: ${invalidRoles.join(', ')}. Valid roles are: ${validRoles.join(', ')}`);
+      throw new ValidationError('Invalid roles', [{ code: 'custom', path: ['roles'], message: `Invalid roles: ${invalidRoles.join(', ')}. Valid roles are: ${validRoles.join(', ')}` }]);
     }
   }
 
@@ -353,7 +355,7 @@ export class OperatorService extends BaseService {
       }
 
       // Build update data
-      const updateData: any = {
+      const updateData: Partial<OperatorRow> = {
         version: existingOperator.version + 1,
         updatedAt: new Date(),
       };
@@ -368,9 +370,9 @@ export class OperatorService extends BaseService {
 
       const updatedOperator = await db.update(operators).set(updateData).where(eq(operators.id, context.operatorId)).returning();
 
-      if (updatedOperator.length === 0) {
-        throw new Error('Failed to update profile');
-      }
+    if (updatedOperator.length === 0) {
+      throw new NotFoundError(`Operator with id ${context.operatorId} not found`);
+    }
 
       const operator = updatedOperator[0];
 

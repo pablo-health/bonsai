@@ -25,7 +25,7 @@ import { conversationEventTypeSchema, conversationEventDataSchema } from '../typ
  * Base fields shared by all inbound (input) messages.
  */
 export const calBaseInputMessageSchema = z.object({
-  conversationId: z.string().describe('Unique identifier of the conversation'),
+  conversationId: z.string().min(1).describe('Unique identifier of the conversation'),
   correlationId: z.string().optional().describe('Optional caller-supplied identifier echoed back in the corresponding result message'),
 });
 
@@ -152,6 +152,15 @@ export const calCallToolRequestSchema = calBaseInputMessageSchema.extend({
 export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.extend({
   type: z.literal('abort_ai_generation'),
   stageId: z.string().describe('Identifier of the stage whose generation should be aborted'),
+});
+
+/**
+ * Result of an abort_ai_generation command.
+ */
+export const calAbortAiGenerationResponseSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  success: z.boolean().describe('Whether the AI generation was successfully aborted'),
+  error: z.string().optional().describe('Error message if abort failed'),
 });
 
 /**
@@ -452,6 +461,7 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsResponseSchema,
   calRunActionResponseSchema,
   calCallToolResponseSchema,
+  calAbortAiGenerationResponseSchema,
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
   calAbortAiGenerationOutputMessageSchema,
@@ -497,6 +507,7 @@ export type CALGetVarResponse = z.infer<typeof calGetVarResponseSchema>;
 export type CALGetAllVarsResponse = z.infer<typeof calGetAllVarsResponseSchema>;
 export type CALRunActionResponse = z.infer<typeof calRunActionResponseSchema>;
 export type CALCallToolResponse = z.infer<typeof calCallToolResponseSchema>;
+export type CALAbortAiGenerationResponse = z.infer<typeof calAbortAiGenerationResponseSchema>;
 
 export type CALStartAiGenerationOutputMessage = z.infer<typeof calStartAiGenerationOutputMessageSchema>;
 export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessageSchema>;

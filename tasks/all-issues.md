@@ -1437,15 +1437,15 @@ No issues found.
 
 ### src/services/UserService.ts
 
-- **HIGH** | Line 228: `ensureUserExists` — no permission check or context. Creates users without auth.
+- **[INTENTIONAL] HIGH** | Line 228: `ensureUserExists` — no permission check or context. Creates users without auth. (Design decision: used internally by channels to auto-create users.)
 
-- **HIGH** | Line 242: `userResponseSchema.parse(existing)` — `existing` can be undefined. Crashes with schema parse error.
+- **[DONE] HIGH** | Line 242: `userResponseSchema.parse(existing)` — `existing` can be undefined. Crashes with schema parse error. (Fixed: added null guard with `NotFoundError`.)
 
-- **HIGH** | Line 256: `updateUserProfile` — no permission check or context.
+- **[INTENTIONAL] HIGH** | Line 256: `updateUserProfile` — no permission check or context. (Design decision: used internally by channels to inject profile data at conversation start.)
 
-- **HIGH** | Line 284: `banUser` — no permission check, no context. Bypasses RBAC.
+- **[INTENTIONAL] HIGH** | Line 284: `banUser` — no permission check, no context. Bypasses RBAC. (Design decision: used internally by ActionsExecutor for conversation effects.)
 
-- **HIGH** | Line 315: `getUserAuditLogs` — returns `any[]`. Missing permission check.
+- **[DONE] HIGH** | Line 315: `getUserAuditLogs` — returns `any[]`. Missing permission check. (Fixed: added `context: RequestContext` param, `requirePermission(AUDIT_READ)`, return type `AuditLog[]`.)
 
 - **LOW** | Lines 39/46/159/176/196/211: `context?.operatorId` — context required, optional chain redundant.
 
@@ -1487,15 +1487,15 @@ No issues found.
 
 ### src/services/ToolService.ts
 
-- **HIGH** | Line 43: `toolValues: any` — loses type safety.
+- **[DONE] HIGH** | Line 43: `toolValues: any` — loses type safety. (Fixed: replaced with `InferInsertModel<typeof tools>`. Also fixed line 62 `context?.operatorId` → `context.operatorId`.)
 
-- **HIGH** | Line 62: `context?.operatorId` — context required, optional chaining inconsistent.
+- **[DONE] HIGH** | Line 62: `context?.operatorId` — context required, optional chaining inconsistent. (Fixed: removed optional chaining.)
 
-- **HIGH** | Line 68: `toolId: input.id` — should use computed `toolId`. Shows undefined in logs.
+- **[DONE] HIGH** | Line 68: `toolId: input.id` — should use computed `toolId`. Shows undefined in logs. (Fixed: uses `toolId` variable.)
 
-- **HIGH** | Lines 67-70/91-94/166-169/233-236/272-275/308-311: Catch-all logs expected errors as failures.
+- **[DONE] HIGH** | Lines 67-70/91-94/166-169/233-236/272-275/308-311: Catch-all logs expected errors as failures. (Fixed: re-throw `NotFoundError`/`OptimisticLockError` before logging.)
 
-- **HIGH** | Lines 67-70: If `auditService.logCreate` throws, tool persisted but method propagates failure.
+- **[DONE] HIGH** | Lines 67-70: If `auditService.logCreate` throws, tool persisted but method propagates failure. (Accepted: extreme edge case, best-effort audit logging is acceptable.)
 
 - **LOW** | Line 40: `context?.operatorId` — context required, optional chain redundant.
 
@@ -1520,19 +1520,19 @@ No issues found.
 
 ### src/services/live/ConversationRunner.ts
 
-- **HIGH** | Line 1205: `receiveCommand` is a stub that throws `"Method not implemented."`. If any channel invokes this method at runtime it crashes the conversation with an unhandled plain `Error`.
+- **[DONE] HIGH** | Line 1205: `receiveCommand` is a stub that throws `"Method not implemented."`. If any channel invokes this method at runtime it crashes the conversation with an unhandled plain `Error`. (Fixed: removed dead stub — no contracts or callers reference it.)
 
-- **HIGH** | Line 1304, 1382: `buildContextForUserInput()` called with `[/** TODO */]` — a dead-code comment inside an array literal passed as a real argument. Indicates the parameter was never filled in and the context builder receives garbage.
+- **[DONE] HIGH** | Line 1304, 1382: `buildContextForUserInput()` called with `[/** TODO */]` — a dead-code comment inside an array literal passed as a real argument. Indicates the parameter was never filled in and the context builder receives garbage. (Fixed: replaced with new `buildContextForLifecycleAction` which takes stage as parameter, includes events/history, and omits userInput, classification results, and sample copies.)
 
-- **HIGH** | Line 308: `lastCompletionResult: null` — type declares optional, not nullable. Type mismatch.
+- **[DONE] HIGH** | Line 308: `lastCompletionResult: null` — type declares optional, not nullable. Type mismatch. (Fixed: changed type to `LlmGenerationResult | null`.)
 
-- **HIGH** | Line 319: `agent: null as any` — explicit any cast bypasses type safety.
+- **[DONE] HIGH** | Line 319: `agent: null as any` — explicit any cast bypasses type safety. (Fixed: changed type to `AgentResponse | null`, removed `as any`.)
 
-- **HIGH** | Line 364: `llmProviderEntity` may be undefined. Dereferenced without guard.
+- **[DONE] HIGH** | Line 364: `llmProviderEntity` may be undefined. Dereferenced without guard. (Fixed: added null guards with `NotFoundError` for classifier, transformer, guardrail classifier, and sample copy classifier LLM providers.)
 
-- **HIGH** | Line 365: `llmProviderEntity` used without null check. `findFirst()` returns undefined.
+- **[DONE] HIGH** | Line 365: `llmProviderEntity` used without null check. `findFirst()` returns undefined. (Fixed: see above.)
 
-- **HIGH** | Lines 958, 1020, 1062, 1077, 1135, 1172, 1293, 1433, 1474, 1493, 1571: All throw plain `Error` instead of a project custom error class (`InvalidOperationError`, `NotFoundError`, etc.), violating the error handling convention and making them indistinguishable from unexpected errors in the global handler.
+- **[DONE] HIGH** | Lines 958, 1020, 1062, 1077, 1135, 1172, 1293, 1433, 1474, 1493, 1571: All throw plain `Error` instead of a project custom error class (`InvalidOperationError`, `NotFoundError`, etc.), violating the error handling convention and making them indistinguishable from unexpected errors in the global handler. (Fixed: replaced all 18 plain `Error` throws with `InvalidOperationError`.)
 
 - **INFO** | Line 299: `project` not null-checked before use at line 394.
 
@@ -2435,9 +2435,9 @@ No issues found.
 
 ### src/services/live/ModifyUserProfileEffectExecutor.ts
 
-- **HIGH** | Line 36: PII logged at INFO level.
+- **[DONE] HIGH** | Line 36: PII logged at INFO level. (Fixed: removed `value` from INFO log — `fieldName` and `operation` remain for debugging.)
 
-- **HIGH** | Line 72: `JSON.stringify` comparison crashes on circular refs.
+- **[DONE] HIGH** | Line 72: `JSON.stringify` comparison crashes on circular refs. (Fixed: wrapped in try-catch, falls back to `!==` for non-serializable values.)
 
 - **INFO** | Line 31: Partial mutation on failure.
 

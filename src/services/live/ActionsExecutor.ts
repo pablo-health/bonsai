@@ -12,7 +12,7 @@ import { LIFECYCLE_EFFECT_RESTRICTIONS } from '../../types/actions';
 import type { GlobalAction, Guardrail } from '../../types/models';
 import type { ToolType } from '../../db/schema';
 import { ConversationContext, ConversationContextBuilder } from './ConversationContextBuilder';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, InvalidOperationError } from '../../errors';
 import { ParameterValue } from '../../types/parameters';
 
 /** Callback type for emitting conversation events from within effect handlers */
@@ -146,14 +146,14 @@ export class ActionsExecutor {
    * @returns Resolved effects with conflicts handled
    */
   private resolveEffectConflicts(effects: EffectWithSource[]): EffectWithSource[] {
-    const resolvedEffects: EffectWithSource[] = [];
     const conflicts: string[] = [];
+    let resolved = [...effects];
 
     // Group effects by type for conflict detection
-    const goToStageOps = effects.filter(op => op.effect.type === 'go_to_stage');
-    const endConversationOps = effects.filter(op => op.effect.type === 'end_conversation');
-    const abortConversationOps = effects.filter(op => op.effect.type === 'abort_conversation');
-    const modifyUserInputOps = effects.filter(op => op.effect.type === 'modify_user_input');
+    const goToStageOps = resolved.filter(op => op.effect.type === 'go_to_stage');
+    const endConversationOps = resolved.filter(op => op.effect.type === 'end_conversation');
+    const abortConversationOps = resolved.filter(op => op.effect.type === 'abort_conversation');
+    const modifyUserInputOps = resolved.filter(op => op.effect.type === 'modify_user_input');
 
     // Conflict 1: Multiple go_to_stage effects with different stage IDs
     if (goToStageOps.length > 1) {
@@ -161,54 +161,34 @@ export class ActionsExecutor {
       const uniqueStageIds = new Set(stageIds);
 
       if (uniqueStageIds.size > 1) {
-        // Multiple different stage IDs - keep only the first one
         const firstOp = goToStageOps[0];
         conflicts.push(`Multiple go_to_stage effects with different IDs detected (${Array.from(uniqueStageIds).join(', ')}). Using first: ${(firstOp.effect as Extract<Effect, { type: 'go_to_stage' }>).stageId} from action "${firstOp.actionName}"`);
-
-        // Remove all but the first go_to_stage effect
-        const otherOps = effects.filter(op => op.effect.type !== 'go_to_stage');
-        resolvedEffects.push(...otherOps, firstOp);
       } else {
-        // Same stage ID - keep only one instance
         conflicts.push(`Multiple go_to_stage effects with same ID detected. Using first occurrence from action "${goToStageOps[0].actionName}"`);
-        const otherOps = effects.filter(op => op.effect.type !== 'go_to_stage');
-        resolvedEffects.push(...otherOps, goToStageOps[0]);
       }
-    } else {
-      resolvedEffects.push(...effects);
+
+      resolved = resolved.filter(op => op.effect.type !== 'go_to_stage' || resolved.indexOf(op) === resolved.indexOf(goToStageOps[0]));
     }
 
     // Conflict 2: Both abort_conversation and end_conversation present
     if (abortConversationOps.length > 0 && endConversationOps.length > 0) {
-      // Abort takes precedence - remove all end_conversation effects
       const firstAbort = abortConversationOps[0];
       conflicts.push(`Both abort_conversation and end_conversation detected. Prioritizing abort_conversation from action "${firstAbort.actionName}" - conversation will abort immediately`);
-
-      resolvedEffects.splice(0, resolvedEffects.length);
-      resolvedEffects.push(...effects.filter(op => op.effect.type !== 'end_conversation'));
+      resolved = resolved.filter(op => op.effect.type !== 'end_conversation');
     }
 
     // Conflict 3: Multiple abort_conversation effects
     if (abortConversationOps.length > 1) {
       const firstAbort = abortConversationOps[0];
       conflicts.push(`Multiple abort_conversation effects detected. Using first from action "${firstAbort.actionName}"`);
-
-      resolvedEffects.splice(0, resolvedEffects.length);
-      const otherOps = effects.filter(op => op.effect.type !== 'abort_conversation');
-      resolvedEffects.push(...otherOps, firstAbort);
+      resolved = resolved.filter(op => op.effect.type !== 'abort_conversation' || resolved.indexOf(op) === resolved.indexOf(firstAbort));
     }
 
-    // Conflict 4: Multiple end_conversation effects
+    // Conflict 4: Multiple end_conversation effects (only if no abort)
     if (endConversationOps.length > 1 && abortConversationOps.length === 0) {
       const firstEnd = endConversationOps[0];
       conflicts.push(`Multiple end_conversation effects detected. Using first from action "${firstEnd.actionName}"`);
-
-      if (resolvedEffects.length === 0) {
-        resolvedEffects.push(...effects);
-      }
-      const otherOps = resolvedEffects.filter(op => op.effect.type !== 'end_conversation');
-      resolvedEffects.splice(0, resolvedEffects.length);
-      resolvedEffects.push(...otherOps, firstEnd);
+      resolved = resolved.filter(op => op.effect.type !== 'end_conversation' || resolved.indexOf(op) === resolved.indexOf(firstEnd));
     }
 
     // Conflict 5: Multiple modify_user_input effects - this is NOT a conflict, they chain
@@ -221,7 +201,7 @@ export class ActionsExecutor {
       logger.warn({ conflicts }, `Resolved ${conflicts.length} effect conflict(s)`);
     }
 
-    return resolvedEffects.length > 0 ? resolvedEffects : effects;
+    return resolved;
   }
 
   /**
@@ -459,7 +439,7 @@ export class ActionsExecutor {
         return await this.executeBanUser(effect, context, actionName, emitEvent);
 
       default:
-        throw new Error(`Unknown effect`);
+        throw new InvalidOperationError(`Unknown effect type: ${(effect as any).type}`);
     }
   }
 
