@@ -77,7 +77,7 @@ class ImapMailboxSession {
     if (!this.imap || this.shouldStop) return;
 
     return new Promise<void>((resolve, reject) => {
-      this.imap!.openBox('INBOX', true, (err) => {
+      this.imap!.openBox('INBOX', false, (err) => {
         if (err) {
           logger.error({ error: err, providerId: this.providerId }, 'Failed to open INBOX');
           reject(err);
@@ -218,6 +218,11 @@ class ImapMailboxSession {
         return;
       }
 
+      this.processedUids.add(uid);
+      await markSeen(this.imap, uid).catch((error) => {
+        logger.warn({ error, uid, providerId: this.providerId }, 'Failed to mark message as seen');
+      });
+
       if (!source) {
         logger.info({ providerId: this.providerId, uid }, 'IMAP: empty source, skipping');
         return;
@@ -327,7 +332,7 @@ class ImapMailboxSession {
 
 async function markSeen(imap: ImapConnection, uid: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    (imap as any).setFlags('\\Seen', [uid], { uid: true }, (err: Error | null) => {
+    imap.addFlags([uid], ['\\Seen'], (err: Error | null) => {
       if (err) reject(err);
       else resolve();
     });
