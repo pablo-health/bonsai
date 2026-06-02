@@ -1,7 +1,7 @@
 ---
 title: "Add SMTP/IMAP as third email channel"
 severity: high
-status: open
+status: in_progress
 created: 2026-06-02
 updated: 2026-06-02
 assignee: ""

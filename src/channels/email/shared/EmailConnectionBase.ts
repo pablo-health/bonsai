@@ -17,7 +17,7 @@ export interface EmailHeaders {
 }
 
 export abstract class EmailConnectionBase implements IClientConnection {
-  readonly connectionType: 'sendgrid' | 'ses';
+  readonly connectionType: 'sendgrid' | 'ses' | 'smtp_imap';
 
   protected session: Session;
   private readonly threadHeaders = new Map<string, { inReplyTo?: string; references?: string }>();
@@ -26,7 +26,7 @@ export abstract class EmailConnectionBase implements IClientConnection {
     protected readonly fromAddress: string,
     protected readonly threadingStrategy: ThreadingStrategy,
     protected readonly sessionManager: SessionManager,
-    connectionType: 'sendgrid' | 'ses',
+    connectionType: 'sendgrid' | 'ses' | 'smtp_imap',
   ) {
     this.connectionType = connectionType;
   }

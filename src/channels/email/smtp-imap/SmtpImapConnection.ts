@@ -1,0 +1,87 @@
+import type { Session, SessionManager } from '../../SessionManager';
+import type { CALOutputMessage } from '../../messages';
+import * as nodemailer from 'nodemailer';
+import { EmailConnectionBase, type EmailHeaders } from '../shared/EmailConnectionBase';
+import { logger } from '../../../utils/logger';
+
+export class SmtpImapConnection extends EmailConnectionBase {
+  readonly connectionType = 'smtp_imap' as const;
+
+  private transporter: nodemailer.Transporter;
+
+  constructor(
+    private readonly toAddress: string,
+    fromAddress: string,
+    threadingStrategy: 'messageId' | 'senderSubject',
+    sessionManager: SessionManager,
+    private readonly subject: string,
+    smtpHost: string,
+    smtpPort: number,
+    smtpSecure: boolean,
+    smtpAuthUser: string,
+    smtpAuthPass: string,
+  ) {
+    super(fromAddress, threadingStrategy, sessionManager, 'smtp_imap');
+    this.transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: {
+        user: smtpAuthUser,
+        pass: smtpAuthPass,
+      },
+    });
+  }
+
+  attachSession(session: Session): void {
+    this.session = session;
+  }
+
+  protected getRecipientAddress(): string {
+    return this.toAddress;
+  }
+
+  protected getChannelLabel(): string {
+    return 'SMTP/IMAP';
+  }
+
+  async sendMessage(msg: CALOutputMessage): Promise<void> {
+    if (msg.type !== 'end_ai_generation_output') return;
+
+    const body = msg.fullText?.trim();
+    if (!body) return;
+
+    await this.sendEmail(
+      this.toAddress,
+      this.subject,
+      body,
+    );
+  }
+
+  protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
+    const messageId = headers?.messageId ?? this.generateMessageId();
+
+    const mailOptions: nodemailer.SendMailOptions = {
+      from: headers?.from ?? this.fromAddress,
+      to,
+      subject: headers?.subject ?? subject,
+      text: body,
+      headers: {},
+    };
+
+    (mailOptions.headers as Record<string, string>)['Message-ID'] = messageId;
+    if (headers?.inReplyTo) {
+      (mailOptions.headers as Record<string, string>)['In-Reply-To'] = headers.inReplyTo;
+    }
+    if (headers?.references) {
+      (mailOptions.headers as Record<string, string>)['References'] = headers.references;
+    }
+
+    try {
+      await this.transporter.sendMail(mailOptions);
+      logger.info({ to, sessionId: this.session?.id }, 'SMTP/IMAP email sent');
+    } catch (error) {
+      logger.error({ error, to, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
+    }
+  }
+}
