@@ -32,7 +32,7 @@ export const smtpImapChannelProviderConfigSchema = z.strictObject({
   projectId: z.string().describe('Project ID that this email channel belongs to (required for IMAP inbound routing)'),
   fromAddress: z.string().email().describe('Sender email address'),
   smtp: smtpConfigSchema.describe('SMTP server configuration for sending emails'),
-  imap: imapConfigSchema.optional().describe('IMAP server configuration for receiving emails (optional for send-only)'),
+  imap: imapConfigSchema.describe('IMAP server configuration for receiving inbound email replies'),
   threadingStrategy: z.enum(['messageId', 'senderSubject']).default('messageId').describe('How to derive thread ID for conversation continuity'),
 }).openapi('SmtpImapChannelConfig');
 

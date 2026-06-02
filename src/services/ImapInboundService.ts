@@ -392,11 +392,6 @@ export class ImapInboundService {
 
         const config = configResult.data;
 
-        if (!config.imap) {
-          logger.debug({ providerId: provider.id }, 'SMTP/IMAP provider has no IMAP config, skipping inbound');
-          continue;
-        }
-
         const apiKeyRecord = await this.findProjectApiKey(config.projectId);
         if (!apiKeyRecord) {
           logger.warn({ providerId: provider.id, projectId: config.projectId }, 'No API key found for project, skipping IMAP inbound');
