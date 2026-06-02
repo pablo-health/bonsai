@@ -9,6 +9,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
   private transporter: nodemailer.Transporter;
   private readonly smtpAuthUser: string;
+  private conversationId: string | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -35,6 +36,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     });
   }
 
+  setConversationId(id: string): void {
+    this.conversationId = id;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -53,11 +58,12 @@ export class SmtpImapConnection extends EmailConnectionBase {
     const body = msg.fullText?.trim();
     if (!body) return;
 
-    await this.sendEmail(
-      this.toAddress,
-      this.subject,
-      body,
-    );
+    const headers: EmailHeaders = {};
+    if (this.conversationId) {
+      headers.messageId = `<${this.conversationId}@bonsai.ai>`;
+    }
+
+    await this.sendEmail(this.toAddress, this.subject, body, headers);
   }
 
   protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {

@@ -22,7 +22,6 @@ import { UserService } from '../../../services/UserService';
 import { SecretRefUtils } from '../../../services/secrets/SecretRefUtils';
 import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contracts/ses-outgoing';
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
-import { ThreadIdResolver } from '../shared/ThreadIdResolver';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -37,14 +36,19 @@ const webhookQuerySchema = z.object({
   channelProviderId: z.string().min(1).describe('ID of the SES channel provider record'),
 });
 
-/** Shape of an SNS notification wrapping an SES receipt. */
+/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
+function extractConversationId(inReplyTo?: string): string | undefined {
+  if (!inReplyTo) return undefined;
+  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
+  return match ? match[1] : undefined;
+}
+
 type SnsNotification = {
   Type?: string;
   Message?: string;
   Subject?: string;
 };
 
-/** Shape of the SES receipt message inside the SNS notification. */
 type SesReceiptMessage = {
   mail?: {
     commonHeaders?: {
@@ -177,7 +181,6 @@ export class SesChannelHost {
 
     const commonHeaders = sesMessage.mail?.commonHeaders ?? {};
     const senderEmail = commonHeaders.from?.[0];
-    const recipientEmail = commonHeaders.to?.[0];
     const disposition = sesMessage.receipt?.disposition;
 
     if (disposition === 'spam') {
@@ -190,50 +193,46 @@ export class SesChannelHost {
       return;
     }
 
-    const resolver = new ThreadIdResolver(threadingStrategy ?? 'messageId');
-    const threadId = resolver.resolve({
-      from: senderEmail,
-      subject: commonHeaders.subject,
-      messageId: commonHeaders['message-id'],
-      inReplyTo: commonHeaders['in-reply-to'],
-      references: commonHeaders.references,
-    });
-
     const rawMime = await this.getRawMime(sesMessage, inboundMode, s3BucketName, accessKeyId, secretAccessKey, region, projectId);
     const emailBody = await this.extractEmailBody(rawMime, senderEmail);
 
-    const emailKey = `${projectId}:${threadId}`;
-    let existingSessionId = this.emailSessionMap.get(emailKey);
+    const replyConversationId = extractConversationId(commonHeaders['in-reply-to']);
 
-    if (existingSessionId) {
-      this.scheduleTimeout(existingSessionId, emailKey);
-      await this.dispatchTextInput(existingSessionId, emailBody);
-    } else {
-      const connection = new SesConnection(
-        senderEmail,
-        fromAddress,
-        threadingStrategy ?? 'messageId',
-        this.sessionManager,
-        commonHeaders.subject ?? 'Re: Conversation',
-        accessKeyId,
-        secretAccessKey,
-        region,
-      );
-      const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
-      const sessionId = this.sessionManager.registerSession(connection);
-      const session = this.sessionManager.getSession(sessionId);
-      connection.attachSession(session);
-      this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-      this.emailSessionMap.set(emailKey, sessionId);
-      this.scheduleTimeout(sessionId, emailKey);
-
-      logger.info({ sessionId, projectId, from: senderEmail, threadId }, 'SES: new virtual session created');
-
-      const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
-      await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
-
-      await this.dispatchTextInput(sessionId, emailBody);
+    if (replyConversationId) {
+      const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
+      if (existingSessionId) {
+        const emailKey = `${projectId}:${replyConversationId}`;
+        this.scheduleTimeout(existingSessionId, emailKey);
+        await this.dispatchTextInput(existingSessionId, emailBody);
+        return;
+      }
     }
+
+    const connection = new SesConnection(
+      senderEmail,
+      fromAddress,
+      threadingStrategy ?? 'messageId',
+      this.sessionManager,
+      commonHeaders.subject ?? 'Re: Conversation',
+      accessKeyId,
+      secretAccessKey,
+      region,
+    );
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    const emailKey = `${projectId}:${sessionId}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+
+    logger.info({ sessionId, projectId, from: senderEmail }, 'SES: new virtual session created');
+
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
+
+    await this.dispatchTextInput(sessionId, emailBody);
   }
 
   private async handleOutgoingMessage(req: Request, res: Response): Promise<void> {
@@ -324,11 +323,6 @@ export class SesChannelHost {
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-    const emailKey = `${projectId}:${body.to}`;
-    this.emailSessionMap.set(emailKey, sessionId);
-    this.scheduleTimeout(sessionId, emailKey);
-
-    logger.info({ sessionId, projectId, to: body.to }, 'SES: outgoing virtual session created');
 
     const conversation = await this.conversationService.createConversation({
       projectId,
@@ -339,6 +333,13 @@ export class SesChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     }, SYSTEM_CONTEXT);
+
+    const emailKey = `${projectId}:${conversation.id}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+    connection.setConversationId(conversation.id);
+
+    logger.info({ sessionId, projectId, to: body.to, conversationId: conversation.id }, 'SES: outgoing virtual session created');
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
@@ -363,6 +364,22 @@ export class SesChannelHost {
 
     const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text, correlationId: undefined };
     await this.dispatcher.dispatch(msg, this.buildContext(sessionId));
+  }
+
+  private findSessionByConversationId(projectId: string, conversationId: string): string | undefined {
+    const emailKey = `${projectId}:${conversationId}`;
+    const sessionId = this.emailSessionMap.get(emailKey);
+    if (sessionId) return sessionId;
+
+    for (const [key, sid] of this.emailSessionMap.entries()) {
+      const session = this.sessionManager.getSession(sid);
+      if (session?.conversationId === conversationId) {
+        this.emailSessionMap.delete(key);
+        this.emailSessionMap.set(emailKey, sid);
+        return sid;
+      }
+    }
+    return undefined;
   }
 
   private async getRawMime(

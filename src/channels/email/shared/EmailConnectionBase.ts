@@ -7,9 +7,9 @@ import { logger } from '../../../utils/logger';
 export type ThreadingStrategy = 'messageId' | 'senderSubject';
 
 export interface EmailHeaders {
-  from: string;
-  to: string;
-  subject: string;
+  from?: string;
+  to?: string;
+  subject?: string;
   messageId?: string;
   inReplyTo?: string;
   references?: string;

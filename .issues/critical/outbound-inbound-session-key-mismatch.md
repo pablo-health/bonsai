@@ -1,7 +1,7 @@
 ---
 title: "Outbound/Inbound session key mismatch breaks reply threading"
 severity: critical
-status: open
+status: resolved
 created: 2026-06-02
 updated: 2026-06-02
 assignee: ""

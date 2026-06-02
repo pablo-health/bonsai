@@ -8,19 +8,16 @@ export class SesConnection extends EmailConnectionBase {
   readonly connectionType = 'ses' as const;
 
   private sesClient: SESClient;
+  private conversationId: string | undefined;
 
   constructor(
     private readonly toAddress: string,
     fromAddress: string,
     threadingStrategy: 'messageId' | 'senderSubject',
     sessionManager: SessionManager,
-    /** Subject line for outgoing emails. */
     private readonly subject: string,
-    /** AWS Access Key ID. */
     private readonly accessKeyId: string,
-    /** AWS Secret Access Key. */
     private readonly secretAccessKey: string,
-    /** AWS region. */
     private readonly region: string,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'ses');
@@ -28,6 +25,10 @@ export class SesConnection extends EmailConnectionBase {
       region,
       credentials: { accessKeyId, secretAccessKey },
     });
+  }
+
+  setConversationId(id: string): void {
+    this.conversationId = id;
   }
 
   attachSession(session: Session): void {
@@ -48,11 +49,12 @@ export class SesConnection extends EmailConnectionBase {
     const body = msg.fullText?.trim();
     if (!body) return;
 
-    await this.sendEmail(
-      this.toAddress,
-      this.subject,
-      body,
-    );
+    const headers: EmailHeaders = {};
+    if (this.conversationId) {
+      headers.messageId = `<${this.conversationId}@bonsai.ai>`;
+    }
+
+    await this.sendEmail(this.toAddress, this.subject, body, headers);
   }
 
   protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {

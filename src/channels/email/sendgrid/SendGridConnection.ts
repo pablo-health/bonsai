@@ -7,17 +7,21 @@ import { logger } from '../../../utils/logger';
 export class SendGridConnection extends EmailConnectionBase {
   readonly connectionType = 'sendgrid' as const;
 
+  private conversationId: string | undefined;
+
   constructor(
     private readonly toAddress: string,
     fromAddress: string,
     threadingStrategy: 'messageId' | 'senderSubject',
     sessionManager: SessionManager,
-    /** Subject line for outgoing emails. */
     private readonly subject: string,
-    /** SendGrid API key for authentication. */
     private readonly apiKey: string,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'sendgrid');
+  }
+
+  setConversationId(id: string): void {
+    this.conversationId = id;
   }
 
   attachSession(session: Session): void {
@@ -38,27 +42,32 @@ export class SendGridConnection extends EmailConnectionBase {
     const body = msg.fullText?.trim();
     if (!body) return;
 
-    await this.sendEmail(
-      this.toAddress,
-      this.subject,
-      body,
-    );
+    const headers: EmailHeaders = {};
+    if (this.conversationId) {
+      headers.messageId = `<${this.conversationId}@bonsai.ai>`;
+    }
+
+    await this.sendEmail(this.toAddress, this.subject, body, headers);
   }
 
   protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
     const sg = new MailService();
     sg.setApiKey(this.apiKey);
 
-    const mail = {
-      to: [{ email: to }],
-      from: { email: headers?.from ?? this.fromAddress },
-      subject: headers?.subject ?? subject,
-      text: body,
-      ...(headers?.messageId ? { customArgs: { 'X-Message-ID': headers.messageId } } : {}),
-    };
+    const messageId = headers?.messageId ?? this.generateMessageId();
+
+    const customArgs: Record<string, string> = { 'X-Message-ID': messageId };
+    if (headers?.inReplyTo) customArgs['X-In-Reply-To'] = headers.inReplyTo;
+    if (headers?.references) customArgs['X-References'] = headers.references;
 
     try {
-      await sg.send(mail);
+      await sg.send({
+        to: [{ email: to }],
+        from: { email: headers?.from ?? this.fromAddress },
+        subject: headers?.subject ?? subject,
+        text: body,
+        customArgs,
+      });
       logger.info({ to, sessionId: this.session?.id }, 'SendGrid email sent');
     } catch (error) {
       logger.error({ error, to, sessionId: this.session?.id }, 'Failed to send SendGrid email');

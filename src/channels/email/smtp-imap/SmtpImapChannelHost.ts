@@ -22,7 +22,6 @@ import { UserService } from '../../../services/UserService';
 import { SecretRefUtils } from '../../../services/secrets/SecretRefUtils';
 import { smtpImapSendBodySchema, smtpImapSendResponseSchema } from '../../../http/contracts/smtp-imap-outgoing';
 import type { SmtpImapSendResponse } from '../../../http/contracts/smtp-imap-outgoing';
-import { ThreadIdResolver } from '../shared/ThreadIdResolver';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 
@@ -34,6 +33,13 @@ const webhookQuerySchema = z.object({
   agentId: z.string().optional().describe('Optional agent ID override'),
   channelProviderId: z.string().min(1).describe('ID of the SMTP/IMAP channel provider record'),
 });
+
+/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
+function extractConversationId(inReplyTo?: string): string | undefined {
+  if (!inReplyTo) return undefined;
+  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
+  return match ? match[1] : undefined;
+}
 
 @singleton()
 export class SmtpImapChannelHost {
@@ -138,7 +144,7 @@ export class SmtpImapChannelHost {
       await this.userService.getUserById(projectId, body.to);
     } catch (err) {
       if (err instanceof NotFoundError) {
-    const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
+        const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
         if (!project.autoCreateUsers) {
           res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
           return;
@@ -171,11 +177,6 @@ export class SmtpImapChannelHost {
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-    const emailKey = `${projectId}:${body.to}`;
-    this.emailSessionMap.set(emailKey, sessionId);
-    this.scheduleTimeout(sessionId, emailKey);
-
-    logger.info({ sessionId, projectId, to: body.to }, 'SMTP/IMAP: outgoing virtual session created');
 
     const conversation = await this.conversationService.createConversation({
       projectId,
@@ -186,6 +187,13 @@ export class SmtpImapChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     }, SYSTEM_CONTEXT);
+
+    const emailKey = `${projectId}:${conversation.id}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+    connection.setConversationId(conversation.id);
+
+    logger.info({ sessionId, projectId, to: body.to, conversationId: conversation.id }, 'SMTP/IMAP: outgoing virtual session created');
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
@@ -231,49 +239,62 @@ export class SmtpImapChannelHost {
     stageId: string | undefined,
     agentId: string | undefined,
   ): Promise<void> {
-    const resolver = new ThreadIdResolver(threadingStrategy ?? 'messageId');
-    const threadId = resolver.resolve({
-      from: senderEmail,
-      subject,
-      messageId,
-      inReplyTo,
-      references,
-    });
+    const replyConversationId = extractConversationId(inReplyTo);
 
-    const emailKey = `${projectId}:${threadId}`;
-    let existingSessionId = this.emailSessionMap.get(emailKey);
-
-    if (existingSessionId) {
-      this.scheduleTimeout(existingSessionId, emailKey);
-      await this.dispatchTextInput(existingSessionId, emailBody);
-    } else {
-      const connection = new SmtpImapConnection(
-        senderEmail,
-        fromAddress,
-        threadingStrategy ?? 'messageId',
-        this.sessionManager,
-        subject ?? 'Re: Conversation',
-        smtpHost,
-        smtpPort,
-        smtpSecure,
-        smtpAuthUser,
-        smtpAuthPass,
-      );
-      const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
-      const sessionId = this.sessionManager.registerSession(connection);
-      const session = this.sessionManager.getSession(sessionId);
-      connection.attachSession(session);
-      this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-      this.emailSessionMap.set(emailKey, sessionId);
-      this.scheduleTimeout(sessionId, emailKey);
-
-      logger.info({ sessionId, projectId, from: senderEmail, threadId }, 'SMTP/IMAP: new virtual session created for inbound email');
-
-      const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
-      await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
-
-      await this.dispatchTextInput(sessionId, emailBody);
+    if (replyConversationId) {
+      const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
+      if (existingSessionId) {
+        const emailKey = `${projectId}:${replyConversationId}`;
+        this.scheduleTimeout(existingSessionId, emailKey);
+        await this.dispatchTextInput(existingSessionId, emailBody);
+        return;
+      }
     }
+
+    const connection = new SmtpImapConnection(
+      senderEmail,
+      fromAddress,
+      threadingStrategy ?? 'messageId',
+      this.sessionManager,
+      subject ?? 'Re: Conversation',
+      smtpHost,
+      smtpPort,
+      smtpSecure,
+      smtpAuthUser,
+      smtpAuthPass,
+    );
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+
+    const emailKey = `${projectId}:${sessionId}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+
+    logger.info({ sessionId, projectId, from: senderEmail }, 'SMTP/IMAP: new virtual session created for inbound email');
+
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
+
+    await this.dispatchTextInput(sessionId, emailBody);
+  }
+
+  private findSessionByConversationId(projectId: string, conversationId: string): string | undefined {
+    const emailKey = `${projectId}:${conversationId}`;
+    const sessionId = this.emailSessionMap.get(emailKey);
+    if (sessionId) return sessionId;
+
+    for (const [key, sid] of this.emailSessionMap.entries()) {
+      const session = this.sessionManager.getSession(sid);
+      if (session?.conversationId === conversationId) {
+        this.emailSessionMap.delete(key);
+        this.emailSessionMap.set(emailKey, sid);
+        return sid;
+      }
+    }
+    return undefined;
   }
 
   private scheduleTimeout(sessionId: string, emailKey: string): void {

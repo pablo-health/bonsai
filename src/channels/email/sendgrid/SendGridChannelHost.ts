@@ -22,7 +22,6 @@ import { UserService } from '../../../services/UserService';
 import { SecretRefUtils } from '../../../services/secrets/SecretRefUtils';
 import { sendGridSendBodySchema, sendGridSendResponseSchema } from '../../../http/contracts/sendgrid-outgoing';
 import type { SendGridSendResponse } from '../../../http/contracts/sendgrid-outgoing';
-import { ThreadIdResolver } from '../shared/ThreadIdResolver';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 
@@ -35,7 +34,13 @@ const webhookQuerySchema = z.object({
   channelProviderId: z.string().min(1).describe('ID of the SendGrid channel provider record'),
 });
 
-/** Shape of a SendGrid Inbound Parse webhook payload (form-data parsed by Express). */
+/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
+function extractConversationId(inReplyTo?: string): string | undefined {
+  if (!inReplyTo) return undefined;
+  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
+  return match ? match[1] : undefined;
+}
+
 type SendGridInboundPayload = {
   from?: string;
   subject?: string;
@@ -144,38 +149,34 @@ export class SendGridChannelHost {
       return;
     }
 
-    const resolver = new ThreadIdResolver(threadingStrategy ?? 'messageId');
-    const threadId = resolver.resolve({
-      from: senderEmail,
-      subject: payload.subject,
-      messageId: headers['message-id'],
-      inReplyTo: headers['in-reply-to'],
-      references: headers['references'],
-    });
+    const replyConversationId = extractConversationId(headers['in-reply-to']);
 
-    const emailKey = `${projectId}:${threadId}`;
-    let existingSessionId = this.emailSessionMap.get(emailKey);
-
-    if (existingSessionId) {
-      this.scheduleTimeout(existingSessionId, emailKey);
-      await this.dispatchTextInput(existingSessionId, messageText);
-    } else {
-      const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey);
-      const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
-      const sessionId = this.sessionManager.registerSession(connection);
-      const session = this.sessionManager.getSession(sessionId);
-      connection.attachSession(session);
-      this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-      this.emailSessionMap.set(emailKey, sessionId);
-      this.scheduleTimeout(sessionId, emailKey);
-
-      logger.info({ sessionId, projectId, from: senderEmail, threadId }, 'SendGrid: new virtual session created');
-
-      const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
-      await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
-
-      await this.dispatchTextInput(sessionId, messageText);
+    if (replyConversationId) {
+      const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
+      if (existingSessionId) {
+        const emailKey = `${projectId}:${replyConversationId}`;
+        this.scheduleTimeout(existingSessionId, emailKey);
+        await this.dispatchTextInput(existingSessionId, messageText);
+        return;
+      }
     }
+
+    const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey);
+    const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
+    const sessionId = this.sessionManager.registerSession(connection);
+    const session = this.sessionManager.getSession(sessionId);
+    connection.attachSession(session);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    const emailKey = `${projectId}:${sessionId}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+
+    logger.info({ sessionId, projectId, from: senderEmail }, 'SendGrid: new virtual session created');
+
+    const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
+    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
+
+    await this.dispatchTextInput(sessionId, messageText);
   }
 
   private async handleOutgoingMessage(req: Request, res: Response): Promise<void> {
@@ -264,11 +265,6 @@ export class SendGridChannelHost {
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
-    const emailKey = `${projectId}:${body.to}`;
-    this.emailSessionMap.set(emailKey, sessionId);
-    this.scheduleTimeout(sessionId, emailKey);
-
-    logger.info({ sessionId, projectId, to: body.to }, 'SendGrid: outgoing virtual session created');
 
     const conversation = await this.conversationService.createConversation({
       projectId,
@@ -279,6 +275,13 @@ export class SendGridChannelHost {
       direction: 'outgoing',
       metadata: body.metadata ?? null,
     }, SYSTEM_CONTEXT);
+
+    const emailKey = `${projectId}:${conversation.id}`;
+    this.emailSessionMap.set(emailKey, sessionId);
+    this.scheduleTimeout(sessionId, emailKey);
+    connection.setConversationId(conversation.id);
+
+    logger.info({ sessionId, projectId, to: body.to, conversationId: conversation.id }, 'SendGrid: outgoing virtual session created');
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
@@ -303,6 +306,22 @@ export class SendGridChannelHost {
 
     const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text, correlationId: undefined };
     await this.dispatcher.dispatch(msg, this.buildContext(sessionId));
+  }
+
+  private findSessionByConversationId(projectId: string, conversationId: string): string | undefined {
+    const emailKey = `${projectId}:${conversationId}`;
+    const sessionId = this.emailSessionMap.get(emailKey);
+    if (sessionId) return sessionId;
+
+    for (const [key, sid] of this.emailSessionMap.entries()) {
+      const session = this.sessionManager.getSession(sid);
+      if (session?.conversationId === conversationId) {
+        this.emailSessionMap.delete(key);
+        this.emailSessionMap.set(emailKey, sid);
+        return sid;
+      }
+    }
+    return undefined;
   }
 
   private parseHeaders(rawHeaders?: Array<{ ['name']?: string; ['value']?: string }>): Record<string, string> {
