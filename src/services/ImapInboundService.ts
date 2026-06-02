@@ -271,7 +271,7 @@ class ImapMailboxSession {
       );
 
       this.maxProcessedUid = Math.max(this.maxProcessedUid, uid);
-       markSeen(this.imap, uid).catch((error) => {
+      await markSeen(this.imap, uid).catch((error) => {
         logger.warn({ error, uid, providerId: this.providerId }, 'Failed to mark message as seen');
       });
 

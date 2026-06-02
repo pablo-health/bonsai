@@ -11874,6 +11874,12 @@ export class ProviderCatalogService {
         description: 'Amazon Simple Email Service for email-based conversations with SNS notification delivery',
         features: ['Email messaging', 'SNS receipt webhook', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
       },
+      {
+        apiType: 'smtp_imap',
+        displayName: 'SMTP/IMAP Email',
+        description: 'Generic SMTP/IMAP for email-based conversations with outbound SMTP sending and inbound IMAP polling',
+        features: ['Email messaging', 'IMAP polling with IDLE support', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
+      },
     ];
   }
 }
