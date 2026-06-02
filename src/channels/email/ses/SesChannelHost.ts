@@ -24,6 +24,7 @@ import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contract
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { ThreadIdResolver } from '../shared/ThreadIdResolver';
 import { NotFoundError } from '../../../errors';
+import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { simpleParser } from 'mailparser';
 
@@ -279,7 +280,7 @@ export class SesChannelHost {
 
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
-      const project = await this.projectService.getProjectById(projectId);
+      const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
       if (!resolvedStageId) {
         res.status(422).json({ error: 'No stageId provided and project has no default starting stage' });
@@ -292,7 +293,7 @@ export class SesChannelHost {
       await this.userService.getUserById(projectId, body.to);
     } catch (err) {
       if (err instanceof NotFoundError) {
-        const project = await this.projectService.getProjectById(projectId);
+        const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
         if (!project.autoCreateUsers) {
           res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
           return;
@@ -337,7 +338,7 @@ export class SesChannelHost {
       status: 'initialized',
       direction: 'outgoing',
       metadata: body.metadata ?? null,
-    });
+    }, SYSTEM_CONTEXT);
 
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: body.to, stageId: resolvedStageId, agentId: resolvedAgentId, correlationId: undefined, existingConversationId: conversation.id };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));

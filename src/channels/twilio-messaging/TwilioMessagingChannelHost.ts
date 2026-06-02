@@ -311,7 +311,7 @@ export class TwilioMessagingChannelHost {
       await this.userService.getUserById(projectId, body.to);
     } catch (err) {
       if (err instanceof NotFoundError) {
-        const project = await this.projectService.getProjectById(projectId);
+        const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
         if (!project.autoCreateUsers) {
           res.status(422).json({ error: 'User not found and project does not allow auto-creating users' });
           return;
