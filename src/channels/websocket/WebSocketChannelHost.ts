@@ -61,11 +61,15 @@ export class WebSocketChannelHost {
       this.sessionMap.set(sessionId, ws);
 
       ws.on('message', (data: Buffer) => {
-        this.handleMessage(ws, data);
+        this.handleMessage(ws, data).catch((err) => {
+          logger.error({ error: err.message }, 'WebSocket handleMessage unhandled rejection');
+        });
       });
 
       ws.on('close', () => {
-        this.handleDisconnect(ws);
+        this.handleDisconnect(ws).catch((err) => {
+          logger.error({ error: err.message }, 'WebSocket handleDisconnect unhandled rejection');
+        });
       });
 
       ws.on('error', (error: Error) => {
@@ -151,7 +155,7 @@ export class WebSocketChannelHost {
     const context: ClientMessageHandlerContext = {
       session,
       // Translate CAL response → WS wire format: map correlationId → requestId and inject sessionId
-      send: (msg: any) => {
+      send: (msg) => {
         const wsMsg: Record<string, unknown> = { ...msg };
         if (!wsMsg.requestId && wsMsg.correlationId) wsMsg.requestId = wsMsg.correlationId;
         if (!wsMsg.sessionId && session?.id) wsMsg.sessionId = session.id;
@@ -196,6 +200,7 @@ export class WebSocketChannelHost {
    * @param requestId - Optional request ID for correlation.
    */
   private sendError(ws: WebSocket, error: string, requestId?: string): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
     const message = { type: 'error', error, requestId };
     ws.send(JSON.stringify(message));
   }

@@ -8,7 +8,7 @@ import type { IStorageProvider } from './providers/storage/IStorageProvider';
 import type { StorageMetadata } from './providers/storage/IStorageProvider';
 import type { ErrorCallback } from '../types/callbacks';
 import { logger } from '../utils/logger';
-import { NotConfiguredError, NotFoundError } from '../errors';
+import { NotConfiguredError, NotFoundError, InvalidOperationError } from '../errors';
 import { generateId, ID_PREFIXES } from '../utils/idGenerator';
 import { getArtifactExtension } from '../utils/audioFormat';
 
@@ -43,23 +43,34 @@ export class ConversationStorageService {
     const key = this.generateArtifactKey(conversationId, artifactType, metadata?.contentType);
     const url = await provider.upload(key, data, metadata);
 
-    // Save artifact metadata to database
+    // Save artifact metadata to database. If the insert fails, clean up the uploaded file
+    // to avoid orphaned storage objects.
     const artifactId = generateId(ID_PREFIXES.ARTIFACT);
-    await db.insert(conversationArtifacts).values({
-      id: artifactId,
-      projectId,
-      conversationId,
-      artifactType,
-      eventId: eventId ?? null,
-      inputTurnId: inputTurnId ?? null,
-      outputTurnId: outputTurnId ?? null,
-      storageKey: key,
-      storageUrl: url,
-      data: null, // Not storing in database, only in external storage
-      mimeType: metadata?.contentType ?? 'application/octet-stream',
-      fileSize: data.length,
-      metadata: metadata?.customMetadata ?? null,
-    });
+    try {
+      await db.insert(conversationArtifacts).values({
+        id: artifactId,
+        projectId,
+        conversationId,
+        artifactType,
+        eventId: eventId ?? null,
+        inputTurnId: inputTurnId ?? null,
+        outputTurnId: outputTurnId ?? null,
+        storageKey: key,
+        storageUrl: url,
+        data: null,
+        mimeType: metadata?.contentType ?? 'application/octet-stream',
+        fileSize: data.length,
+        metadata: metadata?.customMetadata ?? null,
+      });
+    } catch (error) {
+      logger.warn({ error, artifactId, key }, 'Artifact DB insert failed — cleaning up uploaded storage object');
+      try {
+        await provider.delete(key);
+      } catch (cleanupError) {
+        logger.error({ error: cleanupError, key }, 'Failed to clean up orphaned artifact after DB insert failure');
+      }
+      throw error;
+    }
 
     logger.info(`Uploaded artifact for conversation ${conversationId}: ${artifactType} -> ${url} (artifact ID: ${artifactId})`);
     return { id: artifactId, url };
@@ -173,7 +184,7 @@ export class ConversationStorageService {
     }
 
     if (provider.providerType !== 'storage') {
-      throw new Error(`Provider ${storageProviderId} is not a storage provider (type: ${provider.providerType})`);
+      throw new InvalidOperationError(`Provider ${storageProviderId} is not a storage provider (type: ${provider.providerType})`);
     }
 
     const instance = await this.storageFactory.createProvider(provider, storageSettings as Record<string, unknown>);

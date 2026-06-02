@@ -172,11 +172,15 @@ export class KnowledgeService extends BaseService {
         throw new OptimisticLockError(`Failed to update knowledge category due to version conflict`);
       }
 
-      const category = await db.query.knowledgeCategories.findFirst({ where: eq(knowledgeCategories.id, id), with: { items: { orderBy: (items, { asc }) => [asc(items.order)] } } });
+      const category = await db.query.knowledgeCategories.findFirst({ where: and(eq(knowledgeCategories.projectId, projectId), eq(knowledgeCategories.id, id)), with: { items: { orderBy: (items, { asc }) => [asc(items.order)] } } });
 
-      await this.auditService.logUpdate('knowledge_category', id, existingCategory, category!, context?.operatorId, projectId);
+      if (!category) {
+        throw new NotFoundError(`Knowledge category with id ${id} not found after update`);
+      }
 
-      logger.info({ categoryId: category!.id, newVersion: category!.version }, 'Knowledge category updated successfully');
+      await this.auditService.logUpdate('knowledge_category', id, existingCategory, category, context?.operatorId, projectId);
+
+      logger.info({ categoryId: category.id, newVersion: category.version }, 'Knowledge category updated successfully');
 
       return knowledgeCategoryResponseSchema.parse(category);
     } catch (error) {

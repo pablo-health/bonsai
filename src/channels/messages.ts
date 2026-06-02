@@ -25,7 +25,7 @@ import { conversationEventTypeSchema, conversationEventDataSchema } from '../typ
  * Base fields shared by all inbound (input) messages.
  */
 export const calBaseInputMessageSchema = z.object({
-  conversationId: z.string().describe('Unique identifier of the conversation'),
+  conversationId: z.string().min(1).describe('Unique identifier of the conversation'),
   correlationId: z.string().optional().describe('Optional caller-supplied identifier echoed back in the corresponding result message'),
 });
 
@@ -155,6 +155,15 @@ export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.exten
 });
 
 /**
+ * Result of an abort_ai_generation command.
+ */
+export const calAbortAiGenerationResponseSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  success: z.boolean().describe('Whether the AI generation was successfully aborted'),
+  error: z.string().optional().describe('Error message if abort failed'),
+});
+
+/**
  * Discriminated union of all inbound message types accepted by a communication channel.
  */
 export const calInputMessageSchema = z.discriminatedUnion('type', [
@@ -248,7 +257,7 @@ export const calGoToStageResponseSchema = calBaseOutputMessageSchema.extend({
  * Result of a set_var command.
  */
 export const calSetVarResponseSchema = calBaseOutputMessageSchema.extend({
-  type: z.literal('set_var_result'),
+  type: z.literal('set_var'),
   success: z.boolean().describe('Whether the variable was successfully set'),
   error: z.string().optional().describe('Error message if setting the variable failed'),
 });
@@ -452,6 +461,7 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsResponseSchema,
   calRunActionResponseSchema,
   calCallToolResponseSchema,
+  calAbortAiGenerationResponseSchema,
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
   calAbortAiGenerationOutputMessageSchema,
@@ -497,6 +507,7 @@ export type CALGetVarResponse = z.infer<typeof calGetVarResponseSchema>;
 export type CALGetAllVarsResponse = z.infer<typeof calGetAllVarsResponseSchema>;
 export type CALRunActionResponse = z.infer<typeof calRunActionResponseSchema>;
 export type CALCallToolResponse = z.infer<typeof calCallToolResponseSchema>;
+export type CALAbortAiGenerationResponse = z.infer<typeof calAbortAiGenerationResponseSchema>;
 
 export type CALStartAiGenerationOutputMessage = z.infer<typeof calStartAiGenerationOutputMessageSchema>;
 export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessageSchema>;

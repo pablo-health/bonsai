@@ -1,4 +1,4 @@
-import type { WebSocket } from 'ws';
+import { WebSocket } from 'ws';
 import type { Session, SessionManager } from '../SessionManager';
 import type { IClientConnection } from '../IClientConnection';
 import type { CALOutputMessage } from '../messages';
@@ -27,7 +27,7 @@ import { logger } from '../../utils/logger';
 export class TwilioVoiceConnection implements IClientConnection {
   readonly connectionType = 'twilio_voice' as const;
 
-  private session: Session;
+  private session: Session | null = null;
   private markCounter = 0;
   private pendingMarkName: string | null = null;
   isClosing = false;
@@ -90,7 +90,7 @@ export class TwilioVoiceConnection implements IClientConnection {
           resolve();
         };
         this.pendingCloseResolve = resolveOnce;
-        setTimeout(resolveOnce, 5000);
+        setTimeout(resolveOnce, 60000);
       });
     }
 
@@ -141,11 +141,11 @@ export class TwilioVoiceConnection implements IClientConnection {
    * @param msg - The CAL output message to transmit.
    */
   async sendMessage(msg: CALOutputMessage): Promise<void> {
+    const canSend = this.ws.readyState === WebSocket.OPEN;
+
     switch (msg.type) {
       case 'start_ai_generation_output': {
-        // Flush any audio still buffered from the previous turn (barge-in scenario).
-        // Only flush when explicitly requested — filler delivery sets flushBuffer: false
-        // to avoid unnecessary silence before the first audible filler chunk.
+        if (!canSend) return;
         if (msg.flushBuffer !== false) {
           this.onClearMarkCallbacks();
           this.ws.send(JSON.stringify({ event: 'clear', streamSid: this.streamSid }));
@@ -153,6 +153,7 @@ export class TwilioVoiceConnection implements IClientConnection {
         break;
       }
       case 'abort_ai_generation_output': {
+        if (!canSend) return;
         this.onClearMarkCallbacks();
         this.ws.send(JSON.stringify({ event: 'clear', streamSid: this.streamSid }));
         break;
@@ -162,14 +163,14 @@ export class TwilioVoiceConnection implements IClientConnection {
           logger.warn({ audioFormat: msg.audioFormat, sessionId: this.session?.id }, 'TwilioVoice: received non-mulaw audio chunk, dropping');
           return;
         }
+        if (!canSend) return;
         const payload = msg.audioData.toString('base64');
         const frame = JSON.stringify({ event: 'media', streamSid: this.streamSid, media: { payload } });
         this.ws.send(frame);
         break;
       }
       case 'end_ai_generation_output': {
-        // Send a mark to Twilio; Twilio will echo it back once all buffered audio has played.
-        // Only then do we open the next user voice input turn to avoid a race condition.
+        if (!canSend) return;
         const markName = `bonsai-turn-end-${this.markCounter++}`;
         this.pendingMarkName = markName;
         const markFrame = JSON.stringify({ event: 'mark', streamSid: this.streamSid, mark: { name: markName } });

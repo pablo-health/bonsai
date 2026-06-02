@@ -4,6 +4,7 @@ import { db } from '../db/index';
 import { users } from '../db/schema';
 import { deepMerge } from '../utils/deepMerge';
 import type { CreateUserRequest, UpdateUserRequest, UserResponse, UserListResponse } from '../http/contracts/user';
+import type { AuditLog } from '../types/models';
 import type { ListParams } from '../http/contracts/common';
 import { userResponseSchema, userListResponseSchema } from '../http/contracts/user';
 import { AuditService } from './AuditService';
@@ -239,6 +240,10 @@ export class UserService extends BaseService {
 
       const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
 
+      if (!existing) {
+        throw new NotFoundError(`User with id ${userId} not found in project ${projectId}`);
+      }
+
       return userResponseSchema.parse(existing);
     } catch (error) {
       logger.error({ error, userId, projectId }, 'Failed to ensure user exists');
@@ -312,7 +317,8 @@ export class UserService extends BaseService {
    * @param projectId - The project ID the user belongs to
    * @returns Array of audit log entries for the user
    */
-  async getUserAuditLogs(userId: string, projectId: string): Promise<any[]> {
+  async getUserAuditLogs(userId: string, projectId: string, context: RequestContext): Promise<AuditLog[]> {
+    this.requirePermission(context, PERMISSIONS.AUDIT_READ);
     logger.debug({ userId, projectId }, 'Fetching audit logs for user');
 
     try {

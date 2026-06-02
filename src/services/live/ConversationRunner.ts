@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { inject, injectable } from "tsyringe";
-import { NotFoundError } from "../../errors";
+import { NotFoundError, InvalidOperationError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
 import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS } from "../../types/actions";
 import type { LifecycleContext } from "../../types/actions";
@@ -129,7 +129,7 @@ export type StageRuntimeData = {
   stage: Stage;
   completionLlmProvider?: ILlmProvider;
   completionLlmProviderInfo?: LlmProviderInfo;
-  lastCompletionResult?: LlmGenerationResult;
+  lastCompletionResult: LlmGenerationResult | null;
   lastCompletionPrompt?: string;
   classifiers: ClassifierRuntimeData[];
   transformers: TransformerRuntimeData[];
@@ -141,9 +141,10 @@ export type StageRuntimeData = {
   asrProvider?: IAsrProvider;
   ttsProvider?: ITtsProvider;
   shouldEndConversation: boolean;
-  agent: AgentResponse;
+  agent: AgentResponse | null;
   fillerLlmProvider?: ILlmProvider;
   fillerLlmProviderInfo?: LlmProviderInfo;
+  moderationProvider?: ILlmProvider;
   faq: FaqItem[];
   costManagementConfig: CostManagementConfig | null;
 }
@@ -259,7 +260,7 @@ export class ConversationRunner {
 
     // Check if conversation is active
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Conversation with ID ${conversationId} is not active`);
+      throw new InvalidOperationError(`Conversation with ID ${conversationId} is not active`);
     }
 
     // Load sample copy data
@@ -315,8 +316,9 @@ export class ConversationRunner {
       sampleCopyClassifier: undefined,
       asrProvider: undefined,
       ttsProvider: undefined,
+      moderationProvider: undefined,
       shouldEndConversation: false,
-      agent: null as any, // populated below after agentService.getAgentById
+      agent: null,
       faq: [],
       costManagementConfig: project?.costManagementConfig ?? null,
     };
@@ -362,6 +364,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Classifier with ID ${classifierId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, classifier.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${classifier.llmProviderId} not found for classifier ${classifierId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, classifier.llmSettings);
       stageData.classifiers.push({ classifier, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -375,6 +380,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Transformer with ID ${transformerId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, transformer.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${transformer.llmProviderId} not found for transformer ${transformerId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, transformer.llmSettings);
       stageData.transformers.push({ transformer, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -437,6 +445,9 @@ export class ConversationRunner {
       });
       if (guardrailClassifierEntity) {
         const guardrailLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, guardrailClassifierEntity.llmProviderId) });
+        if (!guardrailLlmProviderEntity) {
+          throw new NotFoundError(`LLM Provider with ID ${guardrailClassifierEntity.llmProviderId} not found for guardrail classifier ${guardrailClassifierEntity.id}`);
+        }
         stageData.guardrailClassifier = {
           classifier: guardrailClassifierEntity,
           llmProvider: await this.llmProviderFactory.createProvider(guardrailLlmProviderEntity, guardrailClassifierEntity.llmSettings),
@@ -466,6 +477,9 @@ export class ConversationRunner {
         });
         if (sampleCopyClassifierEntity) {
           const sampleCopyLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, sampleCopyClassifierEntity.llmProviderId) });
+          if (!sampleCopyLlmProviderEntity) {
+            throw new NotFoundError(`LLM Provider with ID ${sampleCopyClassifierEntity.llmProviderId} not found for sample copy classifier ${sampleCopyClassifierEntity.id}`);
+          }
           stageData.sampleCopyClassifier = {
             classifier: sampleCopyClassifierEntity,
             llmProvider: await this.llmProviderFactory.createProvider(sampleCopyLlmProviderEntity, sampleCopyClassifierEntity.llmSettings),
@@ -517,6 +531,17 @@ export class ConversationRunner {
       }
     } else if (this.session.sessionSettings.sendVoiceInput) {
       logger.warn({ conversationId: conversation.id, projectId: project?.id, acceptVoice: project?.acceptVoice, asrProviderId: project?.asrConfig?.asrProviderId ?? null }, `Session requests voice input but ASR provider will not be initialised (acceptVoice=${project?.acceptVoice}, asrProviderId=${project?.asrConfig?.asrProviderId ?? 'unset'}). Both must be set. Voice input will be unavailable.`);
+    }
+
+    // Initialize moderation provider if configured on the project
+    if (project.moderationConfig?.enabled && project.moderationConfig.llmProviderId) {
+      const moderationProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, project.moderationConfig.llmProviderId) });
+      if (moderationProviderEntity) {
+        stageData.moderationProvider = await this.llmProviderFactory.createProviderForEnumeration(moderationProviderEntity);
+        await stageData.moderationProvider.init();
+      } else {
+        logger.warn({ projectId: project.id, llmProviderId: project.moderationConfig.llmProviderId }, 'Moderation provider not found, moderation will be skipped');
+      }
     }
 
     return stageData;
@@ -706,15 +731,19 @@ export class ConversationRunner {
             backfill.ttsEndMs = ttsEndMs;
             if (Object.keys(backfill).length > 0) {
               const updated = await this.conversationService.updateConversationEventMetadata(this.conversation.projectId, assistantMessageEventId, backfill);
-              const eventUpdateMessage: CALConversationEventUpdateMessage = {
-                type: 'conversation_event_update',
-                conversationId: this.conversation.id,
-                eventType: 'message',
-                eventData: updated.eventData,
-                inputTurnId: this.turnData.inputTurnId,
-                outputTurnId: this.turnData.outputTurnId,
-              };
-              await this.channel.sendMessage(eventUpdateMessage);
+              if (!updated) {
+                logger.warn({ conversationId: this.conversation.id, eventId: assistantMessageEventId }, 'Failed to backfill TTS timing metadata');
+              } else {
+                const eventUpdateMessage: CALConversationEventUpdateMessage = {
+                  type: 'conversation_event_update',
+                  conversationId: this.conversation.id,
+                  eventType: 'message',
+                  eventData: updated.eventData,
+                  inputTurnId: this.turnData.inputTurnId,
+                  outputTurnId: this.turnData.outputTurnId,
+                };
+                await this.channel.sendMessage(eventUpdateMessage);
+              }
             }
           }
 
@@ -734,9 +763,9 @@ export class ConversationRunner {
           await this.handlePostResponseAction();
         });
 
-      ttsProvider.setOnSpeechGenerating(async (chunk) => {
-           this.recorder?.pushOutput(chunk.audio);
-           if (!firstTtsChunkGenerated) {
+        ttsProvider.setOnSpeechGenerating(async (chunk) => {
+          this.recorder?.pushOutput(chunk.audio);
+          if (!firstTtsChunkGenerated) {
             logger.info({ conversationId, chunkId: chunk.chunkId }, `First TTS chunk generated for conversation ${conversationId}`);
             firstTtsChunkGenerated = true;
             // Reset per-turn outbound converter state on first chunk of each TTS turn
@@ -959,7 +988,7 @@ export class ConversationRunner {
     this.responseGeneratedInTurn = false;
     this.resetTurnData();
     if (this.conversation.status !== 'initialized') {
-      throw new Error(`Cannot start conversation in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start conversation in current state: ${this.conversation.status}`);
     }
 
     const eventData: ConversationStartEventData = {
@@ -1020,7 +1049,7 @@ export class ConversationRunner {
   async resumeConversation() {
     // Validate conversation can be resumed (should already be checked in prepareConversation, but double-check)
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Cannot resume conversation in state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot resume conversation in state: ${this.conversation.status}`);
     }
 
     const previousStatus = this.conversation.status;
@@ -1060,7 +1089,7 @@ export class ConversationRunner {
 
   async receiveUserTextInput(userInput: string): Promise<string> {
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot receive user input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
     }
 
     this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
@@ -1075,13 +1104,13 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1133,17 +1162,17 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot receive user voice data in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user voice data in current state: ${this.conversation.status}`);
     }
 
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1170,16 +1199,16 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
     }
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1200,10 +1229,6 @@ export class ConversationRunner {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop voice input for conversation ${this.stageData.conversation.id}`);
       throw error;
     }
-  }
-
-  async receiveCommand(command: string, data: any) {
-    throw new Error("Method not implemented.");
   }
 
   /**
@@ -1291,7 +1316,7 @@ export class ConversationRunner {
         ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input' || this.conversation.status === 'initialized'
         : this.conversation.status === 'awaiting_user_input';
       if (!allowed) {
-        throw new Error(`Cannot navigate to stage in current state: ${this.conversation.status}`);
+        throw new InvalidOperationError(`Cannot navigate to stage in current state: ${this.conversation.status}`);
       }
 
       const fromStageId = this.stageData.id;
@@ -1301,7 +1326,7 @@ export class ConversationRunner {
       const onLeaveAction = oldStageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_LEAVE];
       if (onLeaveAction) {
         logger.debug({ conversationId: this.conversation.id, stageId: fromStageId }, 'Executing __on_leave lifecycle action');
-        const context = await this.contextBuilder.buildContextForUserInput(oldStageData.conversation, oldStageData.stage, [/** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
+        const context = await this.contextBuilder.buildContextForLifecycleAction(oldStageData.conversation, oldStageData.stage, this.channel?.connectionType);
         const leaveOutcome = await this.actionsExecutor.executeActions([onLeaveAction], context, oldStageData.id, 'on_leave', this.saveAndSendEvent.bind(this));
 
         await this.applyActionOutcome(context, leaveOutcome);
@@ -1379,7 +1404,7 @@ export class ConversationRunner {
       await this.saveAndSendEvent('jump_to_stage', eventData);
 
       // Execute __on_enter lifecycle action if defined on new stage
-      const enterContext = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [ /** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
+      const enterContext = await this.contextBuilder.buildContextForLifecycleAction(this.stageData.conversation, this.stageData.stage, this.channel?.connectionType);
       let enterOutcome: ActionsExecutionOutcome | null = null;
       const onEnterAction = this.stageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_ENTER];
       if (onEnterAction) {
@@ -1431,10 +1456,10 @@ export class ConversationRunner {
    */
   async setVariable(stageId: string, variableName: string, variableValue: any): Promise<void> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot set variable in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot set variable in current state: ${this.conversation.status}`);
     }
 
 
@@ -1472,7 +1497,7 @@ export class ConversationRunner {
    */
   async getVariable(stageId: string, variableName: string): Promise<any> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId, variableName }, `Getting variable ${variableName}`);
@@ -1491,7 +1516,7 @@ export class ConversationRunner {
    */
   async getAllVariables(stageId: string): Promise<Record<string, any>> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId }, `Getting all variables`);
@@ -1569,7 +1594,7 @@ export class ConversationRunner {
     logger.info({ conversationId: this.conversation.id, actionName, parameterCount: parameters.length }, `Running action ${actionName}`);
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot run action in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot run action in current state: ${this.conversation.status}`);
     }
 
     // Reset per-turn data so timing fields are clean for this client-initiated action turn,
@@ -1806,9 +1831,9 @@ export class ConversationRunner {
     }
 
     this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, {
-        algorithm: serverVadConfig.algorithm ?? 'legacy',
-        ...serverVadConfig,
-      } as ServerVadConfig);
+      algorithm: serverVadConfig.algorithm ?? 'legacy',
+      ...serverVadConfig,
+    } as ServerVadConfig);
     await this.vadProcessor.init();
 
     // Serialize all VAD event handlers via a promise chain. This prevents the race where
@@ -2216,7 +2241,7 @@ export class ConversationRunner {
     if (isStrictModerationMode) {
       // Strict mode (default): moderation fully resolves before any LLM call that receives user-derived content.
       // This prevents inappropriate content from reaching provider APIs and risking account bans.
-      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
         if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
@@ -2337,7 +2362,7 @@ export class ConversationRunner {
     })();
 
     // Standard mode: fire moderation in parallel with both filler delivery and classification.
-    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
 
     // Kick off classification concurrently with filler delivery — neither depends on the other.
     const processingStartMs = Date.now();
@@ -2518,15 +2543,19 @@ export class ConversationRunner {
       stageTransitionEndMs: this.turnData.stageTransitionEndMs ?? undefined,
       stageTransitionDurationMs: this.turnData.stageTransitionStartMs !== null && this.turnData.stageTransitionEndMs !== null ? this.turnData.stageTransitionEndMs - this.turnData.stageTransitionStartMs : undefined,
     }, this.turnMessageVisibility);
-    const messageUpdateMessage: CALConversationEventUpdateMessage = {
-      type: 'conversation_event_update',
-      conversationId: this.conversation.id,
-      eventType: 'message',
-      eventData: updated.eventData,
-      inputTurnId: this.turnData.inputTurnId,
-      outputTurnId: this.turnData.outputTurnId,
-    };
-    await this.channel.sendMessage(messageUpdateMessage);
+    if (!updated) {
+      logger.warn({ conversationId: this.conversation.id, eventId: userMessageEventId }, 'Failed to update message event with processing metadata');
+    } else {
+      const messageUpdateMessage: CALConversationEventUpdateMessage = {
+        type: 'conversation_event_update',
+        conversationId: this.conversation.id,
+        eventType: 'message',
+        eventData: updated.eventData,
+        inputTurnId: this.turnData.inputTurnId,
+        outputTurnId: this.turnData.outputTurnId,
+      };
+      await this.channel.sendMessage(messageUpdateMessage);
+    }
 
     await this.generateResponse(context, executionOutcome);
   }

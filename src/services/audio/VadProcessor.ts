@@ -106,7 +106,7 @@ export class VadProcessor extends EventEmitter {
 
     this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? LEGACY_DEFAULTS.gracePeriodMs);
     const legacyOptions = {
-      sampleRate: this.sampleRate,
+      //sampleRate: this.sampleRate,
       positiveSpeechThreshold: pos,
       negativeSpeechThreshold: neg,
       frameSamples,
@@ -133,7 +133,7 @@ export class VadProcessor extends EventEmitter {
   async initSilero(config: SileroVadConfig): Promise<void> {
    this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? SILERO_DEFAULTS.gracePeriodMs);
     const sileroOptions = {
-      sampleRate: this.sampleRate,
+      //sampleRate: this.sampleRate,
       model: config.model,
       positiveSpeechThreshold: config.positiveSpeechThreshold ?? SILERO_DEFAULTS.positiveSpeechThreshold,
       negativeSpeechThreshold: config.negativeSpeechThreshold ?? SILERO_DEFAULTS.negativeSpeechThreshold,
