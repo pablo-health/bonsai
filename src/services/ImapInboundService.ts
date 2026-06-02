@@ -9,22 +9,17 @@ import { smtpImapChannelProviderConfigSchema } from './providers/channel/SmtpIma
 import { SecretRefUtils } from './secrets/SecretRefUtils';
 import { logger } from '../utils/logger';
 
-// Extend imap types to include IDLE methods not declared in @types/imap
-interface ImapWithIdle extends ImapConnection {
-  idle(): void;
-  cancelIdle(): void;
-}
-
-type MailboxState = 'disconnected' | 'connecting' | 'idle' | 'polling' | 'searching';
+type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
 class ImapMailboxSession {
   public state: MailboxState = 'disconnected';
-  public imap: ImapWithIdle | null = null;
+  public imap: ImapConnection | null = null;
   public maxProcessedUid = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private consecutiveErrors = 0;
   public shouldStop = false;
+  private channelHostRef: SmtpImapChannelHost | null = null;
 
   constructor(
     public readonly providerId: string,
@@ -56,7 +51,8 @@ class ImapMailboxSession {
         host: this.imapHost,
         port: this.imapPort,
         tls: this.imapSecure,
-      }) as ImapWithIdle;
+        keepalive: true,
+      });
 
       await new Promise<void>((resolve, reject) => {
         imap.once('ready', () => resolve());
@@ -95,7 +91,7 @@ class ImapMailboxSession {
 
   public startWatching(channelHost: SmtpImapChannelHost): void {
     if (!this.imap || this.shouldStop) return;
-    this.state = 'idle';
+    this.channelHostRef = channelHost;
 
     this.imap.on('error', (error) => {
       logger.error({ error, providerId: this.providerId }, 'IMAP connection error');
@@ -104,33 +100,18 @@ class ImapMailboxSession {
       this.scheduleReconnect();
     });
 
-    this.imap.on('idle', () => {
-      logger.debug({ providerId: this.providerId }, 'IMAP IDLE started');
-      this.state = 'idle';
-      this.clearPollTimer();
-    });
-
-    this.imap.on('mail', () => {
-      logger.debug({ providerId: this.providerId }, 'New mail notification via IDLE');
-      this.processNewMessages(channelHost);
+    this.imap.on('newmail', (count) => {
+      logger.debug({ providerId: this.providerId, unseen: count }, 'New mail notification');
+      if (this.channelHostRef) {
+        this.processNewMessages(this.channelHostRef);
+      }
     });
 
     this.imap.on('expunge', () => {
       logger.debug({ providerId: this.providerId }, 'IMAP expunge notification');
     });
 
-    this.startIdle();
-  }
-
-  private startIdle(): void {
-    if (!this.imap || this.shouldStop || this.state !== 'idle') return;
-
-    try {
-      this.imap.idle();
-    } catch (error) {
-      logger.warn({ error, providerId: this.providerId }, 'IDLE not supported or failed, falling back to polling');
-      this.startPolling();
-    }
+    this.startPolling();
   }
 
   private startPolling(): void {
@@ -145,7 +126,7 @@ class ImapMailboxSession {
       } catch (error) {
         logger.error({ error, providerId: this.providerId }, 'Error during IMAP polling');
       }
-      this.startIdle();
+      this.startPolling();
     }, this.pollingIntervalMs);
 
     if (this.pollTimer) {
@@ -155,16 +136,17 @@ class ImapMailboxSession {
 
   private async processNewMessages(channelHost: SmtpImapChannelHost): Promise<void> {
     if (!this.imap || this.shouldStop) return;
+    this.clearPollTimer();
 
     try {
-      this.imap.cancelIdle();
       await this.processNewMessagesDirect();
-      this.startIdle();
     } catch (error) {
       logger.error({ error, providerId: this.providerId }, 'Error processing new messages');
       this.state = 'disconnected';
       this.imap = null;
       this.scheduleReconnect();
+    } finally {
+      this.startPolling();
     }
   }
 
@@ -195,7 +177,7 @@ class ImapMailboxSession {
       logger.error({ error, providerId: this.providerId }, 'Failed to search for new messages');
     } finally {
       if (!this.shouldStop) {
-        this.state = 'idle';
+        this.state = 'polling';
       }
     }
   }
@@ -318,9 +300,6 @@ class ImapMailboxSession {
     this.clearPollTimer();
 
     if (this.imap) {
-      try {
-        this.imap.cancelIdle();
-      } catch { /* ignore */ }
       this.imap.end();
       this.imap = null;
     }
