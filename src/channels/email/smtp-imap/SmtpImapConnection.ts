@@ -8,6 +8,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   readonly connectionType = 'smtp_imap' as const;
 
   private transporter: nodemailer.Transporter;
+  private readonly smtpAuthUser: string;
 
   constructor(
     private readonly toAddress: string,
@@ -22,6 +23,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
     smtpAuthPass: string,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'smtp_imap');
+    this.smtpAuthUser = smtpAuthUser;
     this.transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
@@ -62,7 +64,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
     const messageId = headers?.messageId ?? this.generateMessageId();
 
     const mailOptions: nodemailer.SendMailOptions = {
-      from: headers?.from ?? this.fromAddress,
+      from: headers?.from ?? this.smtpAuthUser,
       to,
       subject: headers?.subject ?? subject,
       text: body,

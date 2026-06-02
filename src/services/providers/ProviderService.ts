@@ -12,6 +12,7 @@ import { buildFilterCondition, buildOrderBy } from '../../utils/queryBuilder';
 import { countRows, normalizeListLimit } from '../../utils/pagination';
 import { logger } from '../../utils/logger';
 import { BaseService } from '../BaseService';
+import { ImapInboundService } from '../ImapInboundService';
 import type { RequestContext } from '../RequestContext';
 import { PERMISSIONS } from '../../permissions';
 import { generateId, ID_PREFIXES } from '../../utils/idGenerator';
@@ -28,6 +29,7 @@ export class ProviderService extends BaseService {
     @inject(AuditService) private readonly auditService: AuditService,
     @inject(LlmProviderFactory) private readonly llmProviderFactory: LlmProviderFactory,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(ImapInboundService) private readonly imapInboundService: ImapInboundService,
   ) {
     super();
   }
@@ -194,6 +196,12 @@ export class ProviderService extends BaseService {
 
     logger.info({ providerId: provider.id, newVersion: provider.version }, 'Provider updated successfully');
 
+    if (provider.apiType === 'smtp_imap') {
+      this.imapInboundService.reload(provider.id).catch((error) => {
+        logger.error({ error, providerId: provider.id }, 'Failed to reload IMAP session after provider update');
+      });
+    }
+
     return providerResponseSchema.parse(provider);
   }
 
@@ -229,6 +237,12 @@ export class ProviderService extends BaseService {
     await this.auditService.logDelete('provider', id, safeExistingProvider, context?.operatorId);
 
     logger.info({ providerId: id }, 'Provider deleted successfully');
+
+    if (existingProvider.apiType === 'smtp_imap') {
+      this.imapInboundService.stopSession(id).catch((error) => {
+        logger.error({ error, providerId: id }, 'Failed to stop IMAP session after provider deletion');
+      });
+    }
   }
 
   /**
