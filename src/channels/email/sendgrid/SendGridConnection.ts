@@ -60,17 +60,13 @@ export class SendGridConnection extends EmailConnectionBase {
     if (headers?.inReplyTo) customArgs['X-In-Reply-To'] = headers.inReplyTo;
     if (headers?.references) customArgs['X-References'] = headers.references;
 
-    try {
-      await sg.send({
-        to: [{ email: to }],
-        from: { email: headers?.from ?? this.fromAddress },
-        subject: headers?.subject ?? subject,
-        text: body,
-        customArgs,
-      });
-      logger.info({ to, sessionId: this.session?.id }, 'SendGrid email sent');
-    } catch (error) {
-      logger.error({ error, to, sessionId: this.session?.id }, 'Failed to send SendGrid email');
-    }
+    await sg.send({
+      to: [{ email: to }],
+      from: { email: headers?.from ?? this.fromAddress },
+      subject: headers?.subject ?? subject,
+      text: body,
+      customArgs,
+    });
+    logger.info({ to, sessionId: this.session?.id }, 'SendGrid email sent');
   }
 }

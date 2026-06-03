@@ -69,12 +69,8 @@ export class SesConnection extends EmailConnectionBase {
       headers?.references,
     );
 
-    try {
-      await this.sesClient.send(new SendRawEmailCommand({ RawMessage: { Data: rawEmail } }));
-      logger.info({ to, sessionId: this.session?.id }, 'SES email sent');
-    } catch (error) {
-      logger.error({ error, to, sessionId: this.session?.id }, 'Failed to send SES email');
-    }
+    await this.sesClient.send(new SendRawEmailCommand({ RawMessage: { Data: rawEmail } }));
+    logger.info({ to, sessionId: this.session?.id }, 'SES email sent');
   }
 
   private buildRawEmail(

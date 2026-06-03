@@ -85,11 +85,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
       (mailOptions.headers as Record<string, string>)['References'] = headers.references;
     }
 
-    try {
-      await this.transporter.sendMail(mailOptions);
-      logger.info({ to, sessionId: this.session?.id }, 'SMTP/IMAP email sent');
-    } catch (error) {
-      logger.error({ error, to, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
-    }
+    await this.transporter.sendMail(mailOptions);
+    logger.info({ to, sessionId: this.session?.id }, 'SMTP/IMAP email sent');
   }
 }
