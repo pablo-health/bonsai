@@ -70,7 +70,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
     const messageId = headers?.messageId ?? this.generateMessageId();
 
     const mailOptions: nodemailer.SendMailOptions = {
-      from: headers?.from ?? this.smtpAuthUser,
+      from: headers?.from ?? this.fromAddress ?? this.smtpAuthUser,
       to,
       subject: headers?.subject ?? subject,
       text: body,
