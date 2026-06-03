@@ -36,6 +36,16 @@ export class SmtpImapConnection extends EmailConnectionBase {
     });
   }
 
+  async verifyConnection(): Promise<void> {
+    try {
+      await this.transporter.verify();
+      logger.info({ to: this.toAddress }, 'SMTP/IMAP: transporter verified successfully');
+    } catch (error) {
+      logger.error({ error, to: this.toAddress }, 'SMTP/IMAP: transporter verification failed');
+      throw error;
+    }
+  }
+
   setConversationId(id: string): void {
     this.conversationId = id;
   }
@@ -66,7 +76,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
     await this.sendEmail(this.toAddress, this.subject, body, headers);
   }
 
-  protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
+ protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
     const messageId = headers?.messageId ?? this.generateMessageId();
 
     const mailOptions: nodemailer.SendMailOptions = {
@@ -85,7 +95,11 @@ export class SmtpImapConnection extends EmailConnectionBase {
       (mailOptions.headers as Record<string, string>)['References'] = headers.references;
     }
 
-    await this.transporter.sendMail(mailOptions);
-    logger.info({ to, sessionId: this.session?.id }, 'SMTP/IMAP email sent');
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId }, 'SMTP/IMAP email sent');
+    } catch (error) {
+      logger.error({ error, to, messageId, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
+    }
   }
 }

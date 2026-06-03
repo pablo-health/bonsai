@@ -172,6 +172,15 @@ export class SmtpImapChannelHost {
       smtp.auth.user,
       smtp.auth.pass,
     );
+
+    try {
+      await connection.verifyConnection();
+    } catch (error) {
+      logger.error({ error, channelProviderId, to: body.to }, 'SMTP/IMAP: transporter verification failed');
+      res.status(502).json({ error: 'SMTP connection verification failed' });
+      return;
+    }
+
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
@@ -263,6 +272,14 @@ export class SmtpImapChannelHost {
       smtpAuthUser,
       smtpAuthPass,
     );
+
+    try {
+      await connection.verifyConnection();
+    } catch (error) {
+      logger.error({ error, from: senderEmail }, 'SMTP/IMAP: transporter verification failed for inbound reply');
+      return;
+    }
+
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
