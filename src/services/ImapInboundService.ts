@@ -163,7 +163,7 @@ class ImapMailboxSession {
     try {
       logger.info({ providerId: this.providerId, processedCount: this.processedUids.size, state: this.state }, 'IMAP: starting search');
       const results = await new Promise<any[]>((resolve, reject) => {
-        this.imap!.seq.search(['UNSEEN'], (err, results) => {
+        this.imap!.search(['UNSEEN'], (err, results) => {
           if (err) reject(err);
           else resolve(results);
         });
@@ -242,7 +242,7 @@ class ImapMailboxSession {
 
       const messageId = parsed.messageId || extractHeaderFromSource(source, 'Message-ID') || undefined;
       const inReplyTo = parsed.inReplyTo || extractHeaderFromSource(source, 'In-Reply-To') || undefined;
-      const references = (Array.isArray(parsed.references) ? parsed.references.join(' ') : parsed.references) || extractHeaderFromSource(source, 'References') || undefined;
+      const references = parsed.references || extractHeaderFromSource(source, 'References') || undefined;
 
       logger.info({ providerId: this.providerId, uid, from: senderEmail, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
 
