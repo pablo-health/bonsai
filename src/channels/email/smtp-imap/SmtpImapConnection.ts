@@ -2,7 +2,7 @@ import type { Session, SessionManager } from '../../SessionManager';
 import type { CALOutputMessage } from '../../messages';
 import * as nodemailer from 'nodemailer';
 import { EmailConnectionBase, type EmailHeaders } from '../shared/EmailConnectionBase';
-import { generateEmailMessageId } from '../shared/MessageIdUtils';
+import { extractDomainFromEmail, generateEmailMessageId } from '../shared/MessageIdUtils';
 import { logger } from '../../../utils/logger';
 
 export class SmtpImapConnection extends EmailConnectionBase {
@@ -70,8 +70,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
     if (!body) return;
 
     const headers: EmailHeaders = {};
-    if (this.conversationId) {
-      headers.messageId = generateEmailMessageId(this.conversationId);
+    const convId = this.conversationId ?? this.session?.conversationId;
+    if (convId) {
+      headers.messageId = generateEmailMessageId(convId, extractDomainFromEmail(this.fromAddress));
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
@@ -79,9 +80,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
  protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
     const messageId = headers?.messageId ?? this.generateMessageId();
+    const from = headers?.from ?? this.fromAddress ?? this.smtpAuthUser;
 
     const mailOptions: nodemailer.SendMailOptions = {
-      from: headers?.from ?? this.fromAddress ?? this.smtpAuthUser,
+      from,
       to,
       subject: headers?.subject ?? subject,
       text: body,
@@ -96,9 +98,11 @@ export class SmtpImapConnection extends EmailConnectionBase {
       (mailOptions.headers as Record<string, string>)['References'] = headers.references;
     }
 
+    logger.info({ from, to, subject, messageId, sessionId: this.session?.id }, 'SMTP/IMAP: sending email');
+
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId }, 'SMTP/IMAP email sent');
+      logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId, accepted: info.accepted, rejected: info.rejected, pending: info.pending }, 'SMTP/IMAP email sent');
     } catch (error) {
       logger.error({ error, to, messageId, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
     }

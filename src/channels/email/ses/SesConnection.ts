@@ -2,7 +2,7 @@ import type { Session, SessionManager } from '../../SessionManager';
 import type { CALOutputMessage } from '../../messages';
 import { SESClient, SendRawEmailCommand } from '@aws-sdk/client-ses';
 import { EmailConnectionBase, type EmailHeaders } from '../shared/EmailConnectionBase';
-import { generateEmailMessageId } from '../shared/MessageIdUtils';
+import { extractDomainFromEmail, generateEmailMessageId } from '../shared/MessageIdUtils';
 import { logger } from '../../../utils/logger';
 
 export class SesConnection extends EmailConnectionBase {
@@ -51,8 +51,9 @@ export class SesConnection extends EmailConnectionBase {
     if (!body) return;
 
     const headers: EmailHeaders = {};
-    if (this.conversationId) {
-      headers.messageId = generateEmailMessageId(this.conversationId);
+    const convId = this.conversationId ?? this.session?.conversationId;
+    if (convId) {
+      headers.messageId = generateEmailMessageId(convId, extractDomainFromEmail(this.fromAddress));
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);

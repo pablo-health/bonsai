@@ -289,6 +289,11 @@ export class SmtpImapChannelHost {
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
+    const updatedSession = this.sessionManager.getSession(sessionId);
+    if (updatedSession?.conversationId) {
+      connection.setConversationId(updatedSession.conversationId);
+    }
+
     await this.dispatchTextInput(sessionId, emailBody);
   }
 

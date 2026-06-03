@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import type { CALOutputMessage } from '../../messages';
 import type { Session, SessionManager } from '../../SessionManager';
 import type { IClientConnection } from '../../IClientConnection';
+import { extractDomainFromEmail } from './MessageIdUtils';
 import { logger } from '../../../utils/logger';
 
 export type ThreadingStrategy = 'messageId' | 'senderSubject';
@@ -50,8 +51,9 @@ export abstract class EmailConnectionBase implements IClientConnection {
 
   /** Generates a RFC-compliant Message-ID. */
   protected generateMessageId(): string {
+    const domain = extractDomainFromEmail(this.fromAddress) || 'bonsai.ai';
     const rand = randomBytes(16).toString('hex');
-    return `<${rand}@bonsai.ai>`;
+    return `<${rand}@${domain}>`;
   }
 
   /** Gets the recipient email address for this connection. Override in subclasses. */

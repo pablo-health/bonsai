@@ -1,38 +1,54 @@
 import { randomBytes } from 'crypto';
 
 /**
+ * Extracts the domain from an email address.
+ */
+export function extractDomainFromEmail(email?: string): string | undefined {
+  if (!email) return undefined;
+  const parts = email.split('@');
+  return parts.length === 2 ? parts[1] : undefined;
+}
+
+/**
  * Generates a unique Message-ID for an email.
  *
  * When a conversation ID is provided, the format is:
- *   <{uuid}.{YYYYMMDD}.{HHMMSS}@bonsai.ai>
+ *   <{uuid}.{YYYYMMDD}.{HHMMSS}@domain>
  * where {uuid} is the conversation ID without the "conv_" prefix.
  *
- * Without a conversation ID a random fallback is used.
+ * Falls back to a random ID if no conversation ID is provided.
+ * Uses the given domain, or `bonsai.ai` as a last resort.
  */
-export function generateEmailMessageId(conversationId?: string): string {
+export function generateEmailMessageId(conversationId?: string, domain?: string): string {
+  const fallbackDomain = domain || 'bonsai.ai';
+
   if (conversationId) {
-    const ts = new Date().toISOString().replace(/[-T:Z]/g, '').replace(/\.\d{3}/, '');
-    const id = conversationId.replace(/^conv_/, '');
-    return `<${id}.${ts.slice(0, 8)}.${ts.slice(8)}@bonsai.ai>`;
+    const id = conversationId.replace(/^conv_/, '').replace(/-/g, '');
+    return `<${id}@${fallbackDomain}>`;
   }
 
-  const rand = randomBytes(16).toString('hex');
-  return `<${rand}@bonsai.ai>`;
+  return `<${randomBytes(16).toString('hex')}@${fallbackDomain}>`;
 }
 
 /**
  * Extracts the conversation ID from a Message-ID or In-Reply-To header.
  *
- * Handles both legacy format (<conv_xxx@bonsai.ai>) and timestamped format
- * (<uuid.YYYYMMDD.hhmmss@bonsai.ai>), always returning the full "conv_xxx" ID.
+ * Handles both legacy format (<conv_xxx@domain>) and timestamped format
+ * (<uuid.YYYYMMDD.hhmmss@domain>) with any domain.
  */
 export function extractConversationIdFromMessageId(header?: string): string | undefined {
   if (!header) return undefined;
 
-  const match = header.match(/<([0-9a-f-]{36})(?:\.[^>]*)?@bonsai\.ai>/);
-  if (match) return `conv_${match[1]}`;
+  const match = header.match(/<([0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\.[^>]*)?@[^\>]+>/);
+  if (match) {
+    const uuid = match[1];
+    const formatted = uuid.length === 32
+      ? `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`
+      : uuid;
+    return `conv_${formatted}`;
+  }
 
-  const legacyMatch = header.match(/<conv_([0-9a-f-]+)@bonsai\.ai>/);
+  const legacyMatch = header.match(/<conv_([0-9a-f-]+)@[^\>]+>/);
   if (legacyMatch) return `conv_${legacyMatch[1]}`;
 
   return undefined;
