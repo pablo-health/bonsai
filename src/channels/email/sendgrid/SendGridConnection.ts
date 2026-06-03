@@ -9,6 +9,7 @@ export class SendGridConnection extends EmailConnectionBase {
   readonly connectionType = 'sendgrid' as const;
 
   private conversationId: string | undefined;
+  private inboundMessageId: string | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -23,6 +24,10 @@ export class SendGridConnection extends EmailConnectionBase {
 
   setConversationId(id: string): void {
     this.conversationId = id;
+  }
+
+  setInboundMessageId(id: string): void {
+    this.inboundMessageId = id;
   }
 
   attachSession(session: Session): void {
@@ -47,6 +52,11 @@ export class SendGridConnection extends EmailConnectionBase {
     const convId = this.conversationId ?? this.session?.conversationId;
     if (convId) {
       headers.messageId = generateEmailMessageId(convId, extractDomainFromEmail(this.fromAddress));
+    }
+
+    if (this.inboundMessageId) {
+      headers.inReplyTo = this.inboundMessageId;
+      headers.references = this.inboundMessageId;
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);

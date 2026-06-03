@@ -11,6 +11,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private transporter: nodemailer.Transporter;
   private readonly smtpAuthUser: string;
   private conversationId: string | undefined;
+  private inboundMessageId: string | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -51,6 +52,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.conversationId = id;
   }
 
+  setInboundMessageId(id: string): void {
+    this.inboundMessageId = id;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -73,6 +78,11 @@ export class SmtpImapConnection extends EmailConnectionBase {
     const convId = this.conversationId ?? this.session?.conversationId;
     if (convId) {
       headers.messageId = generateEmailMessageId(convId, extractDomainFromEmail(this.fromAddress));
+    }
+
+    if (this.inboundMessageId) {
+      headers.inReplyTo = this.inboundMessageId;
+      headers.references = this.inboundMessageId;
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
@@ -98,11 +108,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
       (mailOptions.headers as Record<string, string>)['References'] = headers.references;
     }
 
-    logger.info({ from, to, subject, messageId, sessionId: this.session?.id }, 'SMTP/IMAP: sending email');
-
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId, accepted: info.accepted, rejected: info.rejected, pending: info.pending }, 'SMTP/IMAP email sent');
+      logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId }, 'SMTP/IMAP email sent');
     } catch (error) {
       logger.error({ error, to, messageId, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
     }

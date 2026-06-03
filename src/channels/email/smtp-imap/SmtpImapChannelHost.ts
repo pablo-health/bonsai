@@ -24,7 +24,7 @@ import { smtpImapSendBodySchema, smtpImapSendResponseSchema } from '../../../htt
 import type { SmtpImapSendResponse } from '../../../http/contracts/smtp-imap-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
-import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
+import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -242,7 +242,7 @@ export class SmtpImapChannelHost {
     stageId: string | undefined,
     agentId: string | undefined,
   ): Promise<void> {
-    const replyConversationId = extractConversationIdFromMessageId(inReplyTo);
+    const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
@@ -278,21 +278,63 @@ export class SmtpImapChannelHost {
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
+    if (messageId) {
+      connection.setInboundMessageId(messageId);
+    }
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
 
-    const emailKey = `${projectId}:${sessionId}`;
+    let conversationId: string;
+
+    if (replyConversationId) {
+      conversationId = replyConversationId;
+      await this.sessionManager.attachConversationToSession(sessionId, conversationId);
+      const resumedSession = this.sessionManager.getSession(sessionId);
+      await resumedSession.runner?.resumeConversation();
+      logger.info({ sessionId, projectId, from: senderEmail, conversationId }, 'SMTP/IMAP: resumed existing conversation for inbound email');
+    } else {
+      try {
+        await this.userService.getUserById(projectId, senderEmail);
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
+          if (!project.autoCreateUsers) {
+            logger.warn({ projectId, from: senderEmail }, 'SMTP/IMAP: user not found and auto-create disabled');
+            await this.sessionManager.unregisterSession(sessionId);
+            return;
+          }
+          await this.userService.ensureUserExists(projectId, senderEmail);
+        } else {
+          throw err;
+        }
+      }
+
+      const resolvedStageId = stageId ?? (await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT)).startingStageId;
+      if (!resolvedStageId) {
+        logger.warn({ projectId }, 'SMTP/IMAP: no stageId available for new conversation');
+        await this.sessionManager.unregisterSession(sessionId);
+        return;
+      }
+
+      const conversation = await this.conversationService.createConversation({
+        projectId,
+        userId: senderEmail,
+        stageId: resolvedStageId,
+        sessionId,
+        status: 'initialized',
+        direction: 'incoming',
+        metadata: null,
+      }, SYSTEM_CONTEXT);
+      conversationId = conversation.id;
+
+      await this.sessionManager.attachConversationToSession(sessionId, conversationId);
+      await session.runner?.resumeConversation();
+      logger.info({ sessionId, projectId, from: senderEmail, conversationId }, 'SMTP/IMAP: new conversation created for inbound email');
+    }
+
+    connection.setConversationId(conversationId);
+    const emailKey = `${projectId}:${conversationId}`;
     this.emailSessionMap.set(emailKey, sessionId);
     this.scheduleTimeout(sessionId, emailKey);
-
-    logger.info({ sessionId, projectId, from: senderEmail }, 'SMTP/IMAP: new virtual session created for inbound email');
-
-    const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
-    await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
-
-    const updatedSession = this.sessionManager.getSession(sessionId);
-    if (updatedSession?.conversationId) {
-      connection.setConversationId(updatedSession.conversationId);
-    }
 
     await this.dispatchTextInput(sessionId, emailBody);
   }

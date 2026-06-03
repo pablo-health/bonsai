@@ -10,6 +10,7 @@ export class SesConnection extends EmailConnectionBase {
 
   private sesClient: SESClient;
   private conversationId: string | undefined;
+  private inboundMessageId: string | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -30,6 +31,10 @@ export class SesConnection extends EmailConnectionBase {
 
   setConversationId(id: string): void {
     this.conversationId = id;
+  }
+
+  setInboundMessageId(id: string): void {
+    this.inboundMessageId = id;
   }
 
   attachSession(session: Session): void {
@@ -54,6 +59,11 @@ export class SesConnection extends EmailConnectionBase {
     const convId = this.conversationId ?? this.session?.conversationId;
     if (convId) {
       headers.messageId = generateEmailMessageId(convId, extractDomainFromEmail(this.fromAddress));
+    }
+
+    if (this.inboundMessageId) {
+      headers.inReplyTo = this.inboundMessageId;
+      headers.references = this.inboundMessageId;
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
