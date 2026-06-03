@@ -11,6 +11,11 @@ import { logger } from '../utils/logger';
 
 type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
+function extractHeaderFromSource(source: string, headerName: string): string | undefined {
+  const match = source.match(new RegExp(`${headerName}:\\s*(.+)$`, 'im'));
+  return match ? match[1].trim() : undefined;
+}
+
 class ImapMailboxSession {
   public state: MailboxState = 'disconnected';
   public imap: ImapConnection | null = null;
@@ -233,9 +238,10 @@ class ImapMailboxSession {
       const senderEmail = parsed.from?.value?.[0]?.address ?? parsed.from?.text ?? 'unknown';
       const emailBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim() ?? '';
       const subject = parsed.subject ?? '';
-      const messageId = parsed.headers.get('message-id')?.[0] as string | undefined;
-      const inReplyTo = parsed.headers.get('in-reply-to')?.[0] as string | undefined;
-      const references = parsed.headers.get('references')?.[0] as string | undefined;
+
+      const messageId = extractHeaderFromSource(source, 'Message-ID') ?? (parsed.headers.get('message-id')?.[0] as string | undefined);
+      const inReplyTo = extractHeaderFromSource(source, 'In-Reply-To') ?? (parsed.headers.get('in-reply-to')?.[0] as string | undefined);
+      const references = extractHeaderFromSource(source, 'References') ?? (parsed.headers.get('references')?.[0] as string | undefined);
 
       logger.info({ providerId: this.providerId, uid, from: senderEmail, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
 

@@ -248,6 +248,10 @@ export class SmtpImapChannelHost {
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
       if (existingSessionId) {
+        const existingSession = this.sessionManager.getSession(existingSessionId);
+        if (existingSession?.clientConnection instanceof SmtpImapConnection && messageId) {
+          existingSession.clientConnection.setInboundMessageId(messageId);
+        }
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
         await this.dispatchTextInput(existingSessionId, emailBody);
