@@ -12,6 +12,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private readonly smtpAuthUser: string;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
+  private skipNextEmail = false;
 
   constructor(
     private readonly toAddress: string,
@@ -56,6 +57,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.inboundMessageId = id;
   }
 
+  setSkipNextEmail(skip: boolean): void {
+    this.skipNextEmail = skip;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -73,6 +78,11 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
     const body = msg.fullText?.trim();
     if (!body) return;
+
+    if (this.skipNextEmail) {
+      this.skipNextEmail = false;
+      return;
+    }
 
     const headers: EmailHeaders = {};
     const convId = this.conversationId ?? this.session?.conversationId;

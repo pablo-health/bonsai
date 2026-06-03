@@ -327,9 +327,11 @@ export class SmtpImapChannelHost {
       }, SYSTEM_CONTEXT);
       conversationId = conversation.id;
 
+      connection.setSkipNextEmail(true);
       await this.sessionManager.attachConversationToSession(sessionId, conversationId);
-      await session.runner?.resumeConversation();
-      logger.info({ sessionId, projectId, from: senderEmail, conversationId }, 'SMTP/IMAP: new conversation created for inbound email');
+      const newSession = this.sessionManager.getSession(sessionId);
+      await newSession.runner?.startConversation();
+      logger.info({ sessionId, projectId, from: senderEmail, conversationId }, 'SMTP/IMAP: new conversation started for inbound email (welcome email suppressed)');
     }
 
     connection.setConversationId(conversationId);
