@@ -24,6 +24,7 @@ import { sendGridSendBodySchema, sendGridSendResponseSchema } from '../../../htt
 import type { SendGridSendResponse } from '../../../http/contracts/sendgrid-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
+import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -33,13 +34,6 @@ const webhookQuerySchema = z.object({
   agentId: z.string().optional().describe('Optional agent ID override'),
   channelProviderId: z.string().min(1).describe('ID of the SendGrid channel provider record'),
 });
-
-/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
-function extractConversationId(inReplyTo?: string): string | undefined {
-  if (!inReplyTo) return undefined;
-  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
-  return match ? match[1] : undefined;
-}
 
 type SendGridInboundPayload = {
   from?: string;
@@ -149,7 +143,7 @@ export class SendGridChannelHost {
       return;
     }
 
-    const replyConversationId = extractConversationId(headers['in-reply-to']);
+    const replyConversationId = extractConversationIdFromMessageId(headers['in-reply-to']);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);

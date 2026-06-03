@@ -24,6 +24,7 @@ import { smtpImapSendBodySchema, smtpImapSendResponseSchema } from '../../../htt
 import type { SmtpImapSendResponse } from '../../../http/contracts/smtp-imap-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
+import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -33,13 +34,6 @@ const webhookQuerySchema = z.object({
   agentId: z.string().optional().describe('Optional agent ID override'),
   channelProviderId: z.string().min(1).describe('ID of the SMTP/IMAP channel provider record'),
 });
-
-/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai> or <conv_xxx.YYYYMMDD.hhmmss@bonsai.ai>). */
-function extractConversationId(inReplyTo?: string): string | undefined {
-  if (!inReplyTo) return undefined;
-  const match = inReplyTo.match(/<(conv_[0-9a-f-]+)(?:\.[^>]*)?@bonsai\.ai>/);
-  return match ? match[1] : undefined;
-}
 
 @singleton()
 export class SmtpImapChannelHost {
@@ -248,7 +242,7 @@ export class SmtpImapChannelHost {
     stageId: string | undefined,
     agentId: string | undefined,
   ): Promise<void> {
-    const replyConversationId = extractConversationId(inReplyTo);
+    const replyConversationId = extractConversationIdFromMessageId(inReplyTo);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);

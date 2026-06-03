@@ -24,6 +24,7 @@ import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contract
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
+import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { simpleParser } from 'mailparser';
 
@@ -36,12 +37,7 @@ const webhookQuerySchema = z.object({
   channelProviderId: z.string().min(1).describe('ID of the SES channel provider record'),
 });
 
-/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
-function extractConversationId(inReplyTo?: string): string | undefined {
-  if (!inReplyTo) return undefined;
-  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
-  return match ? match[1] : undefined;
-}
+
 
 type SnsNotification = {
   Type?: string;
@@ -196,7 +192,7 @@ export class SesChannelHost {
     const rawMime = await this.getRawMime(sesMessage, inboundMode, s3BucketName, accessKeyId, secretAccessKey, region, projectId);
     const emailBody = await this.extractEmailBody(rawMime, senderEmail);
 
-    const replyConversationId = extractConversationId(commonHeaders['in-reply-to']);
+    const replyConversationId = extractConversationIdFromMessageId(commonHeaders['in-reply-to']);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);

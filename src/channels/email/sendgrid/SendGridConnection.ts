@@ -2,6 +2,7 @@ import type { Session, SessionManager } from '../../SessionManager';
 import type { CALOutputMessage } from '../../messages';
 import { MailService } from '@sendgrid/mail';
 import { EmailConnectionBase, type EmailHeaders } from '../shared/EmailConnectionBase';
+import { generateEmailMessageId } from '../shared/MessageIdUtils';
 import { logger } from '../../../utils/logger';
 
 export class SendGridConnection extends EmailConnectionBase {
@@ -44,7 +45,7 @@ export class SendGridConnection extends EmailConnectionBase {
 
     const headers: EmailHeaders = {};
     if (this.conversationId) {
-      headers.messageId = `<${this.conversationId}@bonsai.ai>`;
+      headers.messageId = generateEmailMessageId(this.conversationId);
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);

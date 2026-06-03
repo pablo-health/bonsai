@@ -2,6 +2,7 @@ import type { Session, SessionManager } from '../../SessionManager';
 import type { CALOutputMessage } from '../../messages';
 import * as nodemailer from 'nodemailer';
 import { EmailConnectionBase, type EmailHeaders } from '../shared/EmailConnectionBase';
+import { generateEmailMessageId } from '../shared/MessageIdUtils';
 import { logger } from '../../../utils/logger';
 
 export class SmtpImapConnection extends EmailConnectionBase {
@@ -70,8 +71,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
     const headers: EmailHeaders = {};
     if (this.conversationId) {
-      const ts = new Date().toISOString().replace(/[-T:Z]/g, '').replace(/\.\d{3}/, '');
-      headers.messageId = `<${this.conversationId}.${ts.slice(0, 8)}.${ts.slice(8)}@bonsai.ai>`;
+      headers.messageId = generateEmailMessageId(this.conversationId);
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
