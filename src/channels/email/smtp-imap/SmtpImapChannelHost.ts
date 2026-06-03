@@ -249,8 +249,13 @@ export class SmtpImapChannelHost {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
       if (existingSessionId) {
         const existingSession = this.sessionManager.getSession(existingSessionId);
-        if (existingSession?.clientConnection instanceof SmtpImapConnection && messageId) {
-          existingSession.clientConnection.setInboundMessageId(messageId);
+        if (existingSession?.clientConnection instanceof SmtpImapConnection) {
+          if (messageId) {
+            existingSession.clientConnection.setInboundMessageId(messageId);
+          }
+          if (references) {
+            existingSession.clientConnection.setReferencesChain(references);
+          }
         }
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
@@ -285,6 +290,9 @@ export class SmtpImapChannelHost {
     connection.attachSession(session);
     if (messageId) {
       connection.setInboundMessageId(messageId);
+    }
+    if (references) {
+      connection.setReferencesChain(references);
     }
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
 

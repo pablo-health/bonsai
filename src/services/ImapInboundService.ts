@@ -12,7 +12,8 @@ import { logger } from '../utils/logger';
 type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
 function extractHeaderFromSource(source: string, headerName: string): string | undefined {
-  const match = source.match(new RegExp(`${headerName}:\\s*(.+)$`, 'im'));
+  const headerSection = source.split(/\r?\n\r?\n/)[0];
+  const match = headerSection.match(new RegExp(`${headerName}:\\s*(.+)$`, 'im'));
   return match ? match[1].trim() : undefined;
 }
 
@@ -239,9 +240,9 @@ class ImapMailboxSession {
       const emailBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim() ?? '';
       const subject = parsed.subject ?? '';
 
-      const messageId = extractHeaderFromSource(source, 'Message-ID') ?? (parsed.headers.get('message-id')?.[0] as string | undefined);
-      const inReplyTo = extractHeaderFromSource(source, 'In-Reply-To') ?? (parsed.headers.get('in-reply-to')?.[0] as string | undefined);
-      const references = extractHeaderFromSource(source, 'References') ?? (parsed.headers.get('references')?.[0] as string | undefined);
+      const messageId = ((parsed.headers.get('message-id')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'Message-ID')) || undefined;
+      const inReplyTo = ((parsed.headers.get('in-reply-to')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'In-Reply-To')) || undefined;
+      const references = ((parsed.headers.get('references')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'References')) || undefined;
 
       logger.info({ providerId: this.providerId, uid, from: senderEmail, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
 

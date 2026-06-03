@@ -12,6 +12,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private readonly smtpAuthUser: string;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
+  private referencesChain: string[] = [];
   private skipNextEmail = false;
 
   constructor(
@@ -53,9 +54,15 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.conversationId = id;
   }
 
-  setInboundMessageId(id: string): void {
-    this.inboundMessageId = id;
-  }
+ setInboundMessageId(id: string): void {
+      this.inboundMessageId = id || undefined;
+    }
+
+    setReferencesChain(references: string): void {
+      if (references) {
+        this.referencesChain = references.split(/\s+/).filter(Boolean);
+      }
+    }
 
   setSkipNextEmail(skip: boolean): void {
     this.skipNextEmail = skip;
@@ -92,7 +99,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
     if (this.inboundMessageId) {
       headers.inReplyTo = this.inboundMessageId;
-      headers.references = this.inboundMessageId;
+      const existingRefs = this.referencesChain.filter((r) => r !== this.inboundMessageId);
+      this.referencesChain = [...existingRefs, this.inboundMessageId];
+      headers.references = this.referencesChain.join(' ');
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
