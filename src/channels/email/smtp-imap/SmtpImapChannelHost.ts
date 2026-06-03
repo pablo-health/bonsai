@@ -238,7 +238,7 @@ export class SmtpImapChannelHost {
     subject: string,
     messageId: string | undefined,
     inReplyTo: string | undefined,
-    references: string | undefined,
+    references: string | string[] | undefined,
     stageId: string | undefined,
     agentId: string | undefined,
   ): Promise<void> {

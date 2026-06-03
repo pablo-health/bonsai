@@ -74,9 +74,10 @@ export function extractConversationIdFromMessageId(header?: string): string | un
  * Extracts a conversation ID from a References header (space-separated list of Message-IDs).
  * Returns the first match found.
  */
-export function extractConversationIdFromReferences(header?: string): string | undefined {
+export function extractConversationIdFromReferences(header?: string | string[]): string | undefined {
   if (!header) return undefined;
-  for (const part of header.split(/\s+/)) {
+  const parts = Array.isArray(header) ? header : header.split(/\s+/);
+  for (const part of parts) {
     const result = parseSingleMessageId(part);
     if (result) return result;
   }

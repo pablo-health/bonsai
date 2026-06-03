@@ -58,9 +58,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
       this.inboundMessageId = id || undefined;
     }
 
-    setReferencesChain(references: string): void {
+    setReferencesChain(references: string | string[]): void {
       if (references) {
-        this.referencesChain = references.split(/\s+/).filter(Boolean);
+        this.referencesChain = Array.isArray(references) ? references.filter(Boolean) : references.split(/\s+/).filter(Boolean);
       }
     }
 
