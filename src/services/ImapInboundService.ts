@@ -240,9 +240,9 @@ class ImapMailboxSession {
       const emailBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim() ?? '';
       const subject = parsed.subject ?? '';
 
-      const messageId = ((parsed.headers.get('message-id')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'Message-ID')) || undefined;
-      const inReplyTo = ((parsed.headers.get('in-reply-to')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'In-Reply-To')) || undefined;
-      const references = ((parsed.headers.get('references')?.[0] as string | undefined) ?? extractHeaderFromSource(source, 'References')) || undefined;
+      const messageId = parsed.messageId || extractHeaderFromSource(source, 'Message-ID') || undefined;
+      const inReplyTo = parsed.inReplyTo || extractHeaderFromSource(source, 'In-Reply-To') || undefined;
+      const references = parsed.references || extractHeaderFromSource(source, 'References') || undefined;
 
       logger.info({ providerId: this.providerId, uid, from: senderEmail, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
 
