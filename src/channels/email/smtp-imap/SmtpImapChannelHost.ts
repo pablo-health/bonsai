@@ -34,10 +34,10 @@ const webhookQuerySchema = z.object({
   channelProviderId: z.string().min(1).describe('ID of the SMTP/IMAP channel provider record'),
 });
 
-/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai>). */
+/** Extracts conversationId from In-Reply-To header (format: <conv_xxx@bonsai.ai> or <conv_xxx.YYYYMMDD.hhmmss@bonsai.ai>). */
 function extractConversationId(inReplyTo?: string): string | undefined {
   if (!inReplyTo) return undefined;
-  const match = inReplyTo.match(/<([^>]+)@bonsai\.ai>/);
+  const match = inReplyTo.match(/<(conv_[0-9a-f-]+)(?:\.[^>]*)?@bonsai\.ai>/);
   return match ? match[1] : undefined;
 }
 

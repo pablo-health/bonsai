@@ -70,7 +70,8 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
     const headers: EmailHeaders = {};
     if (this.conversationId) {
-      headers.messageId = `<${this.conversationId}@bonsai.ai>`;
+      const ts = new Date().toISOString().replace(/[-T:Z]/g, '').replace(/\.\d{3}/, '');
+      headers.messageId = `<${this.conversationId}.${ts.slice(0, 8)}.${ts.slice(8)}@bonsai.ai>`;
     }
 
     await this.sendEmail(this.toAddress, this.subject, body, headers);
