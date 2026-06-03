@@ -31,25 +31,41 @@ export function generateEmailMessageId(conversationId?: string, domain?: string)
 }
 
 /**
+ * Extracts a conversation ID from a single Message-ID token.
+ * Handles with/without angle brackets, with/without timestamp suffix.
+ */
+function parseSingleMessageId(token: string): string | undefined {
+  const trimmed = token.trim();
+  const stripped = trimmed.replace(/^<?|>?$/g, '').trim();
+
+  const match = stripped.match(/^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.[^@]*)?@.+/i);
+  if (match) {
+    const uuid = match[1].replace(/-/g, '');
+    const formatted = `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`;
+    return `conv_${formatted}`;
+  }
+
+  const legacyMatch = stripped.match(/^conv_([0-9a-f-]+)@.+/i);
+  if (legacyMatch) return `conv_${legacyMatch[1]}`;
+
+  return undefined;
+}
+
+/**
  * Extracts the conversation ID from a Message-ID or In-Reply-To header.
  *
  * Handles both legacy format (<conv_xxx@domain>) and compact UUID format
- * (<uuid32@domain>) with any domain.
+ * (<uuid32@domain>) with any domain. Tolerates missing angle brackets,
+ * extra whitespace, and multiple Message-IDs.
  */
 export function extractConversationIdFromMessageId(header?: string): string | undefined {
   if (!header) return undefined;
 
-  const match = header.match(/<([0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\.[^>]*)?@[^\>]+>/);
-  if (match) {
-    const uuid = match[1];
-    const formatted = uuid.length === 32
-      ? `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`
-      : uuid;
-    return `conv_${formatted}`;
+  const tokens = header.split(/\s+/);
+  for (const token of tokens) {
+    const result = parseSingleMessageId(token);
+    if (result) return result;
   }
-
-  const legacyMatch = header.match(/<conv_([0-9a-f-]+)@[^\>]+>/);
-  if (legacyMatch) return `conv_${legacyMatch[1]}`;
 
   return undefined;
 }
@@ -61,17 +77,8 @@ export function extractConversationIdFromMessageId(header?: string): string | un
 export function extractConversationIdFromReferences(header?: string): string | undefined {
   if (!header) return undefined;
   for (const part of header.split(/\s+/)) {
-    const match = part.match(/<([0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\.[^>]*)?@[^\>]+>/);
-    if (match) {
-      const uuid = match[1];
-      const formatted = uuid.length === 32
-        ? `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`
-        : uuid;
-      return `conv_${formatted}`;
-    }
-
-    const legacyMatch = part.match(/<conv_([0-9a-f-]+)@[^\>]+>/);
-    if (legacyMatch) return `conv_${legacyMatch[1]}`;
+    const result = parseSingleMessageId(part);
+    if (result) return result;
   }
   return undefined;
 }

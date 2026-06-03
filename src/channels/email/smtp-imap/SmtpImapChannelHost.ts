@@ -243,6 +243,7 @@ export class SmtpImapChannelHost {
     agentId: string | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
+    logger.info({ projectId, from: senderEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
