@@ -102,6 +102,9 @@ export const asrConfigSchema = z.object({
   settings: asrSettingsSchema.optional().describe('ASR-specific settings including model, language preferences, etc.'),
   unintelligiblePlaceholder: z.string().optional().describe('Placeholder text to use when speech is unintelligible or cannot be transcribed'),
   voiceActivityDetection: z.boolean().optional().describe('Whether to enable voice activity detection to automatically start/stop recording based on speech presence'),
+  silenceTimeoutMs: z.number().int().min(0).optional().describe('Milliseconds of user silence in voice conversations before triggering an AI response. Set to 0 or omit to disable.'),
+  maxSilences: z.number().int().min(0).optional().describe('Maximum number of consecutive silence responses before ending the conversation. Set to 0 or omit for unlimited.'),
+  silencePlaceholder: z.string().nullable().optional().describe('Text fed to the AI as user input when silence is detected. The stage prompt can reference this text to generate an appropriate response.'),
   serverVad: serverVadConfigSchema.optional().describe('Server-side VAD configuration. When set, the server autonomously detects speech boundaries — clients send continuous audio without calling start/end_user_voice_input.'),
 }).openapi('AsrConfig').optional().describe('ASR configuration settings');
 
