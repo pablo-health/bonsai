@@ -758,7 +758,14 @@ export class ConversationRunner {
             outputTurnId,
             fullText: `${ttsEndFillerPrefix}${baseText}`.trim(),
           };
-          await this.channel.sendMessage(endMessage);
+          try {
+            await this.channel.sendMessage(endMessage);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error({ conversationId, error: errorMessage }, `Failed to send AI response message: ${errorMessage}`);
+            await this.markAsFailed(`Failed to send AI response message: ${errorMessage}`);
+            return;
+          }
 
           await this.handlePostResponseAction();
         });
@@ -917,7 +924,14 @@ export class ConversationRunner {
             outputTurnId: this.turnData.outputTurnId,
             fullText: fullResponseText,
           };
-          await this.channel.sendMessage(endGenerationMessage);
+          try {
+            await this.channel.sendMessage(endGenerationMessage);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error({ conversationId, error: errorMessage }, `Failed to send AI response message: ${errorMessage}`);
+            await this.markAsFailed(`Failed to send AI response message: ${errorMessage}`);
+            return;
+          }
         } else {
           await ttsProvider.end(); // Signal TTS provider that generation is complete so it can finalize audio output and notify client
         }
