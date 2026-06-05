@@ -256,11 +256,10 @@ export class TwilioVoiceChannelHost {
     const twilioSignature = req.headers['x-twilio-signature'] as string | undefined;
     const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
     const isValid = validateRequest(authToken, twilioSignature ?? '', fullUrl, req.body as Record<string, string>);
-    //logger.info({ authToken, twilioSignature, fullUrl }, 'TwilioVoice webhook: validating request signature');
     if (!isValid) {
       logger.warn({ ip, projectId }, 'TwilioVoice webhook: invalid request signature');
-      //res.status(403).send();
-      //return;
+      res.status(403).send();
+      return;
     }
 
     const callDirection = (req.body as Record<string, string>)?.Direction ?? 'inbound';
