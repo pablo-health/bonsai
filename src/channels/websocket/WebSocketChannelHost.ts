@@ -27,7 +27,7 @@ export class WebSocketChannelHost {
     @inject(ChannelHandlerDispatcher) private readonly dispatcher: ChannelHandlerDispatcher,
     @inject(SessionManager) private readonly sessionManager: SessionManager,
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
-  ) {}
+  ) { }
 
   /**
    * Initializes the WebSocket server and attaches it to an HTTP server.
@@ -145,11 +145,16 @@ export class WebSocketChannelHost {
 
     const session = this.getSessionForWebSocket(ws);
 
-    // Translate WS wire format → CAL format: map requestId → correlationId, resolve conversationId from session
+    // Translate WS wire format → CAL format: map requestId → correlationId, resolve conversationId from session.
+    // Session conversationId is authoritative when a conversation is active. For resume_conversation the session
+    // has no conversation attached yet, so the client-provided conversationId must be used instead.
+    const conversationId = wsMessage.type === 'resume_conversation'
+      ? (wsMessage as Record<string, unknown>).conversationId
+      : session?.conversationId ?? '';
     const calMessage = {
       ...wsMessage,
       correlationId: wsMessage.requestId,
-      conversationId: session?.conversationId ?? '',
+      conversationId,
     } as CALInputMessage;
 
     const context: ClientMessageHandlerContext = {
