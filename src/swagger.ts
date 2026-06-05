@@ -117,8 +117,8 @@ import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChann
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
 import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
-import { SesChannelHost } from './channels/email/ses/SesChannelHost';
-import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
+// import { SesChannelHost } from './channels/email/ses/SesChannelHost';
+// import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
 import { SmtpImapChannelHost } from './channels/email/smtp-imap/SmtpImapChannelHost';
 import { providerHintSchema, providerHintResolutionTargetSchema, providerHintResolutionSchema, asrConfigExchangeV1Schema, storageConfigExchangeV1Schema, moderationConfigExchangeV1Schema, fillerSettingsExchangeV1Schema, projectExchangeV1Schema, agentExchangeV1Schema, stageExchangeV1Schema, classifierExchangeV1Schema, contextTransformerExchangeV1Schema, toolExchangeV1Schema, globalActionExchangeV1Schema, guardrailExchangeV1Schema, knowledgeCategoryExchangeV1Schema, knowledgeItemExchangeV1Schema, projectExchangeBundleV1Schema, projectExchangeImportResultSchema } from './http/contracts/projectExchange';
 
@@ -647,16 +647,16 @@ export function getOpenAPISpec(): any {
   }
 
   // Register SES outgoing send route
-  const sesPaths = SesChannelHost.getOpenAPIPaths();
-  for (const path of sesPaths) {
-    registry.registerPath(path);
-  }
+  // const sesPaths = SesChannelHost.getOpenAPIPaths();
+  // for (const path of sesPaths) {
+  //   registry.registerPath(path);
+  // }
 
   // Register SendGrid outgoing send route
-  const sendGridPaths = SendGridChannelHost.getOpenAPIPaths();
-  for (const path of sendGridPaths) {
-    registry.registerPath(path);
-  }
+  // const sendGridPaths = SendGridChannelHost.getOpenAPIPaths();
+  // for (const path of sendGridPaths) {
+  //   registry.registerPath(path);
+  // }
 
   // Register SMTP/IMAP outgoing send route
   const smtpImapPaths = SmtpImapChannelHost.getOpenAPIPaths();

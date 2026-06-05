@@ -30,8 +30,8 @@ import { telegramChannelProviderConfigSchema } from '../../services/providers/ch
 import { twilioMessagingChannelProviderConfigSchema } from '../../services/providers/channel/TwilioMessagingChannelProvider';
 import { twilioVoiceChannelProviderConfigSchema } from '../../services/providers/channel/TwilioVoiceChannelProvider';
 import { whatsAppChannelProviderConfigSchema } from '../../services/providers/channel/WhatsAppChannelProvider';
-import { sendGridChannelProviderConfigSchema } from '../../services/providers/channel/SendGridChannelProvider';
-import { sesChannelProviderConfigSchema } from '../../services/providers/channel/SesChannelProvider';
+// import { sendGridChannelProviderConfigSchema } from '../../services/providers/channel/SendGridChannelProvider';
+// import { sesChannelProviderConfigSchema } from '../../services/providers/channel/SesChannelProvider';
 import { smtpImapChannelProviderConfigSchema } from '../../services/providers/channel/SmtpImapChannelProvider';
 
 extendZodWithOpenApi(z);
@@ -93,8 +93,8 @@ export const channelProviderConfigSchema = z.union([
   twilioMessagingChannelProviderConfigSchema,
   twilioVoiceChannelProviderConfigSchema,
   whatsAppChannelProviderConfigSchema,
-  sendGridChannelProviderConfigSchema,
-  sesChannelProviderConfigSchema,
+  // sendGridChannelProviderConfigSchema,
+  // sesChannelProviderConfigSchema,
   smtpImapChannelProviderConfigSchema,
 ]).describe('Channel provider configuration');
 

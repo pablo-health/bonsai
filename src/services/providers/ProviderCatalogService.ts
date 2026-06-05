@@ -11862,18 +11862,18 @@ export class ProviderCatalogService {
         description: 'Telegram Bot API for text-based conversations via Telegram bots',
         features: ['Telegram messaging', 'Webhook support', 'Inbound/outbound text messages', 'Slash-command interface'],
       },
-      {
-        apiType: 'sendgrid',
-        displayName: 'SendGrid Email',
-        description: 'SendGrid Mail API for email-based conversations with threading support',
-        features: ['Email messaging', 'Inbound Parse webhook', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
-      },
-      {
-        apiType: 'ses',
-        displayName: 'AWS SES Email',
-        description: 'Amazon Simple Email Service for email-based conversations with SNS notification delivery',
-        features: ['Email messaging', 'SNS receipt webhook', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
-      },
+      // {
+      //   apiType: 'sendgrid',
+      //   displayName: 'SendGrid Email',
+      //   description: 'SendGrid Mail API for email-based conversations with threading support',
+      //   features: ['Email messaging', 'Inbound Parse webhook', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
+      // },
+      // {
+      //   apiType: 'ses',
+      //   displayName: 'AWS SES Email',
+      //   description: 'Amazon Simple Email Service for email-based conversations with SNS notification delivery',
+      //   features: ['Email messaging', 'SNS receipt webhook', 'Inbound/outbound emails', 'Thread continuity via Message-ID'],
+      // },
       {
         apiType: 'smtp_imap',
         displayName: 'SMTP/IMAP Email',
