@@ -79,7 +79,7 @@ export const fillerSettingsExchangeV1Schema = z.object({
   llmHint: providerHintSchema.describe('Provider hint identifying the LLM provider used to generate filler sentences'),
   llmSettings: llmSettingsSchema.describe('LLM provider-specific settings for filler generation'),
   prompt: z.string().min(1).describe('Prompt instructing the LLM to produce a short neutral filler sentence'),
-  historyMessageCount: z.number().int().min(0).default(0).describe('Number of recent conversation messages to include in the filler LLM call context (0 = no history)'),
+  historyMessageCount: z.number().int().min(-1).default(0).describe('Number of recent conversation messages to include in the filler LLM call context (0 = no history, -1 = all history, N > 0 = last N messages)'),
 }).openapi('FillerSettingsExchangeV1').describe('Filler response settings with provider hint instead of provider UUID');
 
 /** Filler settings for the exchange format */

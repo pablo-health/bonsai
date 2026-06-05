@@ -2769,9 +2769,10 @@ export class ConversationRunner {
     if (recentHistory.at(-1)?.role === 'user') {
       recentHistory.pop();
     }
+    const historyMessages = historyMessageCount === 0 ? [] : historyMessageCount === -1 ? recentHistory : recentHistory.slice(-historyMessageCount);
     const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
       { role: 'system' as const, content: renderedPrompt },
-      ...recentHistory.slice(-historyMessageCount).map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
+      ...historyMessages.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
       { role: 'user' as const, content: userInput },
     ];
     const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
@@ -2809,9 +2810,10 @@ export class ConversationRunner {
       if (recentHistory.at(-1)?.role === 'user') {
         recentHistory.pop();
       }
+      const historyMessages = historyMessageCount === 0 ? [] : historyMessageCount === -1 ? recentHistory : recentHistory.slice(-historyMessageCount);
       const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system' as const, content: renderedPrompt },
-        ...recentHistory.slice(-historyMessageCount).map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
+        ...historyMessages.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
         { role: 'user' as const, content: userInput },
       ];
       const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
