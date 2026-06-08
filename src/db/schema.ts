@@ -85,11 +85,14 @@ export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   description: text('description'),
-  asrConfig: jsonb('asr_config').$type<{
+asrConfig: jsonb('asr_config').$type<{
     asrProviderId?: string;
     settings?: unknown;
     unintelligiblePlaceholder?: string;
     voiceActivityDetection?: boolean;
+    silenceTimeoutMs?: number;
+    maxSilences?: number;
+    silencePlaceholder?: string;
     serverVad?: {
       algorithm?: 'legacy' | 'silero';
       mode?: number;

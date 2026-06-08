@@ -448,6 +448,7 @@ export class TwilioVoiceChannelHost {
               if (connection?.isClosing) {
                 connection.handleMarkEcho(markName);
               } else {
+                session?.runner?.notifyAudioPlaybackEnded();
                 const cb = pendingMarkCallbacks.get(markName);
                 if (cb) {
                   pendingMarkCallbacks.delete(markName);

@@ -42,6 +42,9 @@ export const asrConfigExchangeV1Schema = z.object({
   settings: asrSettingsSchema.optional().describe('ASR-specific settings including model, language preferences, etc.'),
   unintelligiblePlaceholder: z.string().optional().describe('Placeholder text to use when speech is unintelligible or cannot be transcribed'),
   voiceActivityDetection: z.boolean().optional().describe('Whether to enable voice activity detection'),
+  silenceTimeoutMs: z.number().int().min(0).optional().describe('Timeout in milliseconds before silence triggers an AI response'),
+  maxSilences: z.number().int().min(0).optional().describe('Maximum consecutive silence-triggered responses before ending conversation'),
+  silencePlaceholder: z.string().optional().describe('Text sent as user input when silence is detected'),
   serverVad: serverVadConfigSchema.optional().describe('Server-side VAD configuration'),
 }).openapi('AsrConfigExchangeV1').optional().describe('ASR configuration with provider hint instead of provider UUID');
 

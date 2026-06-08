@@ -155,6 +155,15 @@ export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.exten
 });
 
 /**
+ * Signals that the client has finished playing back the AI's audio output.
+ * Used to trigger the silence timer after the user has fully heard the response.
+ */
+export const calAudioPlaybackEndedRequestSchema = calBaseInputMessageSchema.extend({
+  type: z.literal('audio_playback_ended'),
+  outputTurnId: z.string().optional().describe('Identifier of the output turn whose playback has completed'),
+});
+
+/**
  * Result of an abort_ai_generation command.
  */
 export const calAbortAiGenerationResponseSchema = calBaseOutputMessageSchema.extend({
@@ -180,6 +189,7 @@ export const calInputMessageSchema = z.discriminatedUnion('type', [
   calRunActionRequestSchema,
   calCallToolRequestSchema,
   calAbortAiGenerationRequestSchema,
+  calAudioPlaybackEndedRequestSchema,
 ]);
 
 // Output result message schemas
@@ -493,6 +503,7 @@ export type CALGetAllVarsRequest = z.infer<typeof calGetAllVarsRequestSchema>;
 export type CALRunActionRequest = z.infer<typeof calRunActionRequestSchema>;
 export type CALCallToolRequest = z.infer<typeof calCallToolRequestSchema>;
 export type CALAbortAiGenerationRequest = z.infer<typeof calAbortAiGenerationRequestSchema>;
+export type CALAudioPlaybackEndedRequest = z.infer<typeof calAudioPlaybackEndedRequestSchema>;
 export type CALInputMessage = z.infer<typeof calInputMessageSchema>;
 
 export type CALStartConversationResponse = z.infer<typeof calStartConversationResponseSchema>;

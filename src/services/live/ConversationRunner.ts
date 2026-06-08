@@ -168,6 +168,8 @@ export class ConversationRunner {
   private channel: IClientConnection;
   /** True when a filler sentence has already opened the response turn (outputTurnId assigned, start_ai_generation_output sent, TTS started) */
   private responseOutputTurnStarted: boolean = false;
+  /** True when TTS was actually used to speak audio during the current turn. */
+  private ttsUsedInTurn: boolean = false;
   /** Filler sentence generated for the current turn, passed as assistant prefix to the LLM so it continues naturally */
   private lastFillerSentence: string | null = null;
   /** Rendered filler prompt used to generate the filler sentence for the current turn; stored for debugging */
@@ -213,6 +215,13 @@ export class ConversationRunner {
   private readonly BARGE_IN_INCOMPLETE_DEBOUNCE_MS = 3000;
   /** Fast heuristic detector for speech completion during barge-in. */
   private speechCompletionDetector = new SpeechCompletionDetector();
+
+  /** Timer that fires when the user is silent in awaiting_user_input state. */
+  private silenceTimer: NodeJS.Timeout | null = null;
+  /** Counter of consecutive silence-triggered responses. Reset on real user input. */
+  private silenceCount: number = 0;
+  /** True when the runner is waiting for the client to signal that AI audio playback has completed. */
+  private waitingForPlaybackEnd: boolean = false;
 
   /** Handles audio recording for the conversation. */
   private recorder: ConversationRecorder | null = null;
@@ -841,7 +850,7 @@ export class ConversationRunner {
         }
         this.turnData.accumulatedText = `${this.turnData.accumulatedText || ''}${chunk.content}`;
         if (ttsProvider) {
-          // Pass chunk text to TTS provider for speech synthesis
+          this.ttsUsedInTurn = true;
           await ttsProvider.sendText(chunk.content);
         }
 
@@ -2323,6 +2332,7 @@ export class ConversationRunner {
           };
           await this.channel.sendMessage(startMsg);
           if (tts) {
+            this.ttsUsedInTurn = true;
             await tts.sendText(chunk.content);
           }
           const chunkMsg: CALAiTranscribedChunkMessage = {
@@ -2338,6 +2348,7 @@ export class ConversationRunner {
           this.responseOutputTurnStarted = true;
         } else {
           if (tts) {
+            this.ttsUsedInTurn = true;
             await tts.sendText(chunk.content);
           }
           const chunkMsg: CALAiTranscribedChunkMessage = {
@@ -2685,8 +2696,12 @@ export class ConversationRunner {
       // Guard against overwriting a terminal state (e.g. when onGenerationEnded fires
       // after a synchronous TTS provider already completed inline).
       if (this.conversation.status !== 'finished' && this.conversation.status !== 'failed') {
+        if (this.ttsUsedInTurn) {
+          this.waitingForPlaybackEnd = true;
+        }
         await this.changeState('awaiting_user_input');
       }
+      this.ttsUsedInTurn = false;
       return;
     }
 
@@ -2868,6 +2883,7 @@ export class ConversationRunner {
     const eventText = `${fillerPrefix}${text}`.trim();
 
     if (ttsProvider) {
+      this.ttsUsedInTurn = true;
       await ttsProvider.sendText(text);
     }
 
@@ -2928,6 +2944,54 @@ export class ConversationRunner {
     }
   }
 
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  public notifyAudioPlaybackEnded(): void {
+    if (!this.waitingForPlaybackEnd) return;
+    this.waitingForPlaybackEnd = false;
+    const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
+    if (timeoutMs && timeoutMs > 0) {
+      this.silenceTimer = setTimeout(async () => {
+        await this.handleUserSilence();
+      }, timeoutMs);
+    }
+  }
+
+  private async handleUserSilence(): Promise<void> {
+    if (this.conversation.status !== 'awaiting_user_input') {
+      return;
+    }
+
+    this.silenceCount++;
+    const maxSilences = this.stageData.project.asrConfig?.maxSilences;
+
+    if (maxSilences && maxSilences > 0 && this.silenceCount >= maxSilences) {
+      logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'Max silences reached, ending conversation');
+      try {
+        const onConversationEndAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_END);
+        if (onConversationEndAction) {
+          const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+          await this.actionsExecutor.executeActions([onConversationEndAction], endContext, this.stageData.id, 'conversation_end', this.saveAndSendEvent.bind(this));
+        }
+        const eventData: ConversationEndEventData = { stageId: this.stageData.id, reason: 'Conversation ended due to prolonged user silence' };
+        await this.saveAndSendEvent('conversation_end', eventData);
+        await this.changeState('finished');
+      } catch (error) {
+        logger.error({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to end conversation after max silences');
+      }
+      return;
+    }
+
+    logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'User silence detected, triggering response');
+    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
+    await this.processUserInput(placeholder, 'voice', Date.now());
+  }
+
   private async changeState(newState: ConversationState) {
     this.conversation.status = newState;
     await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState);
@@ -2939,6 +3003,16 @@ export class ConversationRunner {
         await this.session.clientConnection?.close();
       } catch (error) {
         logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on terminal state');
+      }
+    }
+
+    if (newState === 'awaiting_user_input') {
+      this.clearSilenceTimer();
+    } else {
+      this.clearSilenceTimer();
+      // Reset silence count only when user provides real voice input (not silence-triggered placeholder)
+      if (newState === 'receiving_user_voice') {
+        this.silenceCount = 0;
       }
     }
 
