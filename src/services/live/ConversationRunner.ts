@@ -1116,6 +1116,21 @@ export class ConversationRunner {
       throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
     }
 
+    // In VAD mode, stop the pre-warmed ASR session and clear it so the state machine is clean
+    // before processing text input. An active ASR session would still be listening and could
+    // fire recognition callbacks that interfere with the text turn.
+    if (this.isVadMode) {
+      this.asrPreWarmPromise = null;
+      if (this.stageData.asrProvider) {
+        try {
+          await this.stageData.asrProvider.stop();
+          logger.info({ conversationId: this.conversation.id }, 'Stopped pre-warmed ASR session for text input');
+        } catch (error) {
+          logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop pre-warmed ASR for text input (non-fatal)');
+        }
+      }
+    }
+
     this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
     await this.processUserInput(userInput, 'text');
     return this.turnData.inputTurnId;
