@@ -609,6 +609,7 @@ export class ConversationRunner {
           const asrEndMs = Date.now();
 
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
+     
           // session timed out during silence), discard the event and clear the pre-warm promise
           // so the next speech_start will do a fresh start().
           if (this.conversation.status !== 'receiving_user_voice') {
@@ -3000,8 +3001,8 @@ export class ConversationRunner {
     }
 
     logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'User silence detected, triggering response');
-    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
-    await this.processUserInput(placeholder, 'voice', Date.now());
+    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '[silence]';
+    await this.receiveUserTextInput(placeholder);
   }
 
   private async changeState(newState: ConversationState) {
