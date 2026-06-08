@@ -3007,14 +3007,7 @@ export class ConversationRunner {
     }
 
     if (newState === 'awaiting_user_input') {
-      // Start silence timer for voice conversations
       this.clearSilenceTimer();
-const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
-      if (timeoutMs && timeoutMs > 0 && !this.waitingForPlaybackEnd) {
-        this.silenceTimer = setTimeout(async () => {
-          await this.handleUserSilence();
-        }, timeoutMs);
-      }
     } else {
       this.clearSilenceTimer();
       // Reset silence count only when user provides real voice input (not silence-triggered placeholder)
