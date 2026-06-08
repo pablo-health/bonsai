@@ -2979,20 +2979,6 @@ export class ConversationRunner {
       return;
     }
 
-    // In VAD mode, check if audio has recently been pushed to VAD. If so, the user may be
-    // speaking and VAD hasn't committed to speech_start yet. Reschedule to avoid swallowing
-    // the user's actual speech.
-    if (this.isVadMode && this.vadProcessor?.hasRecentAudio(500)) {
-      logger.debug({ conversationId: this.conversation.id }, 'VAD has recent audio, rescheduling silence timer');
-      const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
-      if (timeoutMs && timeoutMs > 0) {
-        this.silenceTimer = setTimeout(async () => {
-          await this.handleUserSilence();
-        }, timeoutMs);
-      }
-      return;
-    }
-
     this.silenceCount++;
     const maxSilences = this.stageData.project.asrConfig?.maxSilences;
 
