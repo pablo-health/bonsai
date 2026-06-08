@@ -2237,6 +2237,11 @@ export class ConversationRunner {
     }
 
     this.responseGeneratedInTurn = false;
+    // Reset silence count on any real user input (not a silence placeholder).
+    const silencePlaceholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
+    if (userInput !== silencePlaceholder) {
+      this.silenceCount = 0;
+    }
     // Capture asrStartMs and asrEndMs before resetting turnData so we can compute asrDurationMs and persist raw timestamps
     const savedAsrStartMs = this.turnData.asrStartMs;
     const savedAsrEndMs = asrEndMs ?? null;
@@ -2954,6 +2959,7 @@ export class ConversationRunner {
   public notifyAudioPlaybackEnded(): void {
     if (!this.waitingForPlaybackEnd) return;
     this.waitingForPlaybackEnd = false;
+    if (!this.isVadMode) return;
     const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
     if (timeoutMs && timeoutMs > 0) {
       this.silenceTimer = setTimeout(async () => {
@@ -2964,6 +2970,20 @@ export class ConversationRunner {
 
   private async handleUserSilence(): Promise<void> {
     if (this.conversation.status !== 'awaiting_user_input') {
+      return;
+    }
+
+    // In VAD mode, check if audio has recently been pushed to VAD. If so, the user may be
+    // speaking and VAD hasn't committed to speech_start yet. Reschedule to avoid swallowing
+    // the user's actual speech.
+    if (this.isVadMode && this.vadProcessor?.hasRecentAudio(500)) {
+      logger.debug({ conversationId: this.conversation.id }, 'VAD has recent audio, rescheduling silence timer');
+      const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
+      if (timeoutMs && timeoutMs > 0) {
+        this.silenceTimer = setTimeout(async () => {
+          await this.handleUserSilence();
+        }, timeoutMs);
+      }
       return;
     }
 

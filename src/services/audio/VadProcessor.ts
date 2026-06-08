@@ -73,6 +73,7 @@ export class VadProcessor extends EventEmitter {
   private readonly sampleRate: number;
   private readonly config: ServerVadConfig;
   private gracePeriodEnd: number = 0;
+  private lastAudioPushTime: number = 0;
 
   /**
    * @param sampleRate Sample rate of the incoming 16-bit PCM audio
@@ -166,6 +167,7 @@ export class VadProcessor extends EventEmitter {
    */
   push(chunk: Buffer): void {
     if (!this.vad) return;
+    this.lastAudioPushTime = Date.now();
     this.vad.processAudio(pcm16ToFloat32(chunk)).catch(() => {});
   }
 
@@ -182,6 +184,16 @@ export class VadProcessor extends EventEmitter {
    */
   reset(): void {
     if (this.vad) this.vad.reset();
+    this.lastAudioPushTime = 0;
+  }
+
+  /**
+   * Returns true if audio was pushed within the given threshold, indicating the user may
+   * still be speaking and VAD hasn't committed to speech_start yet.
+   * @param thresholdMs Window in milliseconds
+   */
+  hasRecentAudio(thresholdMs: number): boolean {
+    return this.lastAudioPushTime > 0 && Date.now() - this.lastAudioPushTime < thresholdMs;
   }
 
   /**
