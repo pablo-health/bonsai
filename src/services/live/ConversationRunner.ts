@@ -609,6 +609,7 @@ export class ConversationRunner {
           const asrEndMs = Date.now();
 
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
+     
           // session timed out during silence), discard the event and clear the pre-warm promise
           // so the next speech_start will do a fresh start().
           if (this.conversation.status !== 'receiving_user_voice') {
@@ -1113,6 +1114,21 @@ export class ConversationRunner {
   async receiveUserTextInput(userInput: string): Promise<string> {
     if (this.conversation.status !== 'awaiting_user_input') {
       throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
+    }
+
+    // In VAD mode, stop the pre-warmed ASR session and clear it so the state machine is clean
+    // before processing text input. An active ASR session would still be listening and could
+    // fire recognition callbacks that interfere with the text turn.
+    if (this.isVadMode) {
+      this.asrPreWarmPromise = null;
+      if (this.stageData.asrProvider) {
+        try {
+          await this.stageData.asrProvider.stop();
+          logger.info({ conversationId: this.conversation.id }, 'Stopped pre-warmed ASR session for text input');
+        } catch (error) {
+          logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop pre-warmed ASR for text input (non-fatal)');
+        }
+      }
     }
 
     this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
@@ -2237,6 +2253,11 @@ export class ConversationRunner {
     }
 
     this.responseGeneratedInTurn = false;
+    // Reset silence count on any real user input (not a silence placeholder).
+    const silencePlaceholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
+    if (userInput !== silencePlaceholder) {
+      this.silenceCount = 0;
+    }
     // Capture asrStartMs and asrEndMs before resetting turnData so we can compute asrDurationMs and persist raw timestamps
     const savedAsrStartMs = this.turnData.asrStartMs;
     const savedAsrEndMs = asrEndMs ?? null;
@@ -2954,6 +2975,7 @@ export class ConversationRunner {
   public notifyAudioPlaybackEnded(): void {
     if (!this.waitingForPlaybackEnd) return;
     this.waitingForPlaybackEnd = false;
+    if (!this.isVadMode) return;
     const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
     if (timeoutMs && timeoutMs > 0) {
       this.silenceTimer = setTimeout(async () => {
@@ -2964,6 +2986,12 @@ export class ConversationRunner {
 
   private async handleUserSilence(): Promise<void> {
     if (this.conversation.status !== 'awaiting_user_input') {
+      return;
+    }
+
+    // Guard against session detachment: if the runner was detached, don't proceed.
+    if (this.session.runner !== this) {
+      logger.debug({ conversationId: this.conversation.id }, 'Silence timer fired but runner was detached, ignoring');
       return;
     }
 
@@ -2988,8 +3016,8 @@ export class ConversationRunner {
     }
 
     logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'User silence detected, triggering response');
-    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
-    await this.processUserInput(placeholder, 'voice', Date.now());
+    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '[silence]';
+    await this.receiveUserTextInput(placeholder);
   }
 
   private async changeState(newState: ConversationState) {
