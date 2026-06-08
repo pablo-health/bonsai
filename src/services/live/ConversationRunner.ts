@@ -2973,6 +2973,12 @@ export class ConversationRunner {
       return;
     }
 
+    // Guard against session detachment: if the runner was detached, don't proceed.
+    if (this.session.runner !== this) {
+      logger.debug({ conversationId: this.conversation.id }, 'Silence timer fired but runner was detached, ignoring');
+      return;
+    }
+
     // In VAD mode, check if audio has recently been pushed to VAD. If so, the user may be
     // speaking and VAD hasn't committed to speech_start yet. Reschedule to avoid swallowing
     // the user's actual speech.
