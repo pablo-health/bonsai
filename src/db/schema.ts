@@ -108,6 +108,10 @@ asrConfig: jsonb('asr_config').$type<{
       preSpeechPadFrames?: number;
       minSpeechFrames?: number;
       submitUserSpeechOnPause?: boolean;
+      smartTurn?: {
+        enabled?: boolean;
+        threshold?: number;
+      };
     };
   }>(),
   acceptVoice: boolean('accept_voice').notNull().default(true),
