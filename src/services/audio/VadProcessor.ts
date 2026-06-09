@@ -65,6 +65,7 @@ function float32ToPcm16(float32: Float32Array): Buffer {
  *
  * Emits:
  *   `'speech_start'` — emitted when VAD first detects the beginning of speech
+ *   `'utterance_audio'` (audio: Float32Array) — emitted with the complete utterance as Float32Array [-1, 1] when speech ends
  *   `'data'` (audio: Buffer) — emitted with the complete utterance as a 16-bit PCM Buffer when speech ends
  *   `'end_of_utterance'` — emitted immediately after `'data'` when speech has finished
  */
@@ -122,6 +123,7 @@ export class VadProcessor extends EventEmitter {
         this.emit('speech_start');
       },
       onSpeechEnd: (audio: Float32Array) => {
+        this.emit('utterance_audio', audio);
         this.emit('data', float32ToPcm16(audio));
         this.emit('end_of_utterance');
       },
@@ -152,6 +154,7 @@ export class VadProcessor extends EventEmitter {
         this.emit('speech_start');
       },
       onSpeechEnd: (audio: Float32Array) => {
+        this.emit('utterance_audio', audio);
         this.emit('data', float32ToPcm16(audio));
         this.emit('end_of_utterance');
       },

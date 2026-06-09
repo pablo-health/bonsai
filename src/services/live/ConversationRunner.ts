@@ -45,6 +45,7 @@ import type { IAudioConverter } from '../audio/IAudioConverter';
 import type { AudioFormat } from '../../types/audio';
 import { AudioConverterFactory } from '../audio/AudioConverterFactory';
 import { VadProcessor } from '../audio/VadProcessor';
+import smartTurnDetector from '../audio/SmartTurnDetector';
 import type { ServerVadConfig } from '../../http/contracts/vad';
 import { SampleCopyDistributor } from "./SampleCopyDistributor";
 import { SpeechCompletionDetector } from "./SpeechCompletionDetector";
@@ -196,12 +197,18 @@ export class ConversationRunner {
   private outboundPendingChunk: PendingOutboundChunk | null = null;
   /** Server-side VAD processor; non-null when the project is configured with serverVad and the ASR format is PCM. */
   private vadProcessor: VadProcessor | null = null;
-  /**
-    * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
-    * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
-    * is in progress or after it has been consumed by handleVadSpeechStart.
-    */
+ /**
+     * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
+     * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
+     * is in progress or after it has been consumed by handleVadSpeechStart.
+     */
   private asrPreWarmPromise: Promise<void> | null = null;
+  /** Buffered utterance audio for Smart Turn endpoint detection. Set on 'utterance_audio' VAD event. */
+  private smartTurnAudioBuffer: Float32Array | null = null;
+  /** Timer that stops ASR if Smart Turn indicates continuation but no new speech arrives. */
+  private smartTurnContinueTimer: NodeJS.Timeout | null = null;
+  /** Duration before Smart Turn continuation times out and ASR is stopped. */
+  private readonly SMART_TURN_CONTINUE_TIMEOUT_MS = 3000;
 
   /** Partial ASR transcript accumulated during barge-in (silent barge-in captures partial text). Null when not in barge-in mode. */
   private bargeInPartialText: string | null = null;
@@ -1305,6 +1312,8 @@ export class ConversationRunner {
     this.outboundConverter = null;
     this.vadProcessor?.destroy();
     this.vadProcessor = null;
+    this.clearSmartTurnContinueTimer();
+    this.smartTurnAudioBuffer = null;
 
     if (this.stageData) {
       await cleanupProvider(this.stageData.asrProvider, 'ASR provider');
@@ -1889,6 +1898,9 @@ export class ConversationRunner {
     this.vadProcessor.on('speech_start', () => enqueueVadEvent(() => this.handleVadSpeechStart()));
     // 'data' (batch utterance audio) is intentionally not wired: audio is streamed live to ASR
     // via the inbound converter / receiveUserVoiceData path while state === 'receiving_user_voice'.
+    this.vadProcessor.on('utterance_audio', (audio: Float32Array) => {
+      this.smartTurnAudioBuffer = audio;
+    });
     this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent(() => this.handleVadEndOfUtterance()));
 
     logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
@@ -1900,6 +1912,9 @@ export class ConversationRunner {
      * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
      */
   private async handleVadSpeechStart(): Promise<void> {
+    // New speech detected — cancel any pending Smart Turn continuation timer.
+    this.clearSmartTurnContinueTimer();
+
     // Barge-in interrupt: user speaks while AI is still generating a response.
     if (this.conversation.status === 'generating_response') {
       await this.abortCurrentResponse();
@@ -1993,14 +2008,24 @@ export class ConversationRunner {
     }
   }
 
-  /**
-     * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
-     * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
-    * processUserInput onward. Only acts when in receiving_user_voice state.
-     */
+ /**
+      * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
+      * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
+     * processUserInput onward. Only acts when in receiving_user_voice state.
+     * When Smart Turn is enabled, runs endpoint detection before stopping ASR.
+      */
   private async handleVadEndOfUtterance(): Promise<void> {
     if (this.conversation.status === 'receiving_user_voice') {
       if (!this.stageData.asrProvider) return;
+
+      const smartTurnConfig = this.stageData.project.asrConfig?.serverVad?.smartTurn;
+      if (smartTurnConfig?.enabled && this.smartTurnAudioBuffer) {
+        const shouldStop = await this.handleSmartTurnDetection(smartTurnConfig.threshold ?? 0.5);
+        if (!shouldStop) {
+          // TODO: run timer for silence continuation and stop ASR if timer elapses without new speech
+          return;
+        }
+      }
 
       try {
         await this.stageData.asrProvider.stop();
@@ -2025,6 +2050,70 @@ export class ConversationRunner {
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop pre-warmed ASR during barge-in end-of-utterance (non-fatal)`);
       }
+    }
+  }
+
+  /**
+   * Runs Smart Turn endpoint detection on the buffered utterance audio.
+   * @param threshold Probability threshold for endpoint classification
+   * @returns true if ASR should be stopped (endpoint confirmed or inference failed), false if continuation detected
+   */
+  private async handleSmartTurnDetection(threshold: number): Promise<boolean> {
+    const audio = this.smartTurnAudioBuffer;
+    this.smartTurnAudioBuffer = null;
+
+    if (!audio || audio.length === 0) {
+      return true;
+    }
+
+    try {
+      const result = await smartTurnDetector.predict(audio);
+      const conversationId = this.stageData.conversation.id;
+
+      if (result.endpointProbability > threshold) {
+        logger.info(
+          { conversationId, endpointProbability: result.endpointProbability, threshold },
+          'Smart Turn: endpoint confirmed'
+        );
+        return true;
+      }
+
+      logger.info(
+        { conversationId, endpointProbability: result.endpointProbability, threshold },
+        'Smart Turn: continuation detected, keeping ASR active'
+      );
+
+      this.clearSmartTurnContinueTimer();
+      this.smartTurnContinueTimer = setTimeout(async () => {
+        this.smartTurnContinueTimer = null;
+        if (this.conversation.status === 'receiving_user_voice' && this.stageData.asrProvider) {
+          try {
+            await this.stageData.asrProvider.stop();
+            logger.info({ conversationId }, 'Smart Turn: continuation timeout, stopped ASR');
+          } catch (error) {
+            logger.warn(
+              { conversationId, error: error instanceof Error ? error.message : String(error) },
+              'Smart Turn: failed to stop ASR on timeout (non-fatal)'
+            );
+          }
+        }
+      }, this.SMART_TURN_CONTINUE_TIMEOUT_MS);
+
+      return false;
+    } catch (error) {
+      logger.warn(
+        { conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) },
+        'Smart Turn inference failed, falling back to stopping ASR'
+      );
+      return true;
+    }
+  }
+
+  /** Clears the Smart Turn continuation timer if active. */
+  private clearSmartTurnContinueTimer(): void {
+    if (this.smartTurnContinueTimer) {
+      clearTimeout(this.smartTurnContinueTimer);
+      this.smartTurnContinueTimer = null;
     }
   }
 

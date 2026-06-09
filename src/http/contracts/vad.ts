@@ -4,6 +4,23 @@ import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 extendZodWithOpenApi(z);
 
 /**
+ * Smart Turn configuration for post-VAD endpoint detection. Uses an ONNX model
+ * to determine whether the speaker has actually finished their turn or is pausing
+ * mid-sentence. Runs after VAD detects silence to reduce false turn endings.
+ */
+export const smartTurnConfigSchema = z.object({
+  enabled: z.boolean().default(false).describe(
+    'Enable Smart Turn endpoint detection. When enabled, runs ONNX inference on the full utterance audio after VAD detects silence to determine if the speaker has finished their turn. Default: false.'
+  ),
+  threshold: z.number().min(0).max(1).default(0.5).describe(
+    'Probability threshold for Smart Turn endpoint classification. Values above this threshold are considered turn endings. Default: 0.5.'
+  ),
+}).openapi('SmartTurnConfig');
+
+/** Smart Turn configuration type */
+export type SmartTurnConfig = z.infer<typeof smartTurnConfigSchema>;
+
+/**
  * Legacy VAD configuration using millisecond-based parameters with mode-based
  * threshold selection. This variant is kept for backward compatibility.
  */
@@ -97,7 +114,11 @@ export const serverVadConfigSchema = z.preprocess(
     legacyVadConfigSchema,
     sileroVadConfigSchema,
   ])
-).openapi('ServerVadConfig');
+).and(z.object({
+  smartTurn: smartTurnConfigSchema.optional().describe(
+    'Optional Smart Turn endpoint detection configuration. Runs after VAD silence detection to verify turn completion.'
+  ),
+})).openapi('ServerVadConfig');
 
 /** Server-side VAD configuration type (discriminated union) */
 export type ServerVadConfig = z.infer<typeof serverVadConfigSchema>;

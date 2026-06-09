@@ -66,6 +66,7 @@ import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkP
 import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
+import smartTurnDetector from './services/audio/SmartTurnDetector';
 
 // Register the OpenAPI spec provider before the IoC container is used.
 // This breaks the circular module dependency that would arise from VersionService
@@ -280,6 +281,10 @@ export function createApp(): express.Application {
   // container.resolve(SendGridChannelHost).registerRoutes(app);
   // container.resolve(SesChannelHost).registerRoutes(app);
   container.resolve(SmtpImapChannelHost).registerRoutes(app);
+
+  smartTurnDetector.load().catch(err => {
+    logger.warn({ error: err.message }, 'Smart Turn detector failed to load (non-fatal, endpoint detection disabled)');
+  });
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();

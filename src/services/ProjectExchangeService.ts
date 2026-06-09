@@ -154,7 +154,7 @@ export class ProjectExchangeService extends BaseService {
       serverVad: project.asrConfig.serverVad ? {
         algorithm: project.asrConfig.serverVad.algorithm ?? 'legacy',
         ...project.asrConfig.serverVad,
-      } : undefined,
+      } as AsrConfigExchangeV1['serverVad'] : undefined,
     } : undefined;
 
     // Transform storageConfig
