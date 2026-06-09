@@ -2022,7 +2022,6 @@ export class ConversationRunner {
       if (smartTurnConfig?.enabled && this.smartTurnAudioBuffer) {
         const shouldStop = await this.handleSmartTurnDetection(smartTurnConfig.threshold ?? 0.5);
         if (!shouldStop) {
-          // TODO: run timer for silence continuation and stop ASR if timer elapses without new speech
           return;
         }
       }
