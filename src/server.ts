@@ -76,7 +76,7 @@ setSpecProvider(getOpenAPISpec);
 /**
  * Creates and configures the Express application
  */
-export function createApp(): express.Application {
+export async function createApp(): Promise<express.Application> {
   const app = express();
 
   // Trust proxy headers when running behind a reverse proxy (nginx, load balancer, etc.)
@@ -282,9 +282,11 @@ export function createApp(): express.Application {
   // container.resolve(SesChannelHost).registerRoutes(app);
   container.resolve(SmtpImapChannelHost).registerRoutes(app);
 
-  smartTurnDetector.load().catch(err => {
+  try {
+    await smartTurnDetector.load();
+  } catch (err) {
     logger.warn({ error: err.message }, 'Smart Turn detector failed to load (non-fatal, endpoint detection disabled)');
-  });
+  }
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();
@@ -299,8 +301,8 @@ export function createApp(): express.Application {
 /**
  * Starts the HTTP server and initializes WebSocket host
  */
-export function startServer(port: number = 3000): void {
-  const app = createApp();
+export async function startServer(port: number = 3000): Promise<void> {
+  const app = await createApp();
   const server = createServer(app);
 
   // Initialize WebSocket host
