@@ -23,6 +23,7 @@ import { cartesiaTtsSettingsSchema } from '../../services/providers/tts/Cartesia
 import { azureTtsSettingsSchema } from '../../services/providers/tts/AzureTtsProvider';
 import { amazonPollyTtsSettingsSchema } from '../../services/providers/tts/AmazonPollyTtsProvider';
 import { DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../../utils/pagination';
+import { legacyVadConfigSchema, sileroVadConfigSchema, fireredVadConfigSchema } from './vad';
 
 extendZodWithOpenApi(z);
 
@@ -151,3 +152,20 @@ export const ttsSettingsSchema = z.discriminatedUnion('provider', [
 ]).openapi('TtsSettings').nullable().optional().describe('TTS provider-specific settings');
 
 export type TtsSettings = z.infer<typeof ttsSettingsSchema>;
+
+// ====================
+// VAD Settings Schemas
+// ====================
+
+/**
+ * Discriminated union of all VAD settings types.
+ * Each settings object contains algorithm-specific configuration for voice activity detection.
+ * Uses an 'algorithm' discriminator field to identify the correct schema.
+ */
+export const vadSettingsSchema = z.discriminatedUnion('algorithm', [
+  legacyVadConfigSchema,
+  sileroVadConfigSchema,
+  fireredVadConfigSchema,
+]).openapi('VadSettings').nullable().optional().describe('VAD algorithm-specific settings for voice activity detection');
+
+export type VadSettings = z.infer<typeof vadSettingsSchema>;
