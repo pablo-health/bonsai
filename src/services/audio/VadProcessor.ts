@@ -1,8 +1,9 @@
 import { EventEmitter } from 'events';
 import { RealTimeVAD } from 'avr-vad';
-import type { ServerVadConfig, LegacyVadConfig, SileroVadConfig } from '../../http/contracts/vad';
+import type { ServerVadConfig, LegacyVadConfig, SileroVadConfig, FireRedVadConfig } from '../../http/contracts/vad';
 import type { AudioFormat } from '../../types/audio';
 import { isPcmFormat, pcmSampleRate } from './AudioFormatUtils';
+import { FireRedVadWrapper } from './FireRedVadWrapper';
 import logger from '../../utils/logger';
 
 /** VAD aggressiveness mode → positive/negative speech probability thresholds. */
@@ -30,6 +31,17 @@ const SILERO_DEFAULTS = {
   redemptionFrames: 8,
   preSpeechPadFrames: 1,
   minSpeechFrames: 3,
+  gracePeriodMs: 1000,
+} as const;
+
+/** Default values for FireRedVAD configuration */
+const FIRERED_DEFAULTS = {
+  speechThreshold: 0.5,
+  smoothWindowSize: 5,
+  minSpeechFrame: 8,
+  maxSpeechFrame: 2000,
+  minSilenceFrame: 20,
+  padStartFrame: 5,
   gracePeriodMs: 1000,
 } as const;
 
@@ -70,7 +82,7 @@ function float32ToPcm16(float32: Float32Array): Buffer {
  *   `'end_of_utterance'` — emitted immediately after `'data'` when speech has finished
  */
 export class VadProcessor extends EventEmitter {
-  private vad: RealTimeVAD | null = null;
+  private vad: RealTimeVAD | FireRedVadWrapper | null = null;
   private readonly sampleRate: number;
   private readonly config: ServerVadConfig;
   private gracePeriodEnd: number = 0;
@@ -93,6 +105,8 @@ export class VadProcessor extends EventEmitter {
     logger.info({ sampleRate: this.sampleRate, config: this.config }, 'Initializing VadProcessor with configuration');
     if (this.config.algorithm === 'silero') {
       await this.initSilero(this.config);
+    } else if (this.config.algorithm === 'firered') {
+      await this.initFireRed(this.config);
     } else {
       await this.initLegacy(this.config);
     }
@@ -164,6 +178,32 @@ export class VadProcessor extends EventEmitter {
     this.vad.start();
   }
 
+  async initFireRed(config: FireRedVadConfig): Promise<void> {
+    this.gracePeriodEnd = Date.now() + (config.gracePeriodMs ?? FIRERED_DEFAULTS.gracePeriodMs);
+    const fireredConfig = {
+      speechThreshold: config.speechThreshold ?? FIRERED_DEFAULTS.speechThreshold,
+      smoothWindowSize: config.smoothWindowSize ?? FIRERED_DEFAULTS.smoothWindowSize,
+      minSpeechFrame: config.minSpeechFrame ?? FIRERED_DEFAULTS.minSpeechFrame,
+      maxSpeechFrame: config.maxSpeechFrame ?? FIRERED_DEFAULTS.maxSpeechFrame,
+      minSilenceFrame: config.minSilenceFrame ?? FIRERED_DEFAULTS.minSilenceFrame,
+      padStartFrame: config.padStartFrame ?? FIRERED_DEFAULTS.padStartFrame,
+      gracePeriodMs: config.gracePeriodMs ?? FIRERED_DEFAULTS.gracePeriodMs,
+    };
+    logger.info({ options: fireredConfig }, 'FireRedVadWrapper init');
+    this.vad = new FireRedVadWrapper(this.sampleRate, fireredConfig, {
+      onSpeechStart: () => {
+        this.emit('speech_start');
+      },
+      onSpeechEnd: (audio: Float32Array) => {
+        this.emit('utterance_audio', audio);
+        this.emit('data', float32ToPcm16(audio));
+        this.emit('end_of_utterance');
+      },
+    });
+    await this.vad.init();
+    await this.vad.initResampler(this.sampleRate);
+  }
+
   /**
    * Feeds a chunk of 16-bit signed little-endian PCM audio into the VAD.
    * @param chunk 16-bit PCM Buffer
@@ -171,7 +211,11 @@ export class VadProcessor extends EventEmitter {
   push(chunk: Buffer): void {
     if (!this.vad) return;
     this.lastAudioPushTime = Date.now();
-    this.vad.processAudio(pcm16ToFloat32(chunk)).catch(() => {});
+    if (this.vad instanceof FireRedVadWrapper) {
+      this.vad.processAudio(chunk);
+    } else {
+      this.vad.processAudio(pcm16ToFloat32(chunk)).catch(() => {});
+    }
   }
 
   /**

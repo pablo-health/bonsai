@@ -94,7 +94,7 @@ asrConfig: jsonb('asr_config').$type<{
     maxSilences?: number;
     silencePlaceholder?: string;
     serverVad?: {
-      algorithm?: 'legacy' | 'silero';
+      algorithm?: 'legacy' | 'silero' | 'firered';
       mode?: number;
       frameDurationMs?: 10 | 20 | 30;
       silencePaddingMs?: number;
@@ -108,6 +108,12 @@ asrConfig: jsonb('asr_config').$type<{
       preSpeechPadFrames?: number;
       minSpeechFrames?: number;
       submitUserSpeechOnPause?: boolean;
+      speechThreshold?: number;
+      smoothWindowSize?: number;
+      minSpeechFrame?: number;
+      maxSpeechFrame?: number;
+      minSilenceFrame?: number;
+      padStartFrame?: number;
       smartTurn?: {
         enabled?: boolean;
         threshold?: number;

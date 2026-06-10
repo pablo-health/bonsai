@@ -90,6 +90,40 @@ export const sileroVadConfigSchema = z.object({
 export type SileroVadConfig = z.infer<typeof sileroVadConfigSchema>;
 
 /**
+ * FireRedVAD configuration using FireRedTeam's streaming VAD model (NCNN runtime).
+ * Provides SOTA multilingual VAD performance with frame-based postprocessing.
+ */
+export const fireredVadConfigSchema = z.object({
+  algorithm: z.literal('firered').describe(
+    'FireRedVAD algorithm using NCNN runtime with packed-cache streaming inference'
+  ),
+  speechThreshold: z.number().min(0).max(1).optional().describe(
+    'Probability threshold above which a smoothed frame is classified as speech. Default: 0.5.'
+  ),
+  smoothWindowSize: z.number().int().min(1).optional().describe(
+    'Size of the moving-average smoothing window applied to raw frame probabilities. Default: 5.'
+  ),
+  minSpeechFrame: z.number().int().min(1).optional().describe(
+    'Minimum consecutive speech frames required before speech_start is emitted. Default: 8.'
+  ),
+  maxSpeechFrame: z.number().int().min(1).optional().describe(
+    'Maximum consecutive speech frames before a forced speech_end (long-utterance cutoff). Default: 2000.'
+  ),
+  minSilenceFrame: z.number().int().min(1).optional().describe(
+    'Minimum consecutive silence frames after speech before speech_end is emitted. Default: 20.'
+  ),
+  padStartFrame: z.number().int().min(0).optional().describe(
+    'Number of frames of pre-roll audio prepended to the detected speech start. Default: 5.'
+  ),
+  gracePeriodMs: z.number().int().min(0).max(5000).optional().describe(
+    'Duration (in ms) after VAD initialization during which speech_start is suppressed. Prevents false positives from phone connection noise. Default: 1000.'
+  ),
+}).openapi('FireRedVadConfig');
+
+/** FireRedVAD configuration type */
+export type FireRedVadConfig = z.infer<typeof fireredVadConfigSchema>;
+
+/**
  * Coerce legacy configs (without algorithm field) to include algorithm: 'legacy'
  * so the discriminated union can parse them.
  */
@@ -113,6 +147,7 @@ export const serverVadConfigSchema = z.preprocess(
   z.discriminatedUnion('algorithm', [
     legacyVadConfigSchema,
     sileroVadConfigSchema,
+    fireredVadConfigSchema,
   ])
 ).and(z.object({
   smartTurn: smartTurnConfigSchema.optional().describe(
