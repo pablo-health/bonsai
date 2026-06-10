@@ -251,65 +251,122 @@ function parseKaldiCmvn(buffer: Buffer): { means: Float32Array; inverseStdVarian
   }
 
   // Parse CMVN: row 0 = sums, row 1 = sum of squares, last column = count
+  // Flat layout: [sums[0..D-1], count, sos[0..D-1], sos_last]
   const count = matrix[dim];
   const means = new Float32Array(dim);
   const inverseStdVariances = new Float32Array(dim);
-  const floor = 1e-20;
+  const varianceFloor = 1e-20;
+  const stdFloor = 0.01;
 
   for (let d = 0; d < dim; d++) {
     const mean = matrix[d] / count;
-    const variance = matrix[dim + d] / count - mean * mean;
-    const v = variance < floor ? floor : variance;
+    const sos = matrix[dim + 1 + d];
+    const variance = sos / count - mean * mean;
+    const v = variance < varianceFloor ? varianceFloor : variance;
+    const std = Math.max(Math.sqrt(v), stdFloor);
     means[d] = mean;
-    inverseStdVariances[d] = 1.0 / Math.sqrt(v);
+    inverseStdVariances[d] = 1.0 / std;
   }
 
   return { means, inverseStdVariances };
 }
 
-// ---- Fbank feature extraction ----
+// ---- Fbank feature extraction (Kaldi/kaldi_native_fbank compatible) ----
 
 class FbankExtractor {
-  private readonly hammingWindow: Float32Array;
-  private readonly melFilterbank: Float32Array[][];
+  private readonly poveyWindow: Float32Array;
+  private readonly melFilterbank: Float32Array;
+  private readonly filterbankLayout: number[];
   private readonly fftSize: number;
   private readonly numBins: number;
   private readonly frameLength: number;
   private readonly frameShift: number;
   private readonly sampleRate: number;
+  private readonly numFreqBins: number;
+  private readonly cmvnMeans: Float32Array;
+  private readonly cmvnIstd: Float32Array;
 
-  // Internal frame buffer: holds the 150 samples of overlap from the previous 25ms window
-  private overlapBuffer: Float32Array;
+  // Ring buffer for streaming: holds (frameLength - frameShift) overlap samples
+  private ringBuffer: Float32Array;
+  private ringPos: number;
+  private ringFilled: number;
 
-  constructor(sampleRate: number = FBANK_SAMPLE_RATE) {
+  constructor(
+    sampleRate: number = FBANK_SAMPLE_RATE,
+    cmvnData?: { means: Float32Array; inverseStdVariances: Float32Array },
+  ) {
     this.sampleRate = sampleRate;
     this.frameLength = Math.round(FBANK_FRAME_LENGTH_MS / 1000 * sampleRate);
     this.frameShift = Math.round(FBANK_FRAME_SHIFT_MS / 1000 * sampleRate);
     this.fftSize = 512;
     this.numBins = FBANK_NUM_MEL_BINS;
-    this.overlapBuffer = new Float32Array(this.frameLength - this.frameShift);
+    this.numFreqBins = this.fftSize / 2 + 1;
 
-    this.hammingWindow = this.createHammingWindow(this.frameLength);
+    this.ringBuffer = new Float32Array(this.frameLength - this.frameShift);
+    this.ringPos = 0;
+    this.ringFilled = 0;
+
+    this.poveyWindow = this.createPoveyWindow(this.frameLength);
     this.melFilterbank = this.createMelFilterbank();
+    this.filterbankLayout = this.createFilterbankLayout();
+
+    this.cmvnMeans = cmvnData ? cmvnData.means : new Float32Array(this.numBins);
+    this.cmvnIstd = cmvnData ? cmvnData.inverseStdVariances : new Float32Array(this.numBins).fill(1);
   }
 
-  // Extract one 80-dim frame from 160 new samples (using 250 overlap + 160 new = 410, but we use 400)
+  // Extract one 80-dim frame from 160 new samples
   extractFrame(newSamples: Float32Array): Float32Array {
     if (newSamples.length !== this.frameShift) {
       throw new Error(`Expected ${this.frameShift} samples, got ${newSamples.length}`);
     }
 
-    // Combine overlap + new samples to form a 25ms frame
+    // Build frame from ring buffer + new samples (direct overlapping, raw samples)
+    const overlapLen = this.frameLength - this.frameShift;
     const frame = new Float32Array(this.frameLength);
-    frame.set(this.overlapBuffer, 0);
-    frame.set(newSamples, this.frameLength - this.frameShift);
 
-    // Update overlap for next frame
-    this.overlapBuffer = frame.subarray(0, this.frameLength - this.frameShift);
+    // Copy overlap from ring buffer
+    if (this.ringPos + overlapLen <= this.ringFilled) {
+      frame.set(this.ringBuffer.subarray(this.ringPos, this.ringPos + overlapLen), 0);
+    } else {
+      const firstPart = this.ringFilled - this.ringPos;
+      frame.set(this.ringBuffer.subarray(this.ringPos, this.ringFilled), 0);
+      frame.set(this.ringBuffer.subarray(0, overlapLen - firstPart), firstPart);
+    }
+    // Copy new samples
+    frame.set(newSamples, overlapLen);
 
-    // Apply Hamming window
+    // Update ring buffer: store raw new samples as next overlap
+    const storePos = (this.ringPos + overlapLen) % (this.frameLength - this.frameShift);
+    if (storePos + this.frameShift <= this.frameLength - this.frameShift) {
+      this.ringBuffer.set(newSamples, storePos);
+    } else {
+      const firstPart = this.frameLength - this.frameShift - storePos;
+      this.ringBuffer.set(newSamples.subarray(0, firstPart), storePos);
+      this.ringBuffer.set(newSamples.subarray(firstPart), 0);
+    }
+    this.ringPos = (this.ringPos + this.frameShift) % (this.frameLength - this.frameShift);
+    this.ringFilled = Math.min(this.ringFilled + this.frameShift, this.frameLength - this.frameShift);
+
+    // Kaldi ProcessWindow order: DC removal → pre-emphasis → window
+    // DC removal
+    let dcSum = 0;
     for (let i = 0; i < this.frameLength; i++) {
-      frame[i] *= this.hammingWindow[i];
+      dcSum += frame[i];
+    }
+    const dcMean = dcSum / this.frameLength;
+    for (let i = 0; i < this.frameLength; i++) {
+      frame[i] -= dcMean;
+    }
+
+    // Pre-emphasis (per-frame, Kaldi backward order, d[0] -= coeff * d[0])
+    for (let i = this.frameLength - 1; i > 0; i--) {
+      frame[i] -= 0.97 * frame[i - 1];
+    }
+    frame[0] -= 0.97 * frame[0];
+
+    // Apply Povey window
+    for (let i = 0; i < this.frameLength; i++) {
+      frame[i] *= this.poveyWindow[i];
     }
 
     // Compute power spectrum via FFT
@@ -317,82 +374,126 @@ class FbankExtractor {
 
     // Apply mel filterbank
     const fbank = new Float32Array(this.numBins);
+    this.applyFilterbank(powerSpectrum, fbank);
+
+    // Log
     for (let m = 0; m < this.numBins; m++) {
-      let sum = 0;
-      const weights = this.melFilterbank[m];
-      for (let i = 0; i < weights.length; i++) {
-        sum += weights[i][0] * powerSpectrum[weights[i][1]];
-      }
-      fbank[m] = sum;
+      fbank[m] = Math.log(fbank[m] + 1e-10);
+    }
+
+    // CMVN normalization
+    for (let m = 0; m < this.numBins; m++) {
+      fbank[m] = (fbank[m] - this.cmvnMeans[m]) * this.cmvnIstd[m];
     }
 
     return fbank;
   }
 
   reset(): void {
-    this.overlapBuffer = new Float32Array(this.frameLength - this.frameShift);
+    this.ringBuffer.fill(0);
+    this.ringPos = 0;
+    this.ringFilled = 0;
   }
 
-  private createHammingWindow(size: number): Float32Array {
+  private createPoveyWindow(size: number): Float32Array {
     const window = new Float32Array(size);
+    const a = 2 * Math.PI / (size - 1);
     for (let i = 0; i < size; i++) {
-      window[i] = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (size - 1));
+      window[i] = Math.pow(0.5 - 0.5 * Math.cos(a * i), 0.85);
     }
     return window;
   }
 
-  private createMelFilterbank(): Float32Array[][] {
-    const nFFT = this.fftSize;
-    const numFreqBins = nFFT / 2 + 1;
-    const lowFreqMel = 0;
-    const highFreqMel = this.hertzToMel(this.sampleRate / 2);
-    const melPoints = new Float32Array(this.numBins + 2);
+  private melScaleSlaney(freq: number): number {
+    if (freq <= 1000) {
+      return (freq * 3) / 200;
+    }
+    return 15 + 14.545078505785561 * Math.log(freq / 1000);
+  }
 
-    for (let i = 0; i < this.numBins + 2; i++) {
-      melPoints[i] = (highFreqMel - lowFreqMel) / (this.numBins + 1) * i + lowFreqMel;
+  private invMelScaleSlaney(mel: number): number {
+    if (mel <= 15) {
+      return (200 / 3) * mel;
+    }
+    return 1000 * Math.exp((mel - 15) * 0.06875177742094911);
+  }
+
+  private createMelFilterbank(): Float32Array {
+    const fftBinWidth = this.sampleRate / this.fftSize;
+    const lowFreq = 20;
+    const highFreq = this.sampleRate / 2;
+
+    const melLow = this.melScaleSlaney(lowFreq);
+    const melHigh = this.melScaleSlaney(highFreq);
+    const melDelta = (melHigh - melLow) / (this.numBins + 1);
+
+    // Store filterbank as flat array with layout for sparse access
+    const totalEntries = this.numBins * this.numFreqBins;
+    const fb = new Float32Array(totalEntries);
+
+    for (let bin = 0; bin < this.numBins; bin++) {
+      const leftMel = melLow + bin * melDelta;
+      const centerMel = melLow + (bin + 1) * melDelta;
+      const rightMel = melLow + (bin + 2) * melDelta;
+
+      const leftHz = this.invMelScaleSlaney(leftMel);
+      const centerHz = this.invMelScaleSlaney(centerMel);
+      const rightHz = this.invMelScaleSlaney(rightMel);
+
+      for (let i = 0; i < this.numFreqBins; i++) {
+        const hz = fftBinWidth * i;
+        if (hz > leftHz && hz < rightHz) {
+          let weight: number;
+          if (hz <= centerHz) {
+            weight = (hz - leftHz) / (centerHz - leftHz);
+          } else {
+            weight = (rightHz - hz) / (rightHz - centerHz);
+          }
+          weight *= 2.0 / (rightHz - leftHz);
+          fb[bin * this.numFreqBins + i] = weight;
+        }
+      }
     }
 
-    const freqPoints = new Float32Array(this.numBins + 2);
-    for (let i = 0; i < this.numBins + 2; i++) {
-      freqPoints[i] = this.melToHertz(melPoints[i]);
-    }
+    return fb;
+  }
 
-    const binIndices = new Float32Array(this.numBins + 2);
-    for (let i = 0; i < this.numBins + 2; i++) {
-      binIndices[i] = Math.floor((nFFT + 1) * freqPoints[i] / this.sampleRate);
+  private createFilterbankLayout(): number[] {
+    // For each mel bin, store [first_nonzero, count] for sparse iteration
+    const layout: number[] = [];
+    for (let bin = 0; bin < this.numBins; bin++) {
+      let first = -1;
+      let count = 0;
+      for (let i = 0; i < this.numFreqBins; i++) {
+        if (this.melFilterbank[bin * this.numFreqBins + i] !== 0) {
+          if (first === -1) first = i;
+          count++;
+        }
+      }
+      layout.push(first);
+      layout.push(count);
     }
+    return layout;
+  }
 
-    const filterbank: Float32Array[][] = [];
+  private applyFilterbank(powerSpectrum: Float32Array, fbank: Float32Array): void {
     for (let m = 0; m < this.numBins; m++) {
-      const fStart = binIndices[m];
-      const fCenter = binIndices[m + 1];
-      const fEnd = binIndices[m + 2];
-      const entries: Float32Array[] = [];
-
-      for (let f = Math.floor(fStart); f <= Math.floor(fCenter); f++) {
-        if (f >= 0 && f < numFreqBins) {
-          const weight = (f - fStart) / (fCenter - fStart + 1e-30);
-          entries.push(new Float32Array([weight, f]));
-        }
+      let sum = 0;
+      const base = m * this.numFreqBins;
+      const first = this.filterbankLayout[m * 2];
+      const count = this.filterbankLayout[m * 2 + 1];
+      for (let i = 0; i < count; i++) {
+        const idx = first + i;
+        sum += this.melFilterbank[base + idx] * powerSpectrum[idx];
       }
-      for (let f = Math.floor(fCenter) + 1; f <= Math.floor(fEnd); f++) {
-        if (f >= 0 && f < numFreqBins) {
-          const weight = (fEnd - f) / (fEnd - fCenter + 1e-30);
-          entries.push(new Float32Array([weight, f]));
-        }
-      }
-
-      filterbank.push(entries);
+      fbank[m] = sum;
     }
-
-    return filterbank;
   }
 
   private computePowerSpectrum(windowed: Float32Array): Float32Array {
-    const n = windowed.length;
     const complex = new Float64Array(this.fftSize * 2);
 
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < windowed.length; i++) {
       complex[i * 2] = windowed[i];
     }
 
@@ -415,7 +516,6 @@ class FbankExtractor {
       throw new Error('FFT size must be power of 2');
     }
 
-    // Bit-reversal permutation
     for (let i = 0; i < n; i++) {
       let j = 0;
       for (let b = 0; b < bits; b++) {
@@ -431,7 +531,6 @@ class FbankExtractor {
       }
     }
 
-    // Cooley-Tukey FFT
     for (let len = 2; len <= n; len *= 2) {
       const halfLen = len / 2;
       const angleStep = -2 * Math.PI / len;
@@ -458,14 +557,6 @@ class FbankExtractor {
         }
       }
     }
-  }
-
-  private hertzToMel(hz: number): number {
-    return 2595.0 * Math.log10(1 + hz / 700.0);
-  }
-
-  private melToHertz(mel: number): number {
-    return 700.0 * (Math.pow(10, mel / 2595.0) - 1);
   }
 }
 
@@ -559,7 +650,8 @@ export class FireRedVadWrapper {
         this.session = await ort.InferenceSession.create(resolveModelPath());
       }
 
-      this.fbank = new FbankExtractor(FIRERED_SAMPLE_RATE);
+      const cmvnData = parseKaldiCmvn(await readFile(resolveCmvnPath()));
+      this.fbank = new FbankExtractor(FIRERED_SAMPLE_RATE, cmvnData);
       this.cache = new Float32Array(FIRERED_CACHE_LAYERS * 1 * FIRERED_CACHE_HIDDEN * FIRERED_CACHE_LEN);
     } catch (err) {
       logger.error(
