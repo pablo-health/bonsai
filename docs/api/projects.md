@@ -196,6 +196,32 @@ Frame-based parameters that map directly to the underlying Silero VAD processor 
 | `submitUserSpeechOnPause` | `boolean` | No | Whether to submit partial speech when VAD is paused. Default: library default. |
 | `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Default: `1000`. |
 
+### FireRed Algorithm (`algorithm: "firered"`)
+
+ONNX-based VAD using FireRedTeam's streaming model with packed-cache inference. Provides state-of-the-art multilingual VAD performance with a state-machine-based postprocessor.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `algorithm` | `"firered"` | Yes | Selects the FireRedVAD algorithm |
+| `speechThreshold` | `number` (0–1) | No | Probability threshold above which a smoothed frame is classified as speech. Default: `0.5`. |
+| `smoothWindowSize` | `integer` | No | Size of the moving-average smoothing window applied to raw frame probabilities. Default: `5`. |
+| `minSpeechFrame` | `integer` | No | Minimum consecutive speech frames required before `speech_start` is emitted. Default: `8`. |
+| `maxSpeechFrame` | `integer` | No | Maximum consecutive speech frames before a forced `speech_end` (long-utterance cutoff). Default: `2000`. |
+| `minSilenceFrame` | `integer` | No | Minimum consecutive silence frames after speech before `speech_end` is emitted. Default: `20`. |
+| `padStartFrame` | `integer` | No | Number of frames of pre-roll audio prepended to the detected speech start. Default: `5`. |
+| `gracePeriodMs` | `integer` (0–5000) | No | Milliseconds after VAD initialization during which `speech_start` is suppressed. Default: `1000`. |
+
+### Smart Turn Detection
+
+Optional post-VAD endpoint detection that runs ONNX inference on the full utterance audio after VAD detects silence. This reduces false turn endings by verifying whether the speaker has actually finished their turn or is pausing mid-sentence.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `smartTurn.enabled` | `boolean` | No | Enable Smart Turn endpoint detection. Default: `false`. |
+| `smartTurn.threshold` | `number` (0–1) | No | Probability threshold for endpoint classification. Values above this threshold are considered turn endings. Default: `0.5`. |
+
+Smart Turn can be combined with any VAD algorithm. When enabled, after VAD detects silence, the server runs ONNX inference on the buffered audio using Whisper-style mel-filterbank features. If the model determines the speaker is still talking (probability below threshold), the VAD continues listening instead of ending the utterance.
+
 ## Storage Config
 
 | Field | Type | Required | Description |
