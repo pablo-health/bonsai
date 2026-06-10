@@ -29,7 +29,7 @@ function parseKaldiCmvn(buffer) {
   const inverseStdVariances = new Float32Array(dim);
   for (let d = 0; d < dim; d++) {
     const mean = matrix[d] / count;
-    const variance = matrix[dim + d] / count - mean * mean;
+    const variance = matrix[dim + 1 + d] / count - mean * mean;
     const v = variance < 1e-20 ? 1e-20 : variance;
     means[d] = mean;
     inverseStdVariances[d] = 1.0 / Math.sqrt(v);
