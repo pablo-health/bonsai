@@ -13,7 +13,8 @@ const MODEL_DIR = join(__dirname, '../../../models/firered-vad');
 const FIRERED_SAMPLE_RATE = 16000;
 const FIRERED_FRAME_SAMPLES = 160;
 const FIRERED_FBank_DIM = 80;
-const FIRERED_CACHE_DIM = 1024;
+const FIRERED_CACHE_LAYERS = 8;
+const FIRERED_CACHE_HIDDEN = 128;
 const FIRERED_CACHE_LEN = 19;
 
 // Fbank parameters matching Kaldi/kaldi_native_fbank
@@ -137,7 +138,7 @@ class StreamVadStateMachine {
         }
       } else {
         this.state = VadState.SILENCE;
-        this.silenceCnt = 1;
+        this.silenceCnt = 0;
         this.speechCnt = 0;
       }
     } else if (this.state === VadState.SPEECH) {
@@ -156,7 +157,6 @@ class StreamVadStateMachine {
       } else {
         this.state = VadState.POSSIBLE_SILENCE;
         this.silenceCnt += 1;
-        this.speechCnt = 0;
       }
     } else if (this.state === VadState.POSSIBLE_SILENCE) {
       this.speechCnt += 1;
@@ -210,24 +210,37 @@ class StreamVadStateMachine {
 // ---- Kaldi CMVN parser ----
 
 function parseKaldiCmvn(buffer: Buffer): { means: Float32Array; inverseStdVariances: Float32Array } {
-  // Kaldi .ark format: "KEY <N> MxN [data...] "
-  // For cmvn.ark: key "BDM", then 2xD matrix of float64
+  // FireRedVAD cmvn.ark binary format:
+  //   key "BDM" (null-padded to 4 bytes) + space (1 byte)
+  //   type tag (1 byte: 0x04)
+  //   rows (int32 LE)
+  //   padding (1 byte)
+  //   cols (int32 LE)
+  //   float64 matrix data [rows * cols]
   let offset = 0;
 
-  // Skip key string (null-terminated)
-  const keyEnd = buffer.indexOf(0, offset);
+  // Skip key string (space-terminated)
+  const keyEnd = buffer.indexOf(0x20, offset);
+  if (keyEnd < 0) throw new Error('Invalid CMVN format: missing key delimiter');
   offset = keyEnd + 1;
 
-  // Read tag: 4 bytes (binary matrix tag)
-  if (buffer.readUInt8(offset) !== 4) {
-    throw new Error('Unexpected CMVN tag, expected binary matrix');
-  }
+  // Skip type tag byte
+  offset += 1;
+
+  // Read rows (int32 LE)
+  const rows = buffer.readInt32LE(offset);
   offset += 4;
 
-  // Read dimensions: int32 rows, int32 cols
-  const rows = buffer.readInt32LE(offset);
-  const cols = buffer.readInt32LE(offset + 4);
-  offset += 8;
+  // Skip padding byte
+  offset += 1;
+
+  // Read cols (int32 LE)
+  const cols = buffer.readInt32LE(offset);
+  offset += 4;
+
+  if (rows <= 0 || cols <= 0) {
+    throw new Error(`Invalid CMVN dimensions: ${rows}x${cols}`);
+  }
 
   // Read float64 matrix (2 rows, D+1 cols)
   const dim = cols - 1;
@@ -310,7 +323,7 @@ class FbankExtractor {
       for (let i = 0; i < weights.length; i++) {
         sum += weights[i][0] * powerSpectrum[weights[i][1]];
       }
-      fbank[m] = Math.log(Math.max(sum, 1e-10));
+      fbank[m] = sum;
     }
 
     return fbank;
@@ -389,7 +402,7 @@ class FbankExtractor {
     for (let i = 0; i <= this.fftSize / 2; i++) {
       const re = complex[i * 2];
       const im = complex[i * 2 + 1];
-      power[i] = (re * re + im * im) / this.fftSize;
+      power[i] = re * re + im * im;
     }
 
     return power;
@@ -469,12 +482,47 @@ function pcm16ToFloat32(buffer: Buffer): Float32Array {
 
 // ---- Model paths ----
 
-function resolveModelPath(): string {
+export function resolveModelPath(): string {
   return join(MODEL_DIR, 'fireredvad_stream_vad_with_cache.onnx');
 }
 
-function resolveCmvnPath(): string {
+export function resolveCmvnPath(): string {
   return join(MODEL_DIR, 'cmvn.ark');
+}
+
+// ---- Preload ----
+
+type FireRedVadPreload = {
+  session: ort.InferenceSession;
+};
+
+let preloadInstance: FireRedVadPreload | null = null;
+
+export async function preloadFireRedVad(): Promise<void> {
+  if (preloadInstance) return;
+
+  try {
+    const session = await ort.InferenceSession.create(resolveModelPath());
+
+    preloadInstance = {
+      session,
+    };
+
+    logger.info(
+      { modelPath: resolveModelPath(), inputNames: session.inputNames, outputNames: session.outputNames },
+      'FireRedVAD model preloaded',
+    );
+  } catch (err) {
+    logger.error(
+      { error: err instanceof Error ? err.message : String(err) },
+      'Failed to preload FireRedVAD ONNX model',
+    );
+    throw err;
+  }
+}
+
+export function getFireRedVadPreload(): FireRedVadPreload | null {
+  return preloadInstance;
 }
 
 // ---- Main wrapper ----
@@ -487,8 +535,6 @@ export class FireRedVadWrapper {
   private readonly gracePeriodEnd: number;
 
   private fbank: FbankExtractor | null = null;
-  private cmvnMeans: Float32Array | null = null;
-  private cmvnIstd: Float32Array | null = null;
   private cache: Float32Array | null = null;
 
   private pendingBuffer: Buffer = Buffer.alloc(0);
@@ -505,20 +551,16 @@ export class FireRedVadWrapper {
 
   async init(): Promise<void> {
     try {
-      this.session = await ort.InferenceSession.create(resolveModelPath());
+      const preload = getFireRedVadPreload();
+
+      if (preload) {
+        this.session = preload.session;
+      } else {
+        this.session = await ort.InferenceSession.create(resolveModelPath());
+      }
+
       this.fbank = new FbankExtractor(FIRERED_SAMPLE_RATE);
-
-      const cmvnBuffer = await readFile(resolveCmvnPath());
-      const cmvn = parseKaldiCmvn(cmvnBuffer);
-      this.cmvnMeans = cmvn.means;
-      this.cmvnIstd = cmvn.inverseStdVariances;
-
-      this.cache = new Float32Array(FIRERED_CACHE_DIM * FIRERED_CACHE_LEN);
-
-      logger.info(
-        { modelPath: resolveModelPath(), cmvnPath: resolveCmvnPath(), dim: this.cmvnMeans.length },
-        'FireRedVAD ONNX model loaded successfully',
-      );
+      this.cache = new Float32Array(FIRERED_CACHE_LAYERS * 1 * FIRERED_CACHE_HIDDEN * FIRERED_CACHE_LEN);
     } catch (err) {
       logger.error(
         { error: err instanceof Error ? err.message : String(err) },
@@ -539,7 +581,7 @@ export class FireRedVadWrapper {
   }
 
   processAudio(chunk: Buffer): void {
-    if (!this.session || !this.fbank || !this.cmvnMeans || !this.cmvnIstd || !this.cache) return;
+    if (!this.session || !this.fbank || !this.cache) return;
 
     let pcm16: Buffer = chunk;
     if (this.resampler) {
@@ -563,27 +605,22 @@ export class FireRedVadWrapper {
   }
 
   private async processFrame(frame: Buffer): Promise<void> {
-    if (!this.session || !this.fbank || !this.cmvnMeans || !this.cmvnIstd || !this.cache) return;
+    if (!this.session || !this.fbank || !this.cache) return;
 
     const float32 = pcm16ToFloat32(frame);
 
-    // Extract Fbank features
+    // Extract raw energy Fbank features (no log, no CMVN)
     const fbankFeat = this.fbank.extractFrame(float32);
-
-    // Apply CMVN normalization
-    for (let i = 0; i < FIRERED_FBank_DIM; i++) {
-      fbankFeat[i] = (fbankFeat[i] - this.cmvnMeans[i]) * this.cmvnIstd[i];
-    }
 
     // Run ONNX inference
     const inputs = {
       feat: new ort.Tensor('float32', fbankFeat, [1, 1, FIRERED_FBank_DIM]),
-      caches_packed: new ort.Tensor('float32', this.cache, [1, FIRERED_CACHE_DIM, FIRERED_CACHE_LEN]),
+      caches_in: new ort.Tensor('float32', this.cache, [FIRERED_CACHE_LAYERS, 1, FIRERED_CACHE_HIDDEN, FIRERED_CACHE_LEN]),
     };
 
     const result = await this.session.run(inputs);
     const prob = (result.probs.data as Float32Array)[0];
-    const newCache = result.new_caches_packed.data as Float32Array;
+    const newCache = result.caches_out.data as Float32Array;
 
     // Update cache
     this.cache.set(newCache);
@@ -640,10 +677,11 @@ export class FireRedVadWrapper {
   }
 
   destroy(): void {
-    this.session = null;
+    const preload = getFireRedVadPreload();
+    if (!preload) {
+      this.session = null;
+    }
     this.fbank = null;
     this.cache = null;
-    this.cmvnMeans = null;
-    this.cmvnIstd = null;
   }
 }

@@ -67,6 +67,7 @@ import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigCon
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
 import smartTurnDetector from './services/audio/SmartTurnDetector';
+import { preloadFireRedVad } from './services/audio/FireRedVadWrapper';
 
 // Register the OpenAPI spec provider before the IoC container is used.
 // This breaks the circular module dependency that would arise from VersionService
@@ -286,6 +287,12 @@ export async function createApp(): Promise<express.Application> {
     await smartTurnDetector.load();
   } catch (err) {
     logger.warn({ error: err.message }, 'Smart Turn detector failed to load (non-fatal, endpoint detection disabled)');
+  }
+
+  try {
+    await preloadFireRedVad();
+  } catch (err) {
+    logger.warn({ error: err.message }, 'FireRedVAD failed to preload (non-fatal, will load on first use)');
   }
 
   container.resolve(ConversationTimeoutService).start();
