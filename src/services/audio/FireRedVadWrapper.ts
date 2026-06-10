@@ -69,6 +69,10 @@ class StreamVadStateMachine {
     return this.frameCnt;
   }
 
+  get currentState(): VadState {
+    return this.state;
+  }
+
   constructor(config: FireRedVadInitConfig) {
     this.smoothWindowSize = Math.max(1, config.smoothWindowSize);
     this.speechThreshold = config.speechThreshold;
@@ -255,17 +259,15 @@ function parseKaldiCmvn(buffer: Buffer): { means: Float32Array; inverseStdVarian
   const count = matrix[dim];
   const means = new Float32Array(dim);
   const inverseStdVariances = new Float32Array(dim);
-  const varianceFloor = 1e-20;
-  const stdFloor = 0.01;
+   const varianceFloor = 1e-20;
 
   for (let d = 0; d < dim; d++) {
     const mean = matrix[d] / count;
     const sos = matrix[dim + 1 + d];
     const variance = sos / count - mean * mean;
     const v = variance < varianceFloor ? varianceFloor : variance;
-    const std = Math.max(Math.sqrt(v), stdFloor);
     means[d] = mean;
-    inverseStdVariances[d] = 1.0 / std;
+    inverseStdVariances[d] = 1.0 / Math.sqrt(v);
   }
 
   return { means, inverseStdVariances };
@@ -348,7 +350,7 @@ class FbankExtractor {
     this.ringFilled = Math.min(this.ringFilled + this.frameShift, this.frameLength - this.frameShift);
 
     // Kaldi ProcessWindow order: DC removal → pre-emphasis → window
-    // DC removal
+    // DC removal (per frame)
     let dcSum = 0;
     for (let i = 0; i < this.frameLength; i++) {
       dcSum += frame[i];
@@ -358,11 +360,11 @@ class FbankExtractor {
       frame[i] -= dcMean;
     }
 
-    // Pre-emphasis (per-frame, Kaldi backward order, d[0] -= coeff * d[0])
+    // Pre-emphasis (per-frame, backward order)
+    const preemphCoeff = 0.97;
     for (let i = this.frameLength - 1; i > 0; i--) {
-      frame[i] -= 0.97 * frame[i - 1];
+      frame[i] -= preemphCoeff * frame[i - 1];
     }
-    frame[0] -= 0.97 * frame[0];
 
     // Apply Povey window
     for (let i = 0; i < this.frameLength; i++) {
@@ -372,13 +374,13 @@ class FbankExtractor {
     // Compute power spectrum via FFT
     const powerSpectrum = this.computePowerSpectrum(frame);
 
-    // Apply mel filterbank
+    // Apply mel filterbank + log (no HTK floor, matches Kaldi non-HTK mode)
     const fbank = new Float32Array(this.numBins);
     this.applyFilterbank(powerSpectrum, fbank);
 
-    // Log
+    // Log with small floor to prevent -Infinity on silence
     for (let m = 0; m < this.numBins; m++) {
-      fbank[m] = Math.log(fbank[m] + 1e-10);
+      fbank[m] = Math.log(fbank[m] < 1e-10 ? 1e-10 : fbank[m]);
     }
 
     // CMVN normalization
@@ -404,18 +406,12 @@ class FbankExtractor {
     return window;
   }
 
-  private melScaleSlaney(freq: number): number {
-    if (freq <= 1000) {
-      return (freq * 3) / 200;
-    }
-    return 15 + 14.545078505785561 * Math.log(freq / 1000);
+  private melScaleHtk(freq: number): number {
+    return 1127.0 * Math.log(1.0 + freq / 700.0);
   }
 
-  private invMelScaleSlaney(mel: number): number {
-    if (mel <= 15) {
-      return (200 / 3) * mel;
-    }
-    return 1000 * Math.exp((mel - 15) * 0.06875177742094911);
+  private invMelScaleHtk(mel: number): number {
+    return 700.0 * (Math.exp(mel / 1127.0) - 1.0);
   }
 
   private createMelFilterbank(): Float32Array {
@@ -423,8 +419,8 @@ class FbankExtractor {
     const lowFreq = 20;
     const highFreq = this.sampleRate / 2;
 
-    const melLow = this.melScaleSlaney(lowFreq);
-    const melHigh = this.melScaleSlaney(highFreq);
+    const melLow = this.melScaleHtk(lowFreq);
+    const melHigh = this.melScaleHtk(highFreq);
     const melDelta = (melHigh - melLow) / (this.numBins + 1);
 
     // Store filterbank as flat array with layout for sparse access
@@ -436,20 +432,18 @@ class FbankExtractor {
       const centerMel = melLow + (bin + 1) * melDelta;
       const rightMel = melLow + (bin + 2) * melDelta;
 
-      const leftHz = this.invMelScaleSlaney(leftMel);
-      const centerHz = this.invMelScaleSlaney(centerMel);
-      const rightHz = this.invMelScaleSlaney(rightMel);
-
+      // Kaldi compares FFT bin frequency in mel space, not Hz
       for (let i = 0; i < this.numFreqBins; i++) {
-        const hz = fftBinWidth * i;
-        if (hz > leftHz && hz < rightHz) {
+        const freq = fftBinWidth * i;
+        const mel = this.melScaleHtk(freq);
+        if (mel > leftMel && mel < rightMel) {
           let weight: number;
-          if (hz <= centerHz) {
-            weight = (hz - leftHz) / (centerHz - leftHz);
+          if (mel <= centerMel) {
+            weight = (mel - leftMel) / (centerMel - leftMel);
           } else {
-            weight = (rightHz - hz) / (rightHz - centerHz);
+            weight = (rightMel - mel) / (rightMel - centerMel);
           }
-          weight *= 2.0 / (rightHz - leftHz);
+          // NO normalization factor — Kaldi InitKaldiMelBanks doesn't normalize
           fb[bin * this.numFreqBins + i] = weight;
         }
       }
@@ -633,11 +627,21 @@ export class FireRedVadWrapper {
 
   private isCollecting = false;
   private speechAudioFloat: Float32Array = new Float32Array(0);
+  private speechStartPending = false;
+
+  // Pre-roll ring buffer: stores recent audio so padStartFrame can back-fill audio
+  private audioRingBuffer: Float32Array = new Float32Array(0);
+  private audioRingPos = 0;
+  private audioRingFilled = 0;
 
   constructor(sampleRate: number, config: FireRedVadInitConfig, callbacks: FireRedVadCallbacks) {
     this.stateMachine = new StreamVadStateMachine(config);
     this.callbacks = callbacks;
     this.gracePeriodEnd = Date.now() + config.gracePeriodMs;
+    const effectivePadStartFrame = Math.max(Math.max(1, config.smoothWindowSize), config.padStartFrame);
+    this.audioRingBuffer = new Float32Array(effectivePadStartFrame * FIRERED_FRAME_SAMPLES);
+    this.audioRingPos = 0;
+    this.audioRingFilled = 0;
   }
 
   async init(): Promise<void> {
@@ -719,12 +723,25 @@ export class FireRedVadWrapper {
 
     const stateResult = this.stateMachine.processOneFrame(prob);
 
+    // Store audio in ring buffer for pre-roll (every frame)
+    this.storeAudioRing(float32);
+
+    if (this.speechStartPending && !this.isCollecting) {
+      this.speechStartPending = false;
+      if (Date.now() >= this.gracePeriodEnd && (this.stateMachine.currentState === VadState.SPEECH || this.stateMachine.currentState === VadState.POSSIBLE_SILENCE)) {
+        this.isCollecting = true;
+        this.speechAudioFloat = this.getPreRollAudio();
+        this.callbacks.onSpeechStart();
+      }
+    }
+
     if (stateResult.isSpeechStart && !this.isCollecting) {
       if (Date.now() < this.gracePeriodEnd) {
+        this.speechStartPending = true;
         return;
       }
       this.isCollecting = true;
-      this.speechAudioFloat = new Float32Array(0);
+      this.speechAudioFloat = this.getPreRollAudio();
       this.callbacks.onSpeechStart();
     }
 
@@ -742,12 +759,44 @@ export class FireRedVadWrapper {
     }
   }
 
+  private storeAudioRing(samples: Float32Array): void {
+    const bufLen = this.audioRingBuffer.length;
+    if (bufLen === 0) return;
+    const storePos = this.audioRingPos;
+    if (storePos + samples.length <= bufLen) {
+      this.audioRingBuffer.set(samples, storePos);
+    } else {
+      const firstPart = bufLen - storePos;
+      this.audioRingBuffer.set(samples.subarray(0, firstPart), storePos);
+      this.audioRingBuffer.set(samples.subarray(firstPart), 0);
+    }
+    this.audioRingPos = (storePos + samples.length) % bufLen;
+    this.audioRingFilled = Math.min(this.audioRingFilled + samples.length, bufLen);
+  }
+
+  private getPreRollAudio(): Float32Array {
+    const bufLen = this.audioRingBuffer.length;
+    if (bufLen === 0 || this.audioRingFilled === 0) return new Float32Array(0);
+    const result = new Float32Array(this.audioRingFilled);
+    for (let i = 0; i < this.audioRingFilled; i++) {
+      const idx = (this.audioRingPos + i) % bufLen;
+      result[i] = this.audioRingBuffer[idx];
+    }
+    return result;
+  }
+
   async flush(): Promise<void> {
     if (this.pendingBuffer.length > 0) {
       this.processAudio(this.pendingBuffer);
       this.pendingBuffer = Buffer.alloc(0);
     }
     await this.processingQueue;
+    if (this.speechStartPending && !this.isCollecting) {
+      this.speechStartPending = false;
+      this.isCollecting = true;
+      this.speechAudioFloat = this.getPreRollAudio();
+      this.callbacks.onSpeechStart();
+    }
     if (this.isCollecting) {
       this.isCollecting = false;
       if (this.speechAudioFloat.length > 0) {
@@ -766,6 +815,10 @@ export class FireRedVadWrapper {
     this.processingQueue = Promise.resolve();
     this.isCollecting = false;
     this.speechAudioFloat = new Float32Array(0);
+    this.speechStartPending = false;
+    this.audioRingBuffer.fill(0);
+    this.audioRingPos = 0;
+    this.audioRingFilled = 0;
   }
 
   destroy(): void {
