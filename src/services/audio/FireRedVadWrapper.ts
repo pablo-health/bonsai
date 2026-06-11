@@ -142,7 +142,7 @@ class StreamVadStateMachine {
         }
       } else {
         this.state = VadState.SILENCE;
-        this.silenceCnt = 0;
+        this.silenceCnt = 1;
         this.speechCnt = 0;
       }
     } else if (this.state === VadState.SPEECH) {
