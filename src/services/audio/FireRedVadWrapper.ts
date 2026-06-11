@@ -275,7 +275,7 @@ function parseKaldiCmvn(buffer: Buffer): { means: Float32Array; inverseStdVarian
 
 // ---- Fbank feature extraction (Kaldi/kaldi_native_fbank compatible) ----
 
-class FbankExtractor {
+export class FbankExtractor {
   private readonly poveyWindow: Float32Array;
   private readonly melFilterbank: Float32Array;
   private readonly filterbankLayout: number[];
@@ -288,14 +288,11 @@ class FbankExtractor {
   private readonly cmvnMeans: Float32Array;
   private readonly cmvnIstd: Float32Array;
 
-  // Ring buffer for streaming: holds (frameLength - frameShift) overlap samples
-  private ringBuffer: Float32Array;
-  private ringPos: number;
-  private ringFilled: number;
-
-  // Initial buffer: collects first frameLength samples before processing starts
-  private initBuffer: Float32Array;
-  private initBufferPos: number;
+  // Circular buffer: accumulates incoming samples, extracts frames with overlap
+  private buf: Float32Array;
+  private bufWritePos: number;
+  private bufReadPos: number;
+  private bufAvailable: number;
 
   constructor(
     sampleRate: number = FBANK_SAMPLE_RATE,
@@ -308,12 +305,10 @@ class FbankExtractor {
     this.numBins = FBANK_NUM_MEL_BINS;
     this.numFreqBins = this.fftSize / 2 + 1;
 
-    this.ringBuffer = new Float32Array(this.frameLength - this.frameShift);
-    this.ringPos = 0;
-    this.ringFilled = 0;
-
-    this.initBuffer = new Float32Array(this.frameLength);
-    this.initBufferPos = 0;
+    this.buf = new Float32Array(this.frameLength + this.frameShift);
+    this.bufWritePos = 0;
+    this.bufReadPos = 0;
+    this.bufAvailable = 0;
 
     this.poveyWindow = this.createPoveyWindow(this.frameLength);
     this.melFilterbank = this.createMelFilterbank();
@@ -323,73 +318,48 @@ class FbankExtractor {
     this.cmvnIstd = cmvnData ? cmvnData.inverseStdVariances : new Float32Array(this.numBins).fill(1);
   }
 
-  // Extract one 80-dim frame from 160 new samples
+  // Extract one 80-dim frame from newSamples (expected: frameShift samples)
   extractFrame(newSamples: Float32Array): Float32Array {
-    if (newSamples.length !== this.frameShift) {
-      throw new Error(`Expected ${this.frameShift} samples, got ${newSamples.length}`);
+    this.appendSamples(newSamples);
+
+    if (this.bufAvailable < this.frameLength) {
+      return new Float32Array(this.numBins);
     }
 
-    // Fill initial buffer until we have enough samples for the first frame
-    if (this.initBufferPos < this.frameLength) {
-      const needed = this.frameLength - this.initBufferPos;
-      const toCopy = Math.min(newSamples.length, needed);
-      this.initBuffer.set(newSamples.subarray(0, toCopy), this.initBufferPos);
-      this.initBufferPos += toCopy;
-
-      if (this.initBufferPos < this.frameLength) {
-        // Not enough yet — store remaining samples in ring buffer for later
-        const remaining = newSamples.subarray(toCopy);
-        if (remaining.length > 0) {
-          this.storeRingBuffer(remaining);
-        }
-        // Return zero features for incomplete frame (won't affect VAD)
-        return new Float32Array(this.numBins);
-      }
-
-      // Init buffer full: build first frame from init buffer
-      // Then prime ring buffer with overlap (first frameLength-frameShift samples)
-      const overlapLen = this.frameLength - this.frameShift;
-      this.ringBuffer.set(this.initBuffer.subarray(0, overlapLen), 0);
-      this.ringPos = 0;
-      this.ringFilled = overlapLen;
-
-      // Process first frame
-      return this.processFrameData(new Float32Array(this.initBuffer));
-    }
-
-    // Normal streaming: build frame from ring buffer + new samples
-    const overlapLen = this.frameLength - this.frameShift;
-    const frame = new Float32Array(this.frameLength);
-
-    // Copy overlap from ring buffer
-    if (this.ringPos + overlapLen <= this.ringFilled) {
-      frame.set(this.ringBuffer.subarray(this.ringPos, this.ringPos + overlapLen), 0);
-    } else {
-      const firstPart = this.ringFilled - this.ringPos;
-      frame.set(this.ringBuffer.subarray(this.ringPos, this.ringFilled), 0);
-      frame.set(this.ringBuffer.subarray(0, overlapLen - firstPart), firstPart);
-    }
-    // Copy new samples
-    frame.set(newSamples, overlapLen);
-
-    // Update ring buffer: store new raw samples as next overlap
-    this.storeRingBuffer(newSamples);
+    const frame = this.readFrame();
+    this.bufReadPos = (this.bufReadPos + this.frameShift) % this.buf.length;
+    this.bufAvailable -= this.frameShift;
 
     return this.processFrameData(frame);
   }
 
-  private storeRingBuffer(samples: Float32Array): void {
-    const bufLen = this.frameLength - this.frameShift;
-    const storePos = this.ringPos;
-    if (storePos + samples.length <= bufLen) {
-      this.ringBuffer.set(samples, storePos);
-    } else {
-      const firstPart = bufLen - storePos;
-      this.ringBuffer.set(samples.subarray(0, firstPart), storePos);
-      this.ringBuffer.set(samples.subarray(firstPart), 0);
+  private appendSamples(samples: Float32Array): void {
+    const bufLen = this.buf.length;
+    for (let i = 0; i < samples.length; i++) {
+      this.buf[this.bufWritePos] = samples[i];
+      this.bufWritePos = (this.bufWritePos + 1) % bufLen;
+      this.bufAvailable++;
     }
-    this.ringPos = (storePos + samples.length) % bufLen;
-    this.ringFilled = Math.min(this.ringFilled + samples.length, bufLen);
+  }
+
+  private readFrame(): Float32Array {
+    const frame = new Float32Array(this.frameLength);
+    const readPos = this.bufReadPos;
+    if (readPos + this.frameLength <= this.buf.length) {
+      frame.set(this.buf.subarray(readPos, readPos + this.frameLength));
+    } else {
+      const firstPart = this.buf.length - readPos;
+      frame.set(this.buf.subarray(readPos), 0);
+      frame.set(this.buf.subarray(0, this.frameLength - firstPart), firstPart);
+    }
+    return frame;
+  }
+
+  reset(): void {
+    this.buf.fill(0);
+    this.bufWritePos = 0;
+    this.bufReadPos = 0;
+    this.bufAvailable = 0;
   }
 
   private processFrameData(frame: Float32Array): Float32Array {
@@ -434,14 +404,6 @@ class FbankExtractor {
     }
 
     return fbank;
-  }
-
-  reset(): void {
-    this.ringBuffer.fill(0);
-    this.ringPos = 0;
-    this.ringFilled = 0;
-    this.initBuffer.fill(0);
-    this.initBufferPos = 0;
   }
 
   private createPoveyWindow(size: number): Float32Array {
@@ -603,7 +565,7 @@ class FbankExtractor {
 
 // ---- PCM conversion ----
 
-function pcm16ToFloat32(buffer: Buffer): Float32Array {
+export function pcm16ToFloat32(buffer: Buffer): Float32Array {
   const samples = buffer.length / 2;
   const result = new Float32Array(samples);
   for (let i = 0; i < samples; i++) {
