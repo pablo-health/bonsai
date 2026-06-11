@@ -28,7 +28,7 @@ import { auditLogResponseSchema, auditLogListResponseSchema } from './http/contr
 import { latencyMetricSchema, percentileSetSchema, latencyTrendPointSchema, tokenUsageByEventTypeSchema, tokenUsageTrendPointSchema } from './http/contracts/analytics';
 import { sourceDimensionSchema, sourceMetricSchema, sourceEntrySchema, sliceQueryRowSchema } from './http/contracts/sliceAnalytics';
 import { createApiKeySchema, updateApiKeySchema, deleteApiKeyBodySchema, apiKeyResponseSchema, apiKeyListResponseSchema, apiKeySettingsSchema } from './http/contracts/apiKey';
-import { listParamsSchema, llmSettingsSchema } from './http/contracts/common';
+import { listParamsSchema, llmSettingsSchema, vadSettingsSchema } from './http/contracts/common';
 import { asrConfigSchema } from './http/contracts/project';
 import { effectSchema, endConversationEffectSchema, abortConversationEffectSchema, goToStageEffectSchema, modifyUserInputEffectSchema, modifyVariablesEffectSchema, modifyUserProfileEffectSchema, variableOperationSchema, userProfileOperationSchema, callToolEffectSchema, generateResponseEffectSchema, stageActionSchema, stageActionParameterSchema, toolParameterSchema, changeVisibilityEffectSchema, banUserEffectSchema } from './types/actions';
 import { fieldDescriptorSchema } from './types/parameters';
@@ -63,7 +63,7 @@ import { elevenLabsAsrSettingsSchema } from './services/providers/asr/ElevenLabs
 import { deepgramAsrSettingsSchema } from './services/providers/asr/DeepgramAsrProvider';
 import { assemblyAiAsrSettingsSchema } from './services/providers/asr/AssemblyAiAsrProvider';
 import { speechmaticsAsrSettingsSchema } from './services/providers/asr/SpeechmaticsAsrProvider';
-import { serverVadConfigSchema, legacyVadConfigSchema, sileroVadConfigSchema, smartTurnConfigSchema } from './http/contracts/vad';
+import { serverVadConfigSchema, legacyVadConfigSchema, sileroVadConfigSchema, fireredVadConfigSchema, smartTurnConfigSchema } from './http/contracts/vad';
 import { OperatorController } from './http/controllers/OperatorController';
 import { UserController } from './http/controllers/UserController';
 import { ProjectController } from './http/controllers/ProjectController';
@@ -174,7 +174,9 @@ export function getOpenAPISpec(): any {
   registry.register('ServerVadConfig', serverVadConfigSchema);
   registry.register('LegacyVadConfig', legacyVadConfigSchema);
   registry.register('SileroVadConfig', sileroVadConfigSchema);
+  registry.register('FireRedVadConfig', fireredVadConfigSchema);
   registry.register('SmartTurnConfig', smartTurnConfigSchema);
+  registry.register('VadSettings', vadSettingsSchema);
   registry.register('AsrConfig', asrConfigSchema);
   registry.register('ModerationConfig', moderationConfigSchema);
   registry.register('SampleCopyConfig', sampleCopyConfigSchema);

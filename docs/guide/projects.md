@@ -37,14 +37,31 @@ The `asrConfig` object configures automatic speech recognition for the entire pr
   "asrProviderId": "azure-speech-provider",
   "settings": { ... },
   "unintelligiblePlaceholder": "[unintelligible]",
-  "voiceActivityDetection": true
+  "voiceActivityDetection": true,
+  "serverVad": {
+    "algorithm": "firered",
+    "speechThreshold": 0.5,
+    "smartTurn": {
+      "enabled": true,
+      "threshold": 0.5
+    }
+  }
 }
 ```
 
 - **`asrProviderId`** — References a registered ASR provider
 - **`settings`** — Provider-specific settings (e.g., language, model)
 - **`unintelligiblePlaceholder`** — Text inserted when speech cannot be transcribed
-- **`voiceActivityDetection`** — Enables automatic detection of when the user starts/stops speaking
+- **`voiceActivityDetection`** — Server VAD hint. When `true`, the client should be prepared for VAD before sending audio (cont. stream).
+- **`serverVad`** — Server-side VAD configuration. When set, the server manages the turn lifecycle automatically — clients send continuous audio without calling `start_user_voice_input` or `end_user_voice_input`. Supports three algorithms:
+
+  - **Legacy** (`algorithm: "legacy"`) — Original millisecond-based parameters with mode-based thresholds (0–3 aggressiveness)
+  - **Silero** (`algorithm: "silero"`) — Frame-based parameters with fine-grained control over speech/silence thresholds
+  - **FireRed** (`algorithm: "firered"`) — ONNX-based streaming VAD with state-of-the-art multilingual performance
+
+  See [Server VAD Config](../api/projects#server-vad-config) for full parameter tables.
+
+- **`serverVad.smartTurn`** — Optional post-VAD endpoint detection. Runs ONNX inference on buffered audio after VAD detects silence to verify the speaker has finished their turn, reducing false turn endings. See [Smart Turn Detection](../api/projects#smart-turn-detection).
 
 ## Storage Configuration
 
