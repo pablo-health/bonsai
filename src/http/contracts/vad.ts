@@ -107,10 +107,10 @@ export const fireredVadConfigSchema = z.object({
     'Minimum consecutive speech frames required before speech_start is emitted. Default: 8.'
   ),
   maxSpeechFrame: z.number().int().min(1).optional().describe(
-    'Maximum consecutive speech frames before a forced speech_end (long-utterance cutoff). Default: 2000.'
+    'Maximum consecutive speech frames before a forced speech_end (long-utterance cutoff). Default: 6000.'
   ),
   minSilenceFrame: z.number().int().min(1).optional().describe(
-    'Minimum consecutive silence frames after speech before speech_end is emitted. Default: 20.'
+    'Minimum consecutive silence frames after speech before speech_end is emitted. Default: 80.'
   ),
   padStartFrame: z.number().int().min(0).optional().describe(
     'Number of frames of pre-roll audio prepended to the detected speech start. Default: 5.'

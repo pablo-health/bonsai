@@ -39,8 +39,8 @@ const FIRERED_DEFAULTS = {
   speechThreshold: 0.5,
   smoothWindowSize: 5,
   minSpeechFrame: 8,
-  maxSpeechFrame: 2000,
-  minSilenceFrame: 20,
+  maxSpeechFrame: 6000,
+  minSilenceFrame: 80,
   padStartFrame: 5,
   gracePeriodMs: 1000,
 } as const;
