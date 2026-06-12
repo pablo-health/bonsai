@@ -1908,22 +1908,7 @@ export class ConversationRunner {
     logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
   }
 
-  /**
-     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
-     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
-     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
-     */
-  private async handleVadSpeechStart(): Promise<void> {
-    // New speech detected — cancel any pending Smart Turn continuation timer.
-    this.clearSmartTurnContinueTimer();
-
-    // Barge-in interrupt: user speaks while AI is still generating a response.
-    if (this.conversation.status === 'generating_response') {
-      await this.abortCurrentResponse();
-      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      return;
-    }
-
+  private async sendAbortAiGenerationAndUserSpeakingStarted(): Promise<void> {
     // Send abort message to client so it stops playing audio.
     try {
       const abortMessage: CALAbortAiGenerationOutputMessage = {
@@ -1950,6 +1935,84 @@ export class ConversationRunner {
     } catch (error) {
       logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
     }
+  }
+
+  async startAsrSessionIfNeeded(): Promise<void> {
+    try {
+      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      await this.changeState('receiving_user_voice');
+      if (this.asrPreWarmPromise) {
+        await this.asrPreWarmPromise;
+        this.asrPreWarmPromise = null;
+        this.stageData.asrProvider?.resetForNewTurn();
+      } else {
+        await this.stageData.asrProvider?.start();
+      }
+    } catch (error) {
+      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
+    }
+  }
+
+  /**
+     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
+     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
+     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
+     */
+  private async handleVadSpeechStart(): Promise<void> {
+    // New speech detected — cancel any pending Smart Turn continuation timer.
+    this.clearSmartTurnContinueTimer();
+
+    // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after ASR stopped.
+    //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
+    //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd
+    if (this.conversation.status === 'awaiting_user_input') {
+      if (this.waitingForPlaybackEnd) { // 1a
+        // send abort_ai_generation_output && user_speaking_started
+        await this.sendAbortAiGenerationAndUserSpeakingStarted();
+        // ASR is started here because of awaiting_user_input state
+        // switch to receiving_user_voice
+        await this.changeState('receiving_user_voice');
+      } else { // 1b
+        // send abort_ai_generation_output && user_speaking_started
+        await this.sendAbortAiGenerationAndUserSpeakingStarted();
+        // start ASR in response to VAD (if not started already)
+        await this.startAsrSessionIfNeeded();
+        // switch to receiving_user_voice
+        await this.changeState('receiving_user_voice');
+      }
+      return;
+    }
+
+    // Scenario 2: VAD reacted when receiving_user_voice: this should not happen
+    if (this.conversation.status === 'receiving_user_voice') {
+      logger.warn({ conversationId: this.stageData.conversation.id }, `Received VAD speech_start while already in receiving_user_voice state; ignoring`);
+      // TODO: subsequent barge-in?
+      return;
+    }
+
+    // Scenario 3: VAD reacted when generating_response: barge-in interrupt during AI response generation.
+    if (this.conversation.status === 'generating_response') {
+      // abort TTS completely
+      await this.abortCurrentResponse();
+      // send abort_ai_generation_output && user_speaking_started
+      await this.sendAbortAiGenerationAndUserSpeakingStarted();
+      // start ASR in response to VAD (if not started already)
+      await this.startAsrSessionIfNeeded();
+      // switch to receiving_user_voice
+      await this.changeState('receiving_user_voice');
+      return;
+    }
+
+    return;
+    
+    // Barge-in interrupt: user speaks while AI is still generating a response.
+    if (this.conversation.status === 'generating_response') {
+      await this.abortCurrentResponse();
+      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      return;
+    }
+
+    await this.sendAbortAiGenerationAndUserSpeakingStarted();
 
     // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
     if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
@@ -1962,19 +2025,7 @@ export class ConversationRunner {
     if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
       this.clearBargeInEndTimer();
       logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start after ASR stop, restarting ASR`);
-      try {
-        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-        await this.changeState('receiving_user_voice');
-        if (this.asrPreWarmPromise) {
-          await this.asrPreWarmPromise;
-          this.asrPreWarmPromise = null;
-          this.stageData.asrProvider?.resetForNewTurn();
-        } else {
-          await this.stageData.asrProvider?.start();
-        }
-      } catch (error) {
-        logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
-      }
+      await this.startAsrSessionIfNeeded();
       return;
     }
 
