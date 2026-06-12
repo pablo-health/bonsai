@@ -1963,7 +1963,7 @@ export class ConversationRunner {
     // New speech detected — cancel any pending Smart Turn continuation timer.
     this.clearSmartTurnContinueTimer();
 
-    // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after ASR stopped.
+    // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after TTS stopped.
     //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
     //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd
     if (this.conversation.status === 'awaiting_user_input') {
@@ -1971,9 +1971,10 @@ export class ConversationRunner {
         // send abort_ai_generation_output && user_speaking_started
         await this.sendAbortAiGenerationAndUserSpeakingStarted();
         // ASR is started here because of awaiting_user_input state
+        await this.startAsrSessionIfNeeded();
         // switch to receiving_user_voice
         await this.changeState('receiving_user_voice');
-      } else { // 1b
+      } else { // 1b (same as 1a for the time being)
         // send abort_ai_generation_output && user_speaking_started
         await this.sendAbortAiGenerationAndUserSpeakingStarted();
         // start ASR in response to VAD (if not started already)
