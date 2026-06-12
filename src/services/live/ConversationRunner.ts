@@ -1952,6 +1952,11 @@ export class ConversationRunner {
       } else {
         await this.stageData.asrProvider?.start();
       }
+
+      // If VAD buffered any audio before ASR was started, send it now to avoid cutting off the start of the user's speech.
+      if (this.vadProcessor) {
+        await this.stageData.asrProvider.sendAudio(this.vadProcessor.getBufferedAudio());
+      }
     } catch (error) {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
     }
