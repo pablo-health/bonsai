@@ -251,7 +251,7 @@ export class ContextTransformerExecutor {
       renderedPrompt = await this.templatingEngine.render(transformer.prompt, context);
       const text = context.userInput || '';
 
-      logger.info({ sessionId: session.id, transformerId: transformer.id }, `Rendering prompt for transformer:\n${renderedPrompt}\nWith input:\n${text}`);
+      logger.info({ sessionId: session.id, transformerId: transformer.id }, 'Executing context transformer');
 
       const messages = [
         { role: 'system' as const, content: renderedPrompt },

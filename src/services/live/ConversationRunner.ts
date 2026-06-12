@@ -1187,6 +1187,7 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
+      
       this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
@@ -1969,34 +1970,32 @@ export class ConversationRunner {
     //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
     //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd
     if (this.conversation.status === 'awaiting_user_input') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in awaiting_user_input state');
       if (this.waitingForPlaybackEnd) { // 1a
         // send abort_ai_generation_output && user_speaking_started
         await this.sendAbortAiGeneration();
         await this.sendUserSpeakingStarted();
         // ASR is started here because of awaiting_user_input state
         await this.startAsrSessionIfNeeded();
-        // switch to receiving_user_voice
-        await this.changeState('receiving_user_voice');
       } else { // 1b
         // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
         await this.sendUserSpeakingStarted();
         // start ASR in response to VAD (if not started already)
         await this.startAsrSessionIfNeeded();
-        // switch to receiving_user_voice
-        await this.changeState('receiving_user_voice');
       }
       return;
     }
 
-    // Scenario 2: VAD reacted when receiving_user_voice: this should not happen
+    // Scenario 2: VAD reacted when receiving_user_voice
     if (this.conversation.status === 'receiving_user_voice') {
-      logger.warn({ conversationId: this.stageData.conversation.id }, `Received VAD speech_start while already in receiving_user_voice state; ignoring`);
-      // TODO: subsequent barge-in?
+      // The question here is why this happened.
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in receiving_user_voice state');
       return;
     }
 
     // Scenario 3: VAD reacted when generating_response: barge-in interrupt during AI response generation.
     if (this.conversation.status === 'generating_response') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in generating_response state: barge-in interrupt');
       // abort TTS completely
       await this.abortCurrentResponse();
       // send abort_ai_generation_output && user_speaking_started
@@ -2004,71 +2003,18 @@ export class ConversationRunner {
       await this.sendUserSpeakingStarted();
       // start ASR in response to VAD (if not started already)
       await this.startAsrSessionIfNeeded();
-      // switch to receiving_user_voice
-      await this.changeState('receiving_user_voice');
       return;
     }
 
     // Scenario 4: VAD reacted when processing_user_input: we haven't even started generating a response yet
     if (this.conversation.status === 'processing_user_input') {
-      // TBD
-    }
-
-    return;
-
-    // Barge-in interrupt: user speaks while AI is still generating a response.
-    if (this.conversation.status === 'generating_response') {
-      await this.abortCurrentResponse();
-      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      return;
-    }
-
-    await this.sendUserSpeakingStarted();
-
-    // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
-    if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
-      this.clearBargeInEndTimer();
-      await this.handleSubsequentBargeInSpeechStart();
-      return;
-    }
-
-    // Subsequent barge-in speech_start after ASR stopped and user spoke again.
-    if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
-      this.clearBargeInEndTimer();
-      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start after ASR stop, restarting ASR`);
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in processing_user_input state');
+      this.isBargeIn = true;
+      // send abort_ai_generation_output && user_speaking_started
+      await this.sendAbortAiGeneration();
+      await this.sendUserSpeakingStarted();
+       // start ASR in response to VAD (if not started already)
       await this.startAsrSessionIfNeeded();
-      return;
-    }
-
-    if (this.conversation.status !== 'awaiting_user_input') return;
-
-    if (!this.stageData.asrProvider) {
-      logger.warn({ conversationId: this.stageData.conversation.id }, 'VAD speech_start: no ASR provider available');
-      return;
-    }
-
-    try {
-      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      // Transition to receiving_user_voice BEFORE awaiting asrProvider.start() so that audio
-      // chunks arriving during ASR session startup are forwarded to sendAudio() and buffered
-      // there (bufferArray), then flushed to the push stream once recognition is ready.
-      // If start() is awaited first, those chunks are silently dropped (state guard fails).
-      await this.changeState('receiving_user_voice');
-      if (this.asrPreWarmPromise) {
-        // A pre-warm is in flight or already completed: wait for it, then reuse the session.
-        await this.asrPreWarmPromise;
-        this.asrPreWarmPromise = null;
-        // Reset per-turn state (text chunks, chunk ID) accumulated during the idle period.
-        this.stageData.asrProvider.resetForNewTurn();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, reusing pre-warmed ASR session for conversation ${this.stageData.conversation.id}`);
-      } else {
-        await this.stageData.asrProvider.start();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, started ASR session for conversation ${this.stageData.conversation.id}`);
-      }
-    } catch (error) {
-      const errorMessage = `VAD speech_start: failed to start ASR: ${error instanceof Error ? error.message : String(error)}`;
-      await this.markAsFailed(errorMessage);
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to start ASR session for conversation ${this.stageData.conversation.id}`);
     }
   }
 
@@ -2189,14 +2135,14 @@ export class ConversationRunner {
     // Already in barge-in mode — do nothing (subsequent speech_start is handled by handleSubsequentBargeInSpeechStart).
     if (this.isBargeIn) return;
 
-    logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in interrupt detected');
+    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in interrupt detected');
     this.isBargeIn = true;
 
     // Cancel TTS output — the provider may still be streaming audio chunks.
     if (this.stageData.ttsProvider) {
       try {
         await this.stageData.ttsProvider.cancel();
-        logger.info({ conversationId: this.stageData.conversation.id }, 'TTS cancelled due to barge-in interrupt');
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** TTS cancelled due to barge-in interrupt');
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'TTS cancel failed during barge-in (non-fatal)');
       }

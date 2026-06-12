@@ -87,7 +87,7 @@ export class ToolExecutor {
       const actualContext = { ...context, tool: { parameters } };
       await llmProvider.init();
       const renderedPrompt = await this.templatingEngine.render(tool.prompt, actualContext);
-      logger.debug({ toolId: tool.id, renderedPrompt }, `Rendered prompt for tool "${tool.name}"`);
+      logger.debug({ toolId: tool.id }, `Rendered prompt for tool "${tool.name}"`);
 
       const messages: LlmMessage[] = [{ role: 'system' as const, content: renderedPrompt }];
       const imageMessages = this.extractImageMessages(parameters);
