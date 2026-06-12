@@ -2009,6 +2009,11 @@ export class ConversationRunner {
       return;
     }
 
+    // Scenario 4: VAD reacted when processing_user_input: we haven't even started generating a response yet
+    if (this.conversation.status === 'processing_user_input') {
+      // TBD
+    }
+
     return;
 
     // Barge-in interrupt: user speaks while AI is still generating a response.
