@@ -197,11 +197,11 @@ export class ConversationRunner {
   private outboundPendingChunk: PendingOutboundChunk | null = null;
   /** Server-side VAD processor; non-null when the project is configured with serverVad and the ASR format is PCM. */
   private vadProcessor: VadProcessor | null = null;
- /**
-     * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
-     * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
-     * is in progress or after it has been consumed by handleVadSpeechStart.
-     */
+  /**
+      * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
+      * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
+      * is in progress or after it has been consumed by handleVadSpeechStart.
+      */
   private asrPreWarmPromise: Promise<void> | null = null;
   /** Buffered utterance audio for Smart Turn endpoint detection. Set on 'utterance_audio' VAD event. */
   private smartTurnAudioBuffer: Float32Array | null = null;
@@ -616,7 +616,6 @@ export class ConversationRunner {
           const asrEndMs = Date.now();
 
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
-     
           // session timed out during silence), discard the event and clear the pre-warm promise
           // so the next speech_start will do a fresh start().
           if (this.conversation.status !== 'receiving_user_voice') {
@@ -732,7 +731,7 @@ export class ConversationRunner {
           isGenerating = false;
 
           // Snapshot turn data before any awaits to avoid reading mutated values
-          const { startMs, assistantMessageEventId, outputTurnId, ttsStartMs, fillerSentence: snapshotFillerSentence, prescriptedText: snapshotPrescriptedText } = this.turnData;
+          const { startMs, assistantMessageEventId, outputTurnId, ttsStartMs, firstAudioMs, turnIndex, fillerSentence: snapshotFillerSentence, prescriptedText: snapshotPrescriptedText } = this.turnData;
           const ttsEndMs = Date.now();
 
           // Record total turn duration and TTS duration now that all audio has been sent
@@ -746,6 +745,9 @@ export class ConversationRunner {
             backfill.turnEndMs = ttsEndMs;
             if (ttsStartMs !== null) backfill.ttsStartMs = ttsStartMs;
             backfill.ttsEndMs = ttsEndMs;
+            if (firstAudioMs !== null) backfill.firstAudioMs = firstAudioMs;
+            if (firstAudioMs !== null && startMs !== null) backfill.timeToFirstAudioMs = firstAudioMs - startMs;
+            if (turnIndex !== null) backfill.turnIndex = turnIndex;
             if (Object.keys(backfill).length > 0) {
               const updated = await this.conversationService.updateConversationEventMetadata(this.conversation.projectId, assistantMessageEventId, backfill);
               if (!updated) {
@@ -2008,12 +2010,12 @@ export class ConversationRunner {
     }
   }
 
- /**
-      * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
-      * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
-     * processUserInput onward. Only acts when in receiving_user_voice state.
-     * When Smart Turn is enabled, runs endpoint detection before stopping ASR.
-      */
+  /**
+       * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
+       * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
+      * processUserInput onward. Only acts when in receiving_user_voice state.
+      * When Smart Turn is enabled, runs endpoint detection before stopping ASR.
+       */
   private async handleVadEndOfUtterance(): Promise<void> {
     if (this.conversation.status === 'receiving_user_voice') {
       if (!this.stageData.asrProvider) return;
