@@ -2934,7 +2934,7 @@ export class ConversationRunner {
     const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
     const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
     const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
-    logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
+
     return {
       messages: truncatedFillerMessages,
       renderedPrompt,
@@ -2975,7 +2975,7 @@ export class ConversationRunner {
       const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
       const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
       const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
-      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
+      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length }, 'Filler LLM payload');
       const result = await fillerLlmProvider.generate(truncatedFillerMessages, fillerMaxTokens !== undefined ? { maxTokens: fillerMaxTokens } : undefined);
       const text = extractTextFromContent(result.content).trim();
       if (text.length > 0) {
