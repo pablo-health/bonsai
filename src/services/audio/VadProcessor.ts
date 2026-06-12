@@ -88,7 +88,7 @@ export class VadProcessor extends EventEmitter {
   private readonly config: ServerVadConfig;
   private gracePeriodEnd: number = 0;
   private lastAudioPushTime: number = 0;
-  private ringBuffer: RingBuffer = new RingBuffer(16000 * 1 * 2); // 1 second of 16-bit audio at 16kHz
+  private ringBuffer: RingBuffer;
 
   /**
    * @param sampleRate Sample rate of the incoming 16-bit PCM audio
@@ -98,6 +98,7 @@ export class VadProcessor extends EventEmitter {
     super();
     this.sampleRate = sampleRate;
     this.config = config;
+    this.ringBuffer = new RingBuffer(sampleRate * 2); // buffer up to 1 second of audio for potential pre-speech inclusion
   }
 
   /**
