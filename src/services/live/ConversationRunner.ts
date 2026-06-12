@@ -1908,7 +1908,22 @@ export class ConversationRunner {
     logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
   }
 
-  private async sendAbortAiGenerationAndUserSpeakingStarted(): Promise<void> {
+  private async sendUserSpeakingStarted(): Promise<void> {
+    // Send VAD signal that the user has started speaking
+    try {
+      const userSpeakingMsg: CALUserSpeakingStartedMessage = {
+        type: 'user_speaking_started',
+        conversationId: this.stageData.conversation.id,
+        inputTurnId: this.turnData.inputTurnId,
+      };
+      await this.channel.sendMessage(userSpeakingMsg);
+      logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, 'Sent user_speaking_started message during barge-in');
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
+    }
+  }
+
+  private async sendAbortAiGeneration(): Promise<void> {
     // Send abort message to client so it stops playing audio.
     try {
       const abortMessage: CALAbortAiGenerationOutputMessage = {
@@ -1922,19 +1937,6 @@ export class ConversationRunner {
       this.waitingForPlaybackEnd = false; // Clear the flag to allow new responses to play after this barge-in
     } catch (error) {
       logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
-    }
-
-    // Send VAD signal that the user has started speaking
-    try {
-      const userSpeakingMsg: CALUserSpeakingStartedMessage = {
-        type: 'user_speaking_started',
-        conversationId: this.stageData.conversation.id,
-        inputTurnId: this.turnData.inputTurnId,
-      };
-      await this.channel.sendMessage(userSpeakingMsg);
-      logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, 'Sent user_speaking_started message during barge-in');
-    } catch (error) {
-      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
     }
   }
 
@@ -1969,14 +1971,15 @@ export class ConversationRunner {
     if (this.conversation.status === 'awaiting_user_input') {
       if (this.waitingForPlaybackEnd) { // 1a
         // send abort_ai_generation_output && user_speaking_started
-        await this.sendAbortAiGenerationAndUserSpeakingStarted();
+        await this.sendAbortAiGeneration();
+        await this.sendUserSpeakingStarted();
         // ASR is started here because of awaiting_user_input state
         await this.startAsrSessionIfNeeded();
         // switch to receiving_user_voice
         await this.changeState('receiving_user_voice');
-      } else { // 1b (same as 1a for the time being)
-        // send abort_ai_generation_output && user_speaking_started
-        await this.sendAbortAiGenerationAndUserSpeakingStarted();
+      } else { // 1b
+        // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
+        await this.sendUserSpeakingStarted();
         // start ASR in response to VAD (if not started already)
         await this.startAsrSessionIfNeeded();
         // switch to receiving_user_voice
@@ -1997,7 +2000,8 @@ export class ConversationRunner {
       // abort TTS completely
       await this.abortCurrentResponse();
       // send abort_ai_generation_output && user_speaking_started
-      await this.sendAbortAiGenerationAndUserSpeakingStarted();
+      await this.sendAbortAiGeneration();
+      await this.sendUserSpeakingStarted();
       // start ASR in response to VAD (if not started already)
       await this.startAsrSessionIfNeeded();
       // switch to receiving_user_voice
@@ -2014,7 +2018,7 @@ export class ConversationRunner {
       return;
     }
 
-    await this.sendAbortAiGenerationAndUserSpeakingStarted();
+    await this.sendUserSpeakingStarted();
 
     // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
     if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
@@ -3184,6 +3188,7 @@ export class ConversationRunner {
       // Reset silence count only when user provides real voice input (not silence-triggered placeholder)
       if (newState === 'receiving_user_voice') {
         this.silenceCount = 0;
+        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
       }
     }
 
