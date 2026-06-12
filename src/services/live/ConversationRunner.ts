@@ -1919,6 +1919,7 @@ export class ConversationRunner {
         abortTimestampMs: Date.now(),
       };
       await this.channel.sendMessage(abortMessage);
+      this.waitingForPlaybackEnd = false; // Clear the flag to allow new responses to play after this barge-in
     } catch (error) {
       logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
     }
@@ -2004,7 +2005,7 @@ export class ConversationRunner {
     }
 
     return;
-    
+
     // Barge-in interrupt: user speaks while AI is still generating a response.
     if (this.conversation.status === 'generating_response') {
       await this.abortCurrentResponse();
