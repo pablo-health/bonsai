@@ -253,8 +253,9 @@ export class VadProcessor extends EventEmitter {
    * to retrieve pre-VAD audio for inclusion in the ASR input when the VAD emits 'speech_start'.
    */
   getBufferedAudio(): Buffer {
-    logger.info({ bufferedAudioLength: this.ringBuffer.getContents().length }, 'Retrieving buffered audio from RingBuffer');
-    return this.ringBuffer.getContents();
+    const contents = this.ringBuffer.getContents();
+    logger.info({ bufferedAudioLength: contents.length }, 'Retrieving buffered audio from RingBuffer');
+    return contents;
   }
 
   /**
