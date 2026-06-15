@@ -118,6 +118,8 @@ asrConfig: jsonb('asr_config').$type<{
         enabled?: boolean;
         threshold?: number;
       };
+      bargeInSilenceTimeout?: number;
+      bargeInSilencePlaceholder?: string;
     };
   }>(),
   acceptVoice: boolean('accept_voice').notNull().default(true),

@@ -214,7 +214,7 @@ export class ConversationRunner {
   private bargeInPartialText: string | null = null;
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
- 
+
 
   /** Timer that fires when the user is silent in awaiting_user_input state. */
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -222,6 +222,8 @@ export class ConversationRunner {
   private silenceCount: number = 0;
   /** True when the runner is waiting for the client to signal that AI audio playback has completed. */
   private waitingForPlaybackEnd: boolean = false;
+  /** Timer that fires when the user is silent in barge-in mode. */
+  private bargeInSilenceTimer: NodeJS.Timeout | null = null;
 
   /** Handles audio recording for the conversation. */
   private recorder: ConversationRecorder | null = null;
@@ -586,6 +588,7 @@ export class ConversationRunner {
             isFinal: false,
           };
           await this.channel.sendMessage(message);
+          this.clearBargeInSilenceTimer();
         });
 
         asrProvider.setOnRecognized(async (chunkId, text) => {
@@ -601,12 +604,13 @@ export class ConversationRunner {
             isFinal: true,
           };
           await this.channel.sendMessage(message);
-
+          this.clearBargeInSilenceTimer();
           chunkOrdinal = 0;
         });
 
         asrProvider.setOnRecognitionStopped(async () => {
           const asrEndMs = Date.now();
+          this.clearBargeInSilenceTimer(); // just in case the silence timer was still running when recognition stopped
 
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
           // session timed out during silence), discard the event and clear the pre-warm promise
@@ -638,7 +642,7 @@ export class ConversationRunner {
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
             logger.warn({ conversationId }, `No text recognized in VAD mode for conversation ${conversationId}, ignoring unintelligible audio`);
-            await this.changeState('awaiting_user_input');
+            await this.triggerBargeInSilenceResponse();
           } else {
             logger.warn({ conversationId }, `No text recognized for conversation ${conversationId}`);
             await this.processUserInput(this.stageData.project.asrConfig.unintelligiblePlaceholder ?? '**inaudible**', 'voice', asrEndMs);
@@ -1151,7 +1155,7 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
-      
+
       this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
@@ -1947,6 +1951,8 @@ export class ConversationRunner {
         await this.sendUserSpeakingStarted();
         // ASR is started here because of awaiting_user_input state
         await this.startAsrSessionIfNeeded();
+        // real interruption so kick off barge-in silence timer to stop ASR if user stops speaking
+        this.setBargeInSilenceTimer();
       } else { // 1b
         // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
         await this.sendUserSpeakingStarted();
@@ -1960,6 +1966,7 @@ export class ConversationRunner {
     if (this.conversation.status === 'receiving_user_voice') {
       // The question here is why this happened.
       logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in receiving_user_voice state');
+      await this.setBargeInSilenceTimer();
       return;
     }
 
@@ -1973,6 +1980,8 @@ export class ConversationRunner {
       await this.sendUserSpeakingStarted();
       // start ASR in response to VAD (if not started already)
       await this.startAsrSessionIfNeeded();
+      // kick off barge-in silence timer to stop ASR if user stops speaking
+      this.setBargeInSilenceTimer();
       return;
     }
 
@@ -1983,9 +1992,14 @@ export class ConversationRunner {
       // send abort_ai_generation_output && user_speaking_started
       await this.sendAbortAiGeneration();
       await this.sendUserSpeakingStarted();
-       // start ASR in response to VAD (if not started already)
+      // start ASR in response to VAD (if not started already)
       await this.startAsrSessionIfNeeded();
+      // kick off barge-in silence timer to stop ASR if user stops speaking
+      this.setBargeInSilenceTimer();
+      return;
     }
+
+    logger.warn({ status: this.conversation.status }, `**VAD** Received speech_start in unexpected state ${this.conversation.status}`);
   }
 
   /**
@@ -2031,6 +2045,42 @@ export class ConversationRunner {
       }
     }
   }
+
+  /** Sets a timer to stop ASR if no speech is detected after a barge-in interrupt. */
+  private setBargeInSilenceTimer(): void {
+    if (this.bargeInSilenceTimer) {
+      clearTimeout(this.bargeInSilenceTimer);
+    }
+
+    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Starting barge-in silence timer');
+    const timeout = this.stageData.project.asrConfig?.serverVad?.bargeInSilenceTimeout ?? 3000;
+    this.bargeInSilenceTimer = setTimeout(async () => {
+      this.bargeInSilenceTimer = null;
+      logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in silence timeout reached, stopping ASR');
+      try {
+        await this.stageData.asrProvider?.stop();
+        await this.triggerBargeInSilenceResponse();
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop ASR after barge-in silence timeout (non-fatal)');
+      }
+    }, timeout);
+  }
+
+  /** Triggers the barge-in silence response */
+  private async triggerBargeInSilenceResponse(): Promise<void> {
+    const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
+      ?? '[unintelligible]';
+    await this.processUserInput(placeholder, 'voice');
+  }
+
+  /** Clears the barge-in silence timer if active. */
+  private clearBargeInSilenceTimer(): void {
+    if (this.bargeInSilenceTimer) {
+      clearTimeout(this.bargeInSilenceTimer);
+      this.bargeInSilenceTimer = null;
+    }
+  }
+
 
   /**
    * Runs Smart Turn endpoint detection on the buffered utterance audio.
