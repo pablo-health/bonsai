@@ -788,7 +788,7 @@
             },
             "bargeInSilencePlaceholder": {
               "type": "string",
-              "description": "Optional placeholder text to use as a response when the user barge-ins but then stops speaking before the bargeInSilenceTimeout. If not set, no response is generated on barge-in silence timeout."
+              "description": "Optional placeholder text fed to the AI as user input when the user barge-ins but then stops speaking before the bargeInSilenceTimeout. The AI generates a response based on this prompt (e.g. \"[you misheard something the user said]\"). Default: [repeat after interruption]."
             }
           }
         }

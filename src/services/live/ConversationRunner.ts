@@ -642,7 +642,7 @@ export class ConversationRunner {
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
             logger.warn({ conversationId }, `No text recognized in VAD mode for conversation ${conversationId}, ignoring unintelligible audio`);
-            await this.changeState('awaiting_user_input');
+            await this.triggerBargeInSilenceResponse();
           } else {
             logger.warn({ conversationId }, `No text recognized for conversation ${conversationId}`);
             await this.processUserInput(this.stageData.project.asrConfig.unintelligiblePlaceholder ?? '**inaudible**', 'voice', asrEndMs);
@@ -1966,6 +1966,7 @@ export class ConversationRunner {
     if (this.conversation.status === 'receiving_user_voice') {
       // The question here is why this happened.
       logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in receiving_user_voice state');
+      await this.setBargeInSilenceTimer();
       return;
     }
 
@@ -2058,13 +2059,18 @@ export class ConversationRunner {
       logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in silence timeout reached, stopping ASR');
       try {
         await this.stageData.asrProvider?.stop();
-        const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
-          ?? '[repeat after interruption]';
-        await this.processUserInput(placeholder, 'voice');
+        await this.triggerBargeInSilenceResponse();
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop ASR after barge-in silence timeout (non-fatal)');
       }
     }, timeout);
+  }
+
+  /** Triggers the barge-in silence response */
+  private async triggerBargeInSilenceResponse(): Promise<void> {
+    const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
+      ?? '[unintelligible]';
+    await this.processUserInput(placeholder, 'voice');
   }
 
   /** Clears the barge-in silence timer if active. */
