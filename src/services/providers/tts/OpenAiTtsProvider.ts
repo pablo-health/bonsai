@@ -226,8 +226,6 @@ export class OpenAiTtsProvider extends TtsProviderBase<OpenAiTtsProviderConfig> 
       return;
     }
 
-    logger.info(`[OpenAI TTS] Synthesizing sentence: "${text}"`);
-
     // Create abort controller for this request
     const abortController = new AbortController();
     this.activeRequests.add(abortController);

@@ -200,7 +200,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     if (this.sentenceSplitter) {
       await this.sentenceSplitter.addText(text);
     } else {
-      logger.info(`[ElevenLabs] Streaming text without flush: "${text}"`);
       // Stream text to ElevenLabs without flushing - audio generation will be triggered on end()
       await this.sendTextToSocket(text, false);
     }
@@ -366,8 +365,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     if (this.settings.removeExclamationMarks) {
       text = text.replace(/!/g, '.');
     }
-
-    logger.info(`[ElevenLabs] Sending${flush ? ' and flushing' : ''} text: "${text}"`);
 
     const textMessage = {
       text: text,

@@ -521,9 +521,6 @@ export class CartesiaTtsProvider extends TtsProviderBase<CartesiaTtsProviderConf
       return;
     }
 
-    const isContinuation = !this.sentenceSplitter && !this.isFirstRequest;
-    logger.info(`[Cartesia] Sending text${isContinuation ? ' (continuation)' : ''}: "${text}"`);
-
     // Build voice configuration
     const voice: CartesiaVoiceConfig = {
       mode: 'id',

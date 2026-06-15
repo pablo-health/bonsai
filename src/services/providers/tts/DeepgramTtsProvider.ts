@@ -458,8 +458,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
       throw new Error('WebSocket is not open');
     }
 
-    logger.info(`[Deepgram] Sending text: "${text}"`);
-
     const speakMessage: DeepgramSpeakMessage = {
       type: 'Speak',
       text: text,
