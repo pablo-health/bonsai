@@ -53,7 +53,6 @@ export abstract class BaseService {
    */
   protected async requireProjectNotArchived(projectId: string): Promise<void> {
     const result = await db.select({ id: archivedProjects.id }).from(archivedProjects).where(eq(archivedProjects.id, projectId)).limit(1);
-    logger.info({ projectId, isArchived: JSON.stringify(result) }, 'Checked if project is archived');
     if (result.length > 0) {
       throw new ArchivedProjectError(`Project ${projectId} is archived and cannot be modified`);
     }

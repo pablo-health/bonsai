@@ -5,6 +5,7 @@ import type { AudioFormat } from '../../types/audio';
 import { isPcmFormat, pcmSampleRate } from './AudioFormatUtils';
 import { FireRedVadWrapper } from './FireRedVadWrapper';
 import logger from '../../utils/logger';
+import { RingBuffer } from './RingBuffer';
 
 /** VAD aggressiveness mode → positive/negative speech probability thresholds. */
 const MODE_THRESHOLDS = [
@@ -87,6 +88,7 @@ export class VadProcessor extends EventEmitter {
   private readonly config: ServerVadConfig;
   private gracePeriodEnd: number = 0;
   private lastAudioPushTime: number = 0;
+  private ringBuffer: RingBuffer;
 
   /**
    * @param sampleRate Sample rate of the incoming 16-bit PCM audio
@@ -96,6 +98,7 @@ export class VadProcessor extends EventEmitter {
     super();
     this.sampleRate = sampleRate;
     this.config = config;
+    this.ringBuffer = new RingBuffer(sampleRate * 2); // buffer up to 1 second of audio for potential pre-speech inclusion
   }
 
   /**
@@ -210,6 +213,8 @@ export class VadProcessor extends EventEmitter {
    */
   push(chunk: Buffer): void {
     if (!this.vad) return;
+
+    this.ringBuffer.push(chunk);
     this.lastAudioPushTime = Date.now();
     if (this.vad instanceof FireRedVadWrapper) {
       this.vad.processAudio(chunk);
@@ -241,6 +246,24 @@ export class VadProcessor extends EventEmitter {
    */
   hasRecentAudio(thresholdMs: number): boolean {
     return this.lastAudioPushTime > 0 && Date.now() - this.lastAudioPushTime < thresholdMs;
+  }
+
+  /**
+   * Returns the audio currently buffered in the RingBuffer as a single Buffer. This is used by the ConversationRunner
+   * to retrieve pre-VAD audio for inclusion in the ASR input when the VAD emits 'speech_start'.
+   */
+  getBufferedAudio(): Buffer {
+    const contents = this.ringBuffer.getContents();
+    logger.info({ bufferedAudioLength: contents.length }, 'Retrieving buffered audio from RingBuffer');
+    return contents;
+  }
+
+  /**
+   * Clears the RingBuffer of any buffered audio. This should be called by the ConversationRunner after retrieving buffered audio with getBufferedAudio(),
+   * to prevent old audio from being included in the next utterance after a long pause between speech segments.
+   */
+  clearBufferedAudio(): void {
+    this.ringBuffer.clear();
   }
 
   /**

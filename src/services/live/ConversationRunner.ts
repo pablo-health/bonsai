@@ -48,7 +48,7 @@ import { VadProcessor } from '../audio/VadProcessor';
 import smartTurnDetector from '../audio/SmartTurnDetector';
 import type { ServerVadConfig } from '../../http/contracts/vad';
 import { SampleCopyDistributor } from "./SampleCopyDistributor";
-import { SpeechCompletionDetector } from "./SpeechCompletionDetector";
+
 
 /** Buffer holding the last converted audio chunk, used by the last-chunk-buffer pattern. */
 type PendingOutboundChunk = { chunkId: string; ordinal: number; audio: Buffer };
@@ -214,14 +214,7 @@ export class ConversationRunner {
   private bargeInPartialText: string | null = null;
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
-  /** Debounce timer for barge-in end-of-utterance. If user speaks again before expiry, the timer is cleared and ASR keeps listening. */
-  private bargeInEndTimer: NodeJS.Timeout | null = null;
-  /** Debounce duration for ambiguous utterances — short window to catch quick continuation. */
-  private readonly BARGE_IN_AMBIGUOUS_DEBOUNCE_MS = 300;
-  /** Debounce duration for incomplete utterances — longer window to let user finish a thought. */
-  private readonly BARGE_IN_INCOMPLETE_DEBOUNCE_MS = 3000;
-  /** Fast heuristic detector for speech completion during barge-in. */
-  private speechCompletionDetector = new SpeechCompletionDetector();
+ 
 
   /** Timer that fires when the user is silent in awaiting_user_input state. */
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -631,37 +624,9 @@ export class ConversationRunner {
           const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
 
           if (this.isBargeIn && fullText) {
-            const verdict = this.speechCompletionDetector.analyze(fullText);
             this.bargeInPartialText = this.bargeInPartialText ? `${this.bargeInPartialText} ${fullText}`.trim() : fullText;
-
-            if (verdict === 'complete') {
-              logger.info({ conversationId, verdict }, `Barge-in: utterance complete, processing immediately`);
-              await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
-              return;
-            }
-
-            const debounceMs = verdict === 'incomplete' ? this.BARGE_IN_INCOMPLETE_DEBOUNCE_MS : this.BARGE_IN_AMBIGUOUS_DEBOUNCE_MS;
-            logger.info({ conversationId, verdict, debounceMs }, `Barge-in: debouncing, restarting ASR to keep listening`);
-            this.clearBargeInEndTimer();
-            try {
-              await this.stageData.asrProvider?.start();
-            } catch (error) {
-              logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during barge-in`);
-            }
-            this.bargeInEndTimer = setTimeout(async () => {
-              this.bargeInEndTimer = null;
-              if (this.bargeInPartialText && this.conversation.status === 'receiving_user_voice') {
-                logger.info({ conversationId }, `Barge-in: debounce expired, stopping ASR and processing accumulated text`);
-                // Change state first so onRecognitionStopped re-entry hits the guard at line ~569.
-                this.conversation.status = 'processing_user_input';
-                try {
-                  await this.stageData.asrProvider?.stop();
-                } catch (err) {
-                  logger.warn({ conversationId, error: err instanceof Error ? err.message : String(err) }, `Failed to stop ASR on barge-in debounce expiry`);
-                }
-                await this.processUserInput(this.bargeInPartialText, 'voice', Date.now());
-              }
-            }, debounceMs);
+            logger.info({ conversationId }, `Barge-in: processing accumulated text`);
+            await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
             return;
           }
 
@@ -669,7 +634,6 @@ export class ConversationRunner {
             logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
             await this.processUserInput(fullText, 'voice', asrEndMs);
           } else if (this.isBargeIn && this.bargeInPartialText) {
-            this.clearBargeInEndTimer();
             logger.info({ conversationId }, `Barge-in: ASR timed out with silence, processing accumulated text`);
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
@@ -1187,6 +1151,7 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
+      
       this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
@@ -1908,36 +1873,7 @@ export class ConversationRunner {
     logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
   }
 
-  /**
-     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
-     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
-     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
-     */
-  private async handleVadSpeechStart(): Promise<void> {
-    // New speech detected — cancel any pending Smart Turn continuation timer.
-    this.clearSmartTurnContinueTimer();
-
-    // Barge-in interrupt: user speaks while AI is still generating a response.
-    if (this.conversation.status === 'generating_response') {
-      await this.abortCurrentResponse();
-      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      return;
-    }
-
-    // Send abort message to client so it stops playing audio.
-    try {
-      const abortMessage: CALAbortAiGenerationOutputMessage = {
-        type: 'abort_ai_generation_output',
-        conversationId: this.stageData.conversation.id,
-        outputTurnId: this.turnData.outputTurnId || '',
-        accumulatedText: this.turnData.accumulatedText || '',
-        abortTimestampMs: Date.now(),
-      };
-      await this.channel.sendMessage(abortMessage);
-    } catch (error) {
-      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
-    }
-
+  private async sendUserSpeakingStarted(): Promise<void> {
     // Send VAD signal that the user has started speaking
     try {
       const userSpeakingMsg: CALUserSpeakingStartedMessage = {
@@ -1950,63 +1886,105 @@ export class ConversationRunner {
     } catch (error) {
       logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
     }
+  }
 
-    // Subsequent barge-in speech_start during receiving_user_voice (user paused briefly then spoke again).
-    if (this.isBargeIn && this.conversation.status === 'receiving_user_voice') {
-      this.clearBargeInEndTimer();
-      await this.handleSubsequentBargeInSpeechStart();
-      return;
+  private async sendAbortAiGeneration(): Promise<void> {
+    // Send abort message to client so it stops playing audio.
+    try {
+      const abortMessage: CALAbortAiGenerationOutputMessage = {
+        type: 'abort_ai_generation_output',
+        conversationId: this.stageData.conversation.id,
+        outputTurnId: this.turnData.outputTurnId || '',
+        accumulatedText: this.turnData.accumulatedText || '',
+        abortTimestampMs: Date.now(),
+      };
+      await this.channel.sendMessage(abortMessage);
+      this.waitingForPlaybackEnd = false; // Clear the flag to allow new responses to play after this barge-in
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
     }
+  }
 
-    // Subsequent barge-in speech_start after ASR stopped and user spoke again.
-    if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
-      this.clearBargeInEndTimer();
-      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start after ASR stop, restarting ASR`);
-      try {
-        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-        await this.changeState('receiving_user_voice');
-        if (this.asrPreWarmPromise) {
-          await this.asrPreWarmPromise;
-          this.asrPreWarmPromise = null;
-          this.stageData.asrProvider?.resetForNewTurn();
-        } else {
-          await this.stageData.asrProvider?.start();
-        }
-      } catch (error) {
-        logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
-      }
-      return;
-    }
-
-    if (this.conversation.status !== 'awaiting_user_input') return;
-
-    if (!this.stageData.asrProvider) {
-      logger.warn({ conversationId: this.stageData.conversation.id }, 'VAD speech_start: no ASR provider available');
-      return;
-    }
-
+  async startAsrSessionIfNeeded(): Promise<void> {
     try {
       this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      // Transition to receiving_user_voice BEFORE awaiting asrProvider.start() so that audio
-      // chunks arriving during ASR session startup are forwarded to sendAudio() and buffered
-      // there (bufferArray), then flushed to the push stream once recognition is ready.
-      // If start() is awaited first, those chunks are silently dropped (state guard fails).
       await this.changeState('receiving_user_voice');
       if (this.asrPreWarmPromise) {
-        // A pre-warm is in flight or already completed: wait for it, then reuse the session.
         await this.asrPreWarmPromise;
         this.asrPreWarmPromise = null;
-        // Reset per-turn state (text chunks, chunk ID) accumulated during the idle period.
-        this.stageData.asrProvider.resetForNewTurn();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, reusing pre-warmed ASR session for conversation ${this.stageData.conversation.id}`);
+        this.stageData.asrProvider?.resetForNewTurn();
       } else {
-        await this.stageData.asrProvider.start();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, started ASR session for conversation ${this.stageData.conversation.id}`);
+        await this.stageData.asrProvider?.start();
+      }
+
+      // If VAD buffered any audio before ASR was started, send it now to avoid cutting off the start of the user's speech.
+      if (this.vadProcessor) {
+        await this.forwardToAsr(this.vadProcessor.getBufferedAudio());
+        this.vadProcessor.clearBufferedAudio();
       }
     } catch (error) {
-      const errorMessage = `VAD speech_start: failed to start ASR: ${error instanceof Error ? error.message : String(error)}`;
-      await this.markAsFailed(errorMessage);
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to start ASR session for conversation ${this.stageData.conversation.id}`);
+      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
+    }
+  }
+
+  /**
+     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
+     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
+     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
+     */
+  private async handleVadSpeechStart(): Promise<void> {
+    // New speech detected — cancel any pending Smart Turn continuation timer.
+    this.clearSmartTurnContinueTimer();
+
+    // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after TTS stopped.
+    //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
+    //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd (technically it is a barge-in, but we don't care at this point)
+    if (this.conversation.status === 'awaiting_user_input') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in awaiting_user_input state');
+      if (this.waitingForPlaybackEnd) { // 1a
+        // send abort_ai_generation_output && user_speaking_started
+        await this.sendAbortAiGeneration();
+        await this.sendUserSpeakingStarted();
+        // ASR is started here because of awaiting_user_input state
+        await this.startAsrSessionIfNeeded();
+      } else { // 1b
+        // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
+        await this.sendUserSpeakingStarted();
+        // start ASR in response to VAD (if not started already)
+        await this.startAsrSessionIfNeeded();
+      }
+      return;
+    }
+
+    // Scenario 2: VAD reacted when receiving_user_voice
+    if (this.conversation.status === 'receiving_user_voice') {
+      // The question here is why this happened.
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in receiving_user_voice state');
+      return;
+    }
+
+    // Scenario 3: VAD reacted when generating_response: barge-in interrupt during AI response generation.
+    if (this.conversation.status === 'generating_response') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in generating_response state: barge-in interrupt');
+      // abort TTS completely
+      await this.abortCurrentResponse();
+      // send abort_ai_generation_output && user_speaking_started
+      await this.sendAbortAiGeneration();
+      await this.sendUserSpeakingStarted();
+      // start ASR in response to VAD (if not started already)
+      await this.startAsrSessionIfNeeded();
+      return;
+    }
+
+    // Scenario 4: VAD reacted when processing_user_input: we haven't even started generating a response yet
+    if (this.conversation.status === 'processing_user_input') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in processing_user_input state');
+      this.isBargeIn = true;
+      // send abort_ai_generation_output && user_speaking_started
+      await this.sendAbortAiGeneration();
+      await this.sendUserSpeakingStarted();
+       // start ASR in response to VAD (if not started already)
+      await this.startAsrSessionIfNeeded();
     }
   }
 
@@ -2124,46 +2102,24 @@ export class ConversationRunner {
    * transcript (partial + new utterance) will be processed as a fresh turn when recognition stops.
    */
   public async abortCurrentResponse(): Promise<void> {
-    // Already in barge-in mode — do nothing (subsequent speech_start is handled by handleSubsequentBargeInSpeechStart).
+    // Already in barge-in mode — do nothing.
     if (this.isBargeIn) return;
 
-    logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in interrupt detected');
+    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in interrupt detected');
     this.isBargeIn = true;
 
     // Cancel TTS output — the provider may still be streaming audio chunks.
     if (this.stageData.ttsProvider) {
       try {
         await this.stageData.ttsProvider.cancel();
-        logger.info({ conversationId: this.stageData.conversation.id }, 'TTS cancelled due to barge-in interrupt');
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** TTS cancelled due to barge-in interrupt');
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'TTS cancel failed during barge-in (non-fatal)');
       }
     }
   }
 
-  /**
-   * Handles subsequent VAD speech_start during barge-in mode. When a user pauses briefly
-   * (triggering VAD end_of_utterance) but then continues speaking, this restarts the ASR
-   * session so the new audio is captured. The previous partial transcript is preserved via
-   * asrProvider.resetForNewTurn() which clears text chunks but keeps the session open.
-   */
-  private async handleSubsequentBargeInSpeechStart(): Promise<void> {
-    if (!this.isBargeIn) return;
-    if (this.conversation.status !== 'receiving_user_voice') return;
 
-    if (!this.stageData.asrProvider) {
-      logger.warn({ conversationId: this.stageData.conversation.id }, 'Subsequent barge-in speech_start: no ASR provider available');
-      return;
-    }
-
-    try {
-      // Reset per-turn state (text chunks, chunk ID) while keeping the ASR session alive.
-      this.stageData.asrProvider.resetForNewTurn();
-      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start, reset ASR for continued listening`);
-    } catch (error) {
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to reset ASR during subsequent barge-in speech_start`);
-    }
-  }
 
   /**
    * Sets up the outbound audio converter from the TTS provider's native output format to the
@@ -2378,7 +2334,7 @@ export class ConversationRunner {
       const moderationResult = await this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
-        if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
         return;
       }
       userInput = newUserInput;
@@ -2515,7 +2471,7 @@ export class ConversationRunner {
       const moderationResult = await parallelModerationPromise;
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
-        if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
         return;
       }
       userInput = newUserInput;
@@ -2786,7 +2742,6 @@ export class ConversationRunner {
     // Reset barge-in state after turn completes (success, failure, or exception).
     if (this.isBargeIn) {
       logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in turn completed, resetting barge-in state');
-      this.clearBargeInEndTimer();
       this.isBargeIn = false;
       this.bargeInPartialText = null;
     }
@@ -2920,7 +2875,7 @@ export class ConversationRunner {
     const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
     const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
     const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
-    logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
+
     return {
       messages: truncatedFillerMessages,
       renderedPrompt,
@@ -2961,7 +2916,7 @@ export class ConversationRunner {
       const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
       const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
       const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
-      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length, messages: truncatedFillerMessages.map(m => ({ role: m.role, content: m.content })) }, 'Filler LLM payload');
+      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length }, 'Filler LLM payload');
       const result = await fillerLlmProvider.generate(truncatedFillerMessages, fillerMaxTokens !== undefined ? { maxTokens: fillerMaxTokens } : undefined);
       const text = extractTextFromContent(result.content).trim();
       if (text.length > 0) {
@@ -3048,12 +3003,7 @@ export class ConversationRunner {
     return this.conversation.statusDetails;
   }
 
-  private clearBargeInEndTimer(): void {
-    if (this.bargeInEndTimer) {
-      clearTimeout(this.bargeInEndTimer);
-      this.bargeInEndTimer = null;
-    }
-  }
+
 
   private clearSilenceTimer(): void {
     if (this.silenceTimer) {
@@ -3131,6 +3081,7 @@ export class ConversationRunner {
       // Reset silence count only when user provides real voice input (not silence-triggered placeholder)
       if (newState === 'receiving_user_voice') {
         this.silenceCount = 0;
+        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
       }
     }
 
