@@ -1951,13 +1951,13 @@ export class ConversationRunner {
         await this.sendUserSpeakingStarted();
         // ASR is started here because of awaiting_user_input state
         await this.startAsrSessionIfNeeded();
+        // real interruption so kick off barge-in silence timer to stop ASR if user stops speaking
+        this.setBargeInSilenceTimer();
       } else { // 1b
         // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
         await this.sendUserSpeakingStarted();
         // start ASR in response to VAD (if not started already)
         await this.startAsrSessionIfNeeded();
-        // real interruption so kick off barge-in silence timer to stop ASR if user stops speaking
-        this.setBargeInSilenceTimer();
       }
       return;
     }
@@ -2050,15 +2050,21 @@ export class ConversationRunner {
     if (this.bargeInSilenceTimer) {
       clearTimeout(this.bargeInSilenceTimer);
     }
+
+    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Starting barge-in silence timer');
+    const timeout = this.stageData.project.asrConfig?.serverVad?.bargeInSilenceTimeout ?? 3000;
     this.bargeInSilenceTimer = setTimeout(async () => {
       this.bargeInSilenceTimer = null;
       logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in silence timeout reached, stopping ASR');
       try {
         await this.stageData.asrProvider?.stop();
+        const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
+          ?? '[repeat after interruption]';
+        await this.processUserInput(placeholder, 'voice');
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop ASR after barge-in silence timeout (non-fatal)');
       }
-    }, 3000); // make it configurable
+    }, timeout);
   }
 
   /** Clears the barge-in silence timer if active. */

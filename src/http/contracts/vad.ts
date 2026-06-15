@@ -153,6 +153,12 @@ export const serverVadConfigSchema = z.preprocess(
   smartTurn: smartTurnConfigSchema.optional().describe(
     'Optional Smart Turn endpoint detection configuration. Runs after VAD silence detection to verify turn completion.'
   ),
+  bargeInSilenceTimeout: z.number().int().min(500).max(10000).default(3000).describe(
+    'Duration in milliseconds to wait for the user to continue speaking after a barge-in interrupt. If silence is detected for this duration, ASR is stopped. Default: 3000.'
+  ),
+  bargeInSilencePlaceholder: z.string().optional().describe(
+    'Optional placeholder text fed to the AI as user input when the user barge-ins but then stops speaking before the bargeInSilenceTimeout. The AI generates a response based on this prompt (e.g. "[you misheard something the user said]"). Default: [repeat after interruption].'
+  ),
 })).openapi('ServerVadConfig');
 
 /** Server-side VAD configuration type (discriminated union) */
