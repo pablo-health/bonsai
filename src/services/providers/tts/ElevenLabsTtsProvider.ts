@@ -270,7 +270,7 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         this.audioDurationMs += chunkDuration;
         this.audioChunks = [];
 
-        logger.info(`[ElevenLabs] Chunk #${this.chunkOrdinal} duration: ${chunkDuration}ms`);
+        logger.debug(`[ElevenLabs] Chunk #${this.chunkOrdinal} duration: ${chunkDuration}ms`);
 
         const chunk: GeneratedAudioChunk = {
           chunkId: this.generateChunkId(),
