@@ -255,14 +255,12 @@ export class AzureAsrProvider extends AsrProviderBase<AzureAsrProviderConfig> {
       if (this.audioStream) {
         const arrayBuffer = audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength) as ArrayBuffer;
         this.audioStream.write(arrayBuffer);
-        logger.info(`[ASR] Sent audio chunk`);
       } else {
         logger.warn(`[ASR] No audio stream available`);
       }
     } else {
       // If the recognizer is not started, store the buffer in the array
       this.bufferArray.push(audio);
-      logger.info(`[ASR] Buffered audio chunk`);
     }
   }
 
