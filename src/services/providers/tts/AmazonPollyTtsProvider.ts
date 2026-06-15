@@ -185,7 +185,6 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
     }
 
     if (this.sentenceSplitter) {
-      logger.debug(`[Amazon Polly TTS] Adding text to sentence splitter: "${text}"`);
       await this.sentenceSplitter.addText(text);
     } else {
       logger.debug(`[Amazon Polly TTS] Buffering text: "${text}"`);

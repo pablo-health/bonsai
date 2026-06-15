@@ -51,13 +51,26 @@ class SmartTurnDetector {
       return { isEndpoint: false, endpointProbability: 0 };
     }
 
+    const startTime = performance.now();
+
     const padded = this.padOrTruncate(audio);
+    const featureExtractionStart = performance.now();
     const result = await this.processor(padded);
+    const featureExtractionMs = performance.now() - featureExtractionStart;
     const tensor = new ort.Tensor('float32', result.input_features.data, [1, N_MEL, EXPECTED_FRAMES]);
 
+    const inferenceStart = performance.now();
     const outputs = await this.session.run({ input_features: tensor });
+    const inferenceMs = performance.now() - inferenceStart;
+
+    const totalMs = performance.now() - startTime;
     const outputKey = Object.keys(outputs)[0];
     const endpointProbability = Number(outputs[outputKey].data[0]);
+
+    logger.info(
+      { totalMs: +totalMs.toFixed(1), featureExtractionMs: +featureExtractionMs.toFixed(1), inferenceMs: +inferenceMs.toFixed(1), audioSamples: audio.length },
+      'SmartTurn inference timing'
+    );
 
     return {
       isEndpoint: endpointProbability > 0.5,

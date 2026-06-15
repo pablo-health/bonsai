@@ -288,8 +288,6 @@ export class CartesiaTtsProvider extends TtsProviderBase<CartesiaTtsProviderConf
    */
   async sendText(text: string): Promise<void> {
     if (this.sentenceSplitter) {
-      logger.info(`[Cartesia] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call sendTextToSocket for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       // Use streaming with continuations: buffer text and flush with timer

@@ -198,8 +198,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
    */
   async sendText(text: string): Promise<void> {
     if (this.sentenceSplitter) {
-      logger.info(`[ElevenLabs] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call sendTextToSocket for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       logger.info(`[ElevenLabs] Streaming text without flush: "${text}"`);

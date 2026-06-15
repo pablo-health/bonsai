@@ -193,8 +193,6 @@ export class AzureTtsProvider extends TtsProviderBase<AzureTtsProviderConfig> {
     }
 
     if (this.sentenceSplitter) {
-      logger.debug(`[Azure TTS] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call synthesizeSentence for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       logger.debug(`[Azure TTS] Buffering text: "${text}"`);

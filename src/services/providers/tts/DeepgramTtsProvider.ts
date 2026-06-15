@@ -274,8 +274,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
    */
   async sendText(text: string): Promise<void> {
     if (this.sentenceSplitter) {
-      logger.info(`[Deepgram] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call sendTextToSocket for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       logger.debug(`[Deepgram] Buffering text: "${text}"`);
