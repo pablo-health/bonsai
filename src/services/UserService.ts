@@ -280,6 +280,16 @@ export class UserService extends BaseService {
   }
 
   /**
+   * Resets a user's profile to the provided value. Used to restore test user state between scenario runs.
+   * @param projectId - The project the user belongs to
+   * @param userId - The unique identifier of the user
+   * @param profile - The profile to reset to
+   */
+  async resetUserProfile(projectId: string, userId: string, profile: Record<string, unknown>): Promise<void> {
+    await db.update(users).set({ profile, updatedAt: new Date() }).where(and(eq(users.projectId, projectId), eq(users.id, userId)));
+  }
+
+  /**
    * Bans a user within a project. Intended for internal system use (e.g. triggered by conversation effects).
    * @param projectId - The project the user belongs to
    * @param userId - The unique identifier of the user to ban

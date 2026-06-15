@@ -215,6 +215,7 @@ export class ScenarioRunExecutorService {
       const syntheticUserId = `tester_${slot.testerId}`;
 
       await this.userService.ensureUserExists(run.projectId, syntheticUserId);
+      await this.userService.resetUserProfile(run.projectId, syntheticUserId, tester.userProfile ?? {});
 
       const conversationId = generateId(ID_PREFIXES.CONVERSATION);
       const sessionId = generateId(ID_PREFIXES.SCENARIO_CONVERSATION);
