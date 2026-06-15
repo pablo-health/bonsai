@@ -48,7 +48,7 @@ import { VadProcessor } from '../audio/VadProcessor';
 import smartTurnDetector from '../audio/SmartTurnDetector';
 import type { ServerVadConfig } from '../../http/contracts/vad';
 import { SampleCopyDistributor } from "./SampleCopyDistributor";
-import { SpeechCompletionDetector } from "./SpeechCompletionDetector";
+
 
 /** Buffer holding the last converted audio chunk, used by the last-chunk-buffer pattern. */
 type PendingOutboundChunk = { chunkId: string; ordinal: number; audio: Buffer };
@@ -214,14 +214,7 @@ export class ConversationRunner {
   private bargeInPartialText: string | null = null;
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
-  /** Debounce timer for barge-in end-of-utterance. If user speaks again before expiry, the timer is cleared and ASR keeps listening. */
-  private bargeInEndTimer: NodeJS.Timeout | null = null;
-  /** Debounce duration for ambiguous utterances — short window to catch quick continuation. */
-  private readonly BARGE_IN_AMBIGUOUS_DEBOUNCE_MS = 300;
-  /** Debounce duration for incomplete utterances — longer window to let user finish a thought. */
-  private readonly BARGE_IN_INCOMPLETE_DEBOUNCE_MS = 3000;
-  /** Fast heuristic detector for speech completion during barge-in. */
-  private speechCompletionDetector = new SpeechCompletionDetector();
+ 
 
   /** Timer that fires when the user is silent in awaiting_user_input state. */
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -631,37 +624,9 @@ export class ConversationRunner {
           const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
 
           if (this.isBargeIn && fullText) {
-            const verdict = this.speechCompletionDetector.analyze(fullText);
             this.bargeInPartialText = this.bargeInPartialText ? `${this.bargeInPartialText} ${fullText}`.trim() : fullText;
-
-            if (verdict === 'complete') {
-              logger.info({ conversationId, verdict }, `Barge-in: utterance complete, processing immediately`);
-              await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
-              return;
-            }
-
-            const debounceMs = verdict === 'incomplete' ? this.BARGE_IN_INCOMPLETE_DEBOUNCE_MS : this.BARGE_IN_AMBIGUOUS_DEBOUNCE_MS;
-            logger.info({ conversationId, verdict, debounceMs }, `Barge-in: debouncing, restarting ASR to keep listening`);
-            this.clearBargeInEndTimer();
-            try {
-              await this.stageData.asrProvider?.start();
-            } catch (error) {
-              logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during barge-in`);
-            }
-            this.bargeInEndTimer = setTimeout(async () => {
-              this.bargeInEndTimer = null;
-              if (this.bargeInPartialText && this.conversation.status === 'receiving_user_voice') {
-                logger.info({ conversationId }, `Barge-in: debounce expired, stopping ASR and processing accumulated text`);
-                // Change state first so onRecognitionStopped re-entry hits the guard at line ~569.
-                this.conversation.status = 'processing_user_input';
-                try {
-                  await this.stageData.asrProvider?.stop();
-                } catch (err) {
-                  logger.warn({ conversationId, error: err instanceof Error ? err.message : String(err) }, `Failed to stop ASR on barge-in debounce expiry`);
-                }
-                await this.processUserInput(this.bargeInPartialText, 'voice', Date.now());
-              }
-            }, debounceMs);
+            logger.info({ conversationId }, `Barge-in: processing accumulated text`);
+            await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
             return;
           }
 
@@ -669,7 +634,6 @@ export class ConversationRunner {
             logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
             await this.processUserInput(fullText, 'voice', asrEndMs);
           } else if (this.isBargeIn && this.bargeInPartialText) {
-            this.clearBargeInEndTimer();
             logger.info({ conversationId }, `Barge-in: ASR timed out with silence, processing accumulated text`);
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
@@ -1974,7 +1938,7 @@ export class ConversationRunner {
 
     // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after TTS stopped.
     //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
-    //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd
+    //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd (technically it is a barge-in, but we don't care at this point)
     if (this.conversation.status === 'awaiting_user_input') {
       logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in awaiting_user_input state');
       if (this.waitingForPlaybackEnd) { // 1a
@@ -2138,7 +2102,7 @@ export class ConversationRunner {
    * transcript (partial + new utterance) will be processed as a fresh turn when recognition stops.
    */
   public async abortCurrentResponse(): Promise<void> {
-    // Already in barge-in mode — do nothing (subsequent speech_start is handled by handleSubsequentBargeInSpeechStart).
+    // Already in barge-in mode — do nothing.
     if (this.isBargeIn) return;
 
     logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in interrupt detected');
@@ -2155,29 +2119,7 @@ export class ConversationRunner {
     }
   }
 
-  /**
-   * Handles subsequent VAD speech_start during barge-in mode. When a user pauses briefly
-   * (triggering VAD end_of_utterance) but then continues speaking, this restarts the ASR
-   * session so the new audio is captured. The previous partial transcript is preserved via
-   * asrProvider.resetForNewTurn() which clears text chunks but keeps the session open.
-   */
-  private async handleSubsequentBargeInSpeechStart(): Promise<void> {
-    if (!this.isBargeIn) return;
-    if (this.conversation.status !== 'receiving_user_voice') return;
 
-    if (!this.stageData.asrProvider) {
-      logger.warn({ conversationId: this.stageData.conversation.id }, 'Subsequent barge-in speech_start: no ASR provider available');
-      return;
-    }
-
-    try {
-      // Reset per-turn state (text chunks, chunk ID) while keeping the ASR session alive.
-      this.stageData.asrProvider.resetForNewTurn();
-      logger.info({ conversationId: this.stageData.conversation.id }, `Subsequent barge-in speech_start, reset ASR for continued listening`);
-    } catch (error) {
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to reset ASR during subsequent barge-in speech_start`);
-    }
-  }
 
   /**
    * Sets up the outbound audio converter from the TTS provider's native output format to the
@@ -2392,7 +2334,7 @@ export class ConversationRunner {
       const moderationResult = await this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
-        if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
         return;
       }
       userInput = newUserInput;
@@ -2529,7 +2471,7 @@ export class ConversationRunner {
       const moderationResult = await parallelModerationPromise;
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
       if (newUserInput === null) {
-        if (this.isBargeIn) { this.clearBargeInEndTimer(); this.isBargeIn = false; this.bargeInPartialText = null; }
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
         return;
       }
       userInput = newUserInput;
@@ -2800,7 +2742,6 @@ export class ConversationRunner {
     // Reset barge-in state after turn completes (success, failure, or exception).
     if (this.isBargeIn) {
       logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in turn completed, resetting barge-in state');
-      this.clearBargeInEndTimer();
       this.isBargeIn = false;
       this.bargeInPartialText = null;
     }
@@ -3062,12 +3003,7 @@ export class ConversationRunner {
     return this.conversation.statusDetails;
   }
 
-  private clearBargeInEndTimer(): void {
-    if (this.bargeInEndTimer) {
-      clearTimeout(this.bargeInEndTimer);
-      this.bargeInEndTimer = null;
-    }
-  }
+
 
   private clearSilenceTimer(): void {
     if (this.silenceTimer) {
