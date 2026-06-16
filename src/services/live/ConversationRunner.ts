@@ -1987,15 +1987,10 @@ export class ConversationRunner {
 
     // Scenario 4: VAD reacted when processing_user_input: we haven't even started generating a response yet
     if (this.conversation.status === 'processing_user_input') {
-      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in processing_user_input state');
-      this.isBargeIn = true;
-      // send abort_ai_generation_output && user_speaking_started
-      await this.sendAbortAiGeneration();
-      await this.sendUserSpeakingStarted();
-      // start ASR in response to VAD (if not started already)
-      await this.startAsrSessionIfNeeded();
-      // kick off barge-in silence timer to stop ASR if user stops speaking
-      this.setBargeInSilenceTimer();
+      logger.info({ status: this.conversation.status }, '**VAD** Ignoring VAD speech start in processing_user_input state');
+      // TODO: this is a very complex scenario as we have in-flight processing that can cause status transitions.
+      // We should consider whether we want to allow barge-in during processing_user_input, and if so, how to handle it.
+      // For now, we will ignore the VAD to prevent very weird issues caused by race conditions.
       return;
     }
 
