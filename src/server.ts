@@ -66,6 +66,7 @@ import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkP
 import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
+import SpeexResamplerClass from './services/audio/speexResampler';
 import smartTurnDetector from './services/audio/SmartTurnDetector';
 import { preloadFireRedVad } from './services/audio/FireRedVadWrapper';
 
@@ -282,6 +283,15 @@ export async function createApp(): Promise<express.Application> {
   // container.resolve(SendGridChannelHost).registerRoutes(app);
   // container.resolve(SesChannelHost).registerRoutes(app);
   container.resolve(SmtpImapChannelHost).registerRoutes(app);
+
+  try {
+    await SpeexResamplerClass.initPromise;
+    const warmup = new SpeexResamplerClass(1, 16000, 8000, 3);
+    warmup.processChunk(Buffer.alloc(320));
+    logger.info('Speex resampler WASM initialized');
+  } catch (err) {
+    logger.warn({ error: err.message }, 'Speex resampler failed to initialize (non-fatal, will load on first use)');
+  }
 
   try {
     await smartTurnDetector.load();
