@@ -107,6 +107,11 @@ export class AzureAsrProvider extends AsrProviderBase<AzureAsrProviderConfig> {
    * a new push stream, audio config, and recognizer are created before starting.
    */
   async start(): Promise<void> {
+    if (this.recognising) {
+      logger.warn(`[ASR] Recognition session is already started`);
+      return;
+    }
+    
     if (!this.azureSpeechConfig) {
       throw new Error('Azure Speech recognizer not initialized. Call init() first.');
     }
