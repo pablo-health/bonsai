@@ -23,6 +23,9 @@ import type {
   StorageConfigExchangeV1,
   ModerationConfigExchangeV1,
   FillerSettingsExchangeV1,
+  CostManagementConfigExchangeV1,
+  SampleCopyConfigExchangeV1,
+  RecordingConfigExchangeV1,
 } from '../http/contracts/projectExchange';
 
 /**
@@ -63,8 +66,8 @@ export class ProjectExchangeService extends BaseService {
     // Fetch project (archived projects are also exportable)
     const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (!project) {
-       throw new NotFoundError(`Project ${projectId} not found`);
-     }
+      throw new NotFoundError(`Project ${projectId} not found`);
+    }
 
     // Fetch all child entities in parallel
     const [
@@ -92,14 +95,19 @@ export class ProjectExchangeService extends BaseService {
     // Collect all referenced provider IDs
     const providerIds = new Set<string>();
     if (project.asrConfig?.asrProviderId) {
-       providerIds.add(project.asrConfig.asrProviderId);
-     }
-     if (project.storageConfig?.storageProviderId) {
-       providerIds.add(project.storageConfig.storageProviderId);
-     }
-     if (project.moderationConfig?.llmProviderId) {
-       providerIds.add(project.moderationConfig.llmProviderId);
-     }
+      providerIds.add(project.asrConfig.asrProviderId);
+    }
+    if (project.storageConfig?.storageProviderId) {
+      providerIds.add(project.storageConfig.storageProviderId);
+    }
+    if (project.moderationConfig?.llmProviderId) {
+      providerIds.add(project.moderationConfig.llmProviderId);
+    }
+    if (project.costManagementConfig?.limits) {
+      for (const providerId of Object.keys(project.costManagementConfig.limits)) {
+        if (providerId !== '*') providerIds.add(providerId);
+      }
+    }
     for (const a of agentRows) {
       if (a.ttsProviderId) providerIds.add(a.ttsProviderId);
       if (a.fillerSettings?.llmProviderId) {
@@ -107,17 +115,17 @@ export class ProjectExchangeService extends BaseService {
       }
     }
     for (const s of stageRows) {
-       if (s.llmProviderId) providerIds.add(s.llmProviderId);
-     }
-     for (const c of classifierRows) {
-       if (c.llmProviderId) providerIds.add(c.llmProviderId);
-     }
-     for (const t of transformerRows) {
-       if (t.llmProviderId) providerIds.add(t.llmProviderId);
-     }
-     for (const t of toolRows) {
-       if (t.llmProviderId) providerIds.add(t.llmProviderId);
-     }
+      if (s.llmProviderId) providerIds.add(s.llmProviderId);
+    }
+    for (const c of classifierRows) {
+      if (c.llmProviderId) providerIds.add(c.llmProviderId);
+    }
+    for (const t of transformerRows) {
+      if (t.llmProviderId) providerIds.add(t.llmProviderId);
+    }
+    for (const t of toolRows) {
+      if (t.llmProviderId) providerIds.add(t.llmProviderId);
+    }
 
     // Batch-fetch providers and build hint map
     const hintMap = new Map<string, ProviderHint>();
@@ -132,15 +140,25 @@ export class ProjectExchangeService extends BaseService {
         .where(inArray(providers.id, [...providerIds]));
       for (const p of providerRows) {
         hintMap.set(p.id, {
-         type: p.providerType as ProviderHint['type'],
-         apiType: p.apiType,
-       });
+          type: p.providerType as ProviderHint['type'],
+          apiType: p.apiType,
+        });
       }
     }
 
     const hint = (id: string | null | undefined): ProviderHint | undefined => {
-       return id ? hintMap.get(id) : undefined;
-     };
+      return id ? hintMap.get(id) : undefined;
+    };
+
+    // Transform costManagementConfig — replace provider IDs with hint keys
+    const costManagementConfig: CostManagementConfigExchangeV1 = project.costManagementConfig ? {
+      limits: Object.fromEntries(
+        Object.entries(project.costManagementConfig.limits).map(([providerId, models]) => [
+          providerId === '*' ? '*' : (hint(providerId) ? `${hint(providerId).type}:${hint(providerId).apiType}` : providerId),
+          models,
+        ]),
+      ),
+    } : undefined;
 
     // Transform asrConfig
     const asrConfig: AsrConfigExchangeV1 = project.asrConfig ? {
@@ -167,22 +185,23 @@ export class ProjectExchangeService extends BaseService {
     const moderationConfig: ModerationConfigExchangeV1 | null = project.moderationConfig ? {
       enabled: project.moderationConfig.enabled,
       llmHint: hint(project.moderationConfig.llmProviderId) ?? {
-         type: 'llm',
-         apiType: 'unknown',
-       },
+        type: 'llm',
+        apiType: 'unknown',
+      },
       blockedCategories: project.moderationConfig.blockedCategories,
+      mode: project.moderationConfig.mode,
     } : null;
 
     // Transform filler settings helper
     const transformFiller = (
-       f: { llmProviderId: string; llmSettings?: any; prompt: string; historyMessageCount?: number } | null | undefined,
-     ): FillerSettingsExchangeV1 | null => {
+      f: { llmProviderId: string; llmSettings?: any; prompt: string; historyMessageCount?: number } | null | undefined,
+    ): FillerSettingsExchangeV1 | null => {
       if (!f) return null;
       return {
         llmHint: hint(f.llmProviderId) ?? {
-         type: 'llm',
-         apiType: 'unknown',
-       },
+          type: 'llm',
+          apiType: 'unknown',
+        },
         llmSettings: f.llmSettings,
         prompt: f.prompt,
         historyMessageCount: f.historyMessageCount ?? 0,
@@ -201,6 +220,7 @@ export class ProjectExchangeService extends BaseService {
         generateVoice: project.generateVoice,
         storageConfig,
         moderationConfig,
+        costManagementConfig,
         constants: project.constants,
         metadata: project.metadata,
         timezone: project.timezone,
@@ -208,7 +228,17 @@ export class ProjectExchangeService extends BaseService {
         autoCreateUsers: project.autoCreateUsers,
         userProfileVariableDescriptors: project.userProfileVariableDescriptors,
         defaultGuardrailClassifierId: project.defaultGuardrailClassifierId,
+        sampleCopyConfig: project.sampleCopyConfig ? {
+          defaultClassifierId: project.sampleCopyConfig.defaultClassifierId,
+        } : undefined,
+        startingStageId: project.startingStageId,
         conversationTimeoutSeconds: project.conversationTimeoutSeconds,
+        recordingConfig: project.recordingConfig ? {
+          enabled: project.recordingConfig.enabled,
+          recordInput: project.recordingConfig.recordInput,
+          recordOutput: project.recordingConfig.recordOutput,
+          format: project.recordingConfig.format as RecordingConfigExchangeV1['format'],
+        } : undefined,
       },
       agents: agentRows.map(a => ({
         id: a.id,
@@ -326,9 +356,9 @@ export class ProjectExchangeService extends BaseService {
     };
 
     logger.info(
-       { projectId, agentCount: agentRows.length, stageCount: stageRows.length, operatorId: context.operatorId },
-       'Project exchange bundle exported',
-     );
+      { projectId, agentCount: agentRows.length, stageCount: stageRows.length, operatorId: context.operatorId },
+      'Project exchange bundle exported',
+    );
     return bundle;
   }
 
@@ -352,8 +382,8 @@ export class ProjectExchangeService extends BaseService {
     this.requirePermission(context, PERMISSIONS.PROJECT_WRITE);
 
     if (bundle.formatVersion !== 1) {
-       throw new Error(`Unsupported exchange format version: ${(bundle as any).formatVersion}`);
-     }
+      throw new Error(`Unsupported exchange format version: ${(bundle as any).formatVersion}`);
+    }
     const v1 = bundle as ProjectExchangeBundleV1;
 
     logger.info({ exportedAt: v1.exportedAt, operatorId: context.operatorId }, 'Importing project exchange bundle');
@@ -361,12 +391,20 @@ export class ProjectExchangeService extends BaseService {
     // Collect unique provider hints across entire bundle
     const hints = new Map<string, ProviderHint>();
     const collectHint = (h: ProviderHint | null | undefined) => {
-       if (h) hints.set(hintKey(h), h);
-     };
+      if (h) hints.set(hintKey(h), h);
+    };
 
     collectHint(v1.project.asrConfig?.asrHint);
     collectHint(v1.project.storageConfig?.storageHint);
     collectHint(v1.project.moderationConfig?.llmHint);
+    if (v1.project.costManagementConfig?.limits) {
+      for (const hintKeyStr of Object.keys(v1.project.costManagementConfig.limits)) {
+        if (hintKeyStr !== '*') {
+          const [type, apiType] = hintKeyStr.split(':');
+          if (type && apiType) collectHint({ type: type as ProviderHint['type'], apiType });
+        }
+      }
+    }
     for (const a of v1.agents) {
       collectHint(a.ttsHint);
       collectHint(a.fillerSettings?.llmHint);
@@ -408,8 +446,8 @@ export class ProjectExchangeService extends BaseService {
     }
 
     const resolveHint = (h: ProviderHint | null | undefined): string | null => {
-       return h ? (hintToProviderId.get(hintKey(h)) ?? null) : null;
-     };
+      return h ? (hintToProviderId.get(hintKey(h)) ?? null) : null;
+    };
 
     // Only the project receives a new ID; all other entities keep their original IDs
     // because they use composite primary keys (projectId + id).
@@ -420,24 +458,39 @@ export class ProjectExchangeService extends BaseService {
     const addTarget = (h: ProviderHint | null | undefined, target: ProviderHintResolutionTarget) => {
       if (!h) return;
       const key = hintKey(h);
-if (!hintTargets.has(key)) {
-         hintTargets.set(key, []);
-       }
-       hintTargets.get(key)!.push(target);
+      if (!hintTargets.has(key)) {
+        hintTargets.set(key, []);
+      }
+      hintTargets.get(key)!.push(target);
     };
 
     if (v1.project.asrConfig?.asrHint) addTarget(
-       v1.project.asrConfig.asrHint,
-       { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'asrConfig.asrProviderId' },
-     );
+      v1.project.asrConfig.asrHint,
+      { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'asrConfig.asrProviderId' },
+    );
     if (v1.project.storageConfig?.storageHint) addTarget(
-       v1.project.storageConfig.storageHint,
-       { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'storageConfig.storageProviderId' },
-     );
+      v1.project.storageConfig.storageHint,
+      { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'storageConfig.storageProviderId' },
+    );
     if (v1.project.moderationConfig?.llmHint) addTarget(
-       v1.project.moderationConfig.llmHint,
-       { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'moderationConfig.llmProviderId' },
-     );
+      v1.project.moderationConfig.llmHint,
+      { entityType: 'project', entityId: newProjectId, entityName: v1.project.name, field: 'moderationConfig.llmProviderId' },
+    );
+    if (v1.project.costManagementConfig?.limits) {
+      for (const hintKeyStr of Object.keys(v1.project.costManagementConfig.limits)) {
+        if (hintKeyStr !== '*') {
+          const [type, apiType] = hintKeyStr.split(':');
+          if (type && apiType) {
+            addTarget({ type: type as ProviderHint['type'], apiType }, {
+              entityType: 'project',
+              entityId: newProjectId,
+              entityName: v1.project.name,
+              field: 'costManagementConfig.limits',
+            });
+          }
+        }
+      }
+    }
     for (const a of v1.agents) {
       if (a.ttsHint) addTarget(
         a.ttsHint,
@@ -476,6 +529,22 @@ if (!hintTargets.has(key)) {
     await db.transaction(async (tx) => {
       // 1. Project
       const p = v1.project;
+
+      // Resolve costManagementConfig provider hints back to provider IDs
+      const resolvedCostManagementConfig = p.costManagementConfig ? {
+        limits: Object.fromEntries(
+          Object.entries(p.costManagementConfig.limits).map(([hintKeyStr, models]) => {
+            if (hintKeyStr === '*') return ['*', models];
+            const [type, apiType] = hintKeyStr.split(':');
+            if (type && apiType) {
+              const resolvedId = resolveHint({ type: type as ProviderHint['type'], apiType });
+              return [resolvedId ?? hintKeyStr, models];
+            }
+            return [hintKeyStr, models];
+          }),
+        ),
+      } : null;
+
       await tx.insert(projects).values({
         id: newProjectId,
         name: p.name + ` (imported ${new Date().toLocaleString()})`,
@@ -500,7 +569,9 @@ if (!hintTargets.has(key)) {
           enabled: p.moderationConfig.enabled,
           llmProviderId: resolveHint(p.moderationConfig.llmHint) ?? '',
           blockedCategories: p.moderationConfig.blockedCategories,
+          mode: p.moderationConfig.mode,
         } : null,
+        costManagementConfig: resolvedCostManagementConfig,
         constants: p.constants ?? null,
         metadata: p.metadata ?? null,
         timezone: p.timezone ?? null,
@@ -508,7 +579,17 @@ if (!hintTargets.has(key)) {
         autoCreateUsers: p.autoCreateUsers ?? false,
         userProfileVariableDescriptors: p.userProfileVariableDescriptors ?? [],
         defaultGuardrailClassifierId: p.defaultGuardrailClassifierId ?? null,
+        sampleCopyConfig: p.sampleCopyConfig ? {
+          defaultClassifierId: p.sampleCopyConfig.defaultClassifierId,
+        } : null,
+        startingStageId: p.startingStageId ?? null,
         conversationTimeoutSeconds: p.conversationTimeoutSeconds ?? null,
+        recordingConfig: p.recordingConfig ? {
+          enabled: p.recordingConfig.enabled,
+          recordInput: p.recordingConfig.recordInput,
+          recordOutput: p.recordingConfig.recordOutput,
+          format: p.recordingConfig.format,
+        } : null,
       });
 
       // 2. Agents
@@ -692,18 +773,18 @@ if (!hintTargets.has(key)) {
       providerResolution: [...hints.values()].map((h): ProviderHintResolution => {
         const resolvedProviderId = hintToProviderId.get(hintKey(h)) ?? null;
         return {
-           hint: h,
-           resolvedProviderId,
-           resolved: resolvedProviderId !== null,
-           targets: hintTargets.get(hintKey(h)) ?? [],
-         };
+          hint: h,
+          resolvedProviderId,
+          resolved: resolvedProviderId !== null,
+          targets: hintTargets.get(hintKey(h)) ?? [],
+        };
       }),
     };
 
     logger.info(
-       { newProjectId, counts: result.counts, operatorId: context.operatorId },
-       'Project exchange bundle imported successfully',
-     );
+      { newProjectId, counts: result.counts, operatorId: context.operatorId },
+      'Project exchange bundle imported successfully',
+    );
     return result;
   }
 }
