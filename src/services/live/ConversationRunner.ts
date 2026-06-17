@@ -615,11 +615,11 @@ export class ConversationRunner {
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
           // session timed out during silence), discard the event and clear the pre-warm promise
           // so the next speech_start will do a fresh start().
-          if (this.conversation.status !== 'receiving_user_voice') {
-            this.asrPreWarmPromise = null;
-            logger.info({ conversationId }, `ASR session ended during pre-warm (no active turn) for conversation ${conversationId}`);
-            return;
-          }
+          // if (this.conversation.status !== 'receiving_user_voice') {
+          //   this.asrPreWarmPromise = null;
+          //   logger.info({ conversationId }, `ASR session ended during pre-warm (no active turn) for conversation ${conversationId}`);
+          //   return;
+          // }
 
           logger.info({ conversationId }, `ASR recognition stopped for conversation ${conversationId}`);
 
@@ -1958,6 +1958,8 @@ export class ConversationRunner {
         await this.sendUserSpeakingStarted();
         // start ASR in response to VAD (if not started already)
         await this.startAsrSessionIfNeeded();
+        // kick off barge-in silence timer to stop ASR if user stops speaking
+        this.setBargeInSilenceTimer();
       }
       return;
     }
@@ -2047,8 +2049,8 @@ export class ConversationRunner {
       clearTimeout(this.bargeInSilenceTimer);
     }
 
-    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Starting barge-in silence timer');
     const timeout = this.stageData.project.asrConfig?.serverVad?.bargeInSilenceTimeout ?? 3000;
+    logger.info({ timeout, conversationId: this.stageData.conversation.id }, '**VAD** Starting barge-in silence timer');
     this.bargeInSilenceTimer = setTimeout(async () => {
       this.bargeInSilenceTimer = null;
       logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in silence timeout reached, stopping ASR');
@@ -2071,6 +2073,7 @@ export class ConversationRunner {
   /** Clears the barge-in silence timer if active. */
   private clearBargeInSilenceTimer(): void {
     if (this.bargeInSilenceTimer) {
+      logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Clearing barge-in silence timer');
       clearTimeout(this.bargeInSilenceTimer);
       this.bargeInSilenceTimer = null;
     }
