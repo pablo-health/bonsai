@@ -30,7 +30,7 @@ export const deepgramTtsSettingsSchema = z.object({
   noSpeechMarkers: z.array(z.object({ start: z.string(), end: z.string() })).optional().describe('Markers to identify sections of text that should not be spoken'),
   removeExclamationMarks: z.boolean().optional().describe('Whether to replace exclamation marks with periods'),
   useSentenceSplitter: z.boolean().optional().describe('Whether to use sentence splitter for text processing, defaults to true'),
-  speed: z.number().min(0.25).max(4).optional().describe('Speaking rate multiplier (0.25 to 4.0, default: 1.0)'),
+  speed: z.number().min(0.75).max(1.5).optional().describe('Speaking rate multiplier (0.75 to 1.5, default: 1.0)'),
 }).loose().openapi('DeepgramTtsSettings');
 
 export type DeepgramTtsSettings = z.infer<typeof deepgramTtsSettingsSchema>;
