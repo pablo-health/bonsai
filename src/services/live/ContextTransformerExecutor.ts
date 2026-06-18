@@ -149,7 +149,7 @@ export class ContextTransformerExecutor {
     }
 
     // Build a raw context with the updated stage vars for condition evaluation
-    const conditionContext = this.contextBuilder.buildRawContext(conversation, stage, {}, {});
+    const conditionContext = this.contextBuilder.buildRawContext(conversation, stage, {}, {}, undefined, session.clientConnection.connectionType);
 
     // Find and return stage actions triggered by variable changes
     const triggeredActions = await this.findTriggeredActions(session, variableChangeEvents, stage.actions || {}, conditionContext);
