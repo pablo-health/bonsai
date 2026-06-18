@@ -39,6 +39,10 @@ export const scenarioRunResponseSchema = z.object({
   status: scenarioRunStatusSchema.describe('Current status of the scenario run'),
   statusDetails: z.string().nullable().describe('Human-readable details about the current status, e.g. failure reason or cancellation actor'),
   errorCount: z.number().int().min(0).describe('Number of conversations that errored during execution (excluded from pass/fail evaluation)'),
+  testStatistics: z.object({
+    passedTests: z.number().int().min(0).describe('Total number of individual test assertions that passed across all conversations'),
+    failedTests: z.number().int().min(0).describe('Total number of individual test assertions that failed across all conversations'),
+  }).nullable().describe('Detailed test statistics for this run'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
   version: z.number().int().describe('Version number for optimistic locking'),
   createdAt: z.coerce.date().describe('Timestamp when the run was created'),

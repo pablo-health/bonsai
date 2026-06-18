@@ -421,6 +421,13 @@
       "when": 1781772460742,
       "tag": "0059_slimy_dakota_north",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1781810116976,
+      "tag": "0060_first_dagger",
+      "breakpoints": true
     }
   ]
 }

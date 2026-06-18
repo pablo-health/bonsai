@@ -171,11 +171,15 @@ export class ScenarioRunService extends BaseService {
    * @param runId - The scenario run ID
    * @param projectId - The project the run belongs to
    * @param status - The new status to set
+   * @param statusDetails - Optional human-readable status details
+   * @param errorCount - Optional count of errored conversations
+   * @param testStatistics - Optional aggregated test statistics
    */
-  async updateRunStatus(runId: string, projectId: string, status: ScenarioRunStatus, statusDetails?: string | null, errorCount?: number): Promise<void> {
+  async updateRunStatus(runId: string, projectId: string, status: ScenarioRunStatus, statusDetails?: string | null, errorCount?: number, testStatistics?: { passedTests: number; failedTests: number }): Promise<void> {
     try {
       const updateData: Record<string, unknown> = { status, statusDetails: statusDetails ?? null, updatedAt: new Date() };
       if (errorCount !== undefined) updateData.errorCount = errorCount;
+      if (testStatistics !== undefined) updateData.testStatistics = testStatistics;
       await db.update(scenarioRuns).set(updateData).where(and(eq(scenarioRuns.id, runId), eq(scenarioRuns.projectId, projectId)));
       logger.info({ runId, status }, 'Scenario run status updated');
     } catch (error) {

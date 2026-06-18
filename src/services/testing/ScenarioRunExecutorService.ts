@@ -26,6 +26,8 @@ type ConversationSlot = {
 /** Result of executing a single conversation slot */
 type SlotResult = {
   result: 'passed' | 'failed' | 'error' | 'cancelled';
+  passedTests: number;
+  failedTests: number;
 };
 
 /**
@@ -180,8 +182,10 @@ export class ScenarioRunExecutorService {
         const errorCount = results.filter((r) => r.result === 'error').length;
         const finalStatus = failedCount > 0 ? 'failed' : (passedCount > 0 ? 'passed' : 'failed');
         const statusDetails = failedCount > 0 ? `${failedCount} of ${results.length} conversation${results.length !== 1 ? 's' : ''} failed` : null;
-        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus, statusDetails, errorCount);
-        logger.info({ runId: run.id, finalStatus, passedCount, failedCount, errorCount }, 'Scenario run completed');
+        const runPassedTests = results.reduce((sum, r) => sum + r.passedTests, 0);
+        const runFailedTests = results.reduce((sum, r) => sum + r.failedTests, 0);
+        await this.scenarioRunService.updateRunStatus(run.id, run.projectId, finalStatus, statusDetails, errorCount, { passedTests: runPassedTests, failedTests: runFailedTests });
+        logger.info({ runId: run.id, finalStatus, passedCount, failedCount, errorCount, runPassedTests, runFailedTests }, 'Scenario run completed');
       }
     } catch (error) {
       logger.error({ error, runId: run.id }, 'Scenario run failed with error');
@@ -210,8 +214,8 @@ export class ScenarioRunExecutorService {
   ): Promise<SlotResult> {
     if (this.cancelledRunIds.has(run.id)) {
       logger.info({ runId: run.id, scenarioConversationId: slot.scenarioConversationId }, 'Skipping slot — run was cancelled');
-      await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'cancelled').catch(() => {});
-      return { result: 'cancelled' };
+        await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'cancelled').catch(() => {});
+      return { result: 'cancelled', passedTests: 0, failedTests: 0 };
     }
 
     await this.acquireSlot();
@@ -235,19 +239,19 @@ export class ScenarioRunExecutorService {
 
       if (testResult.status === 'conversation_failed') {
         await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'error', { testRunStatus: testResult.status });
-        return { result: 'error' };
+        return { result: 'error', passedTests: 0, failedTests: 0 };
       }
 
       const evaluation = await this.evaluator.evaluate(conversationId, run.projectId, scenario);
       const conversationStatus = evaluation.passed ? 'passed' : 'failed';
 
-      await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, conversationStatus, { dataExtractionResults: evaluation.dataExtractionResults, dataTransformationResults: evaluation.dataTransformationResults ?? undefined, testRunStatus: testResult.status });
+      await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, conversationStatus, { dataExtractionResults: evaluation.dataExtractionResults, dataTransformationResults: evaluation.dataTransformationResults ?? undefined, testRunStatus: testResult.status, testStatistics: { passedTests: evaluation.passedTests, failedTests: evaluation.failedTests } });
 
-      return { result: conversationStatus };
+      return { result: conversationStatus, passedTests: evaluation.passedTests, failedTests: evaluation.failedTests };
     } catch (error) {
       logger.error({ error, runId: run.id, scenarioConversationId: slot.scenarioConversationId }, 'Conversation slot failed');
       await this.scenarioConversationService.updateScenarioConversationStatus(slot.scenarioConversationId, run.projectId, 'error').catch(() => {});
-      return { result: 'error' };
+      return { result: 'error', passedTests: 0, failedTests: 0 };
     } finally {
       this.releaseSlot();
     }
