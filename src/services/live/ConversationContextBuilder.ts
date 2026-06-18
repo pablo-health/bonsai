@@ -539,7 +539,7 @@ export class ConversationContextBuilder {
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
       channel,
-      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage!, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
+      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage!, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel)),
     };
 
     // Get all events from database; history is a filtered view on message events
@@ -601,7 +601,7 @@ export class ConversationContextBuilder {
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
       channel,
-      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
+      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel)),
     };
 
     // Load conversation history so templates can reference prior messages
@@ -655,7 +655,7 @@ export class ConversationContextBuilder {
      ]);
 
      const projectContext = this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null);
-     const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, projectContext);
+      const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, projectContext, channel);
 
      const context: ConversationContext = {
        conversationId: conversation.id,
@@ -720,7 +720,7 @@ export class ConversationContextBuilder {
     });
 
     // Build raw context for condition evaluation
-    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null));
+    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel);
     rawContext.userInput = userInput;
     rawContext.originalUserInput = originalUserInput;
 
@@ -792,7 +792,7 @@ export class ConversationContextBuilder {
     ]);
 
     // Build raw context for condition evaluation
-    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null));
+    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel);
     rawContext.userInput = userInput;
     rawContext.originalUserInput = originalUserInput;
 
@@ -888,7 +888,7 @@ export class ConversationContextBuilder {
       }),
     ]);
 
-    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null));
+    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel);
     rawContext.userInput = userInput;
     rawContext.originalUserInput = originalUserInput;
 
@@ -961,7 +961,7 @@ export class ConversationContextBuilder {
       columns: { constants: true, timezone: true, languageCode: true },
     });
 
-    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null));
+    const rawContext = this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel);
     rawContext.userInput = userInput;
     rawContext.originalUserInput = originalUserInput;
 
@@ -1093,7 +1093,7 @@ export class ConversationContextBuilder {
       time: this.buildTimeContext((conversation.metadata?.timezone as string | undefined) ?? 'UTC'),
       project: this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null),
       channel,
-      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null))),
+      stage: await this.buildStageContext(stage, this.buildRawContext(conversation, stage, user?.profile || {}, project?.constants || {}, this.buildProjectContext(project?.timezone ?? null, project?.languageCode ?? null), channel)),
     };
 
     // Get all events from database; history is a filtered view on message events
@@ -1121,7 +1121,7 @@ export class ConversationContextBuilder {
    * @param stage - Stage entity
    * @returns ConversationContext with only raw data and no filtering for actions or stage context.
    */
-  public buildRawContext(conversation: Conversation, stage: Stage, userProfile: Record<string, any>, consts: Record<string, any> = {}, projectContext: ConversationContext['project'] = { timezone: null, languageCode: null, language: null }): ConversationContext {
+  public buildRawContext(conversation: Conversation, stage: Stage, userProfile: Record<string, any>, consts: Record<string, any> = {}, projectContext: ConversationContext['project'] = { timezone: null, languageCode: null, language: null }, channel?: ApiKeyChannel): ConversationContext {
     return {
       conversationId: conversation.id,
       projectId: conversation.projectId,
@@ -1156,7 +1156,8 @@ export class ConversationContextBuilder {
         useKnowledge: stage.useKnowledge,
         enterBehavior: stage.enterBehavior,
         metadata: stage.metadata || undefined,
-      }
+      },
+      channel,
     };
   }
 }
