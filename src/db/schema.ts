@@ -583,6 +583,12 @@ export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed' |
 /** Possible outcomes for a single test run conversation (persisted on scenarioConversations) */
 export type TestRunStatus = 'conversation_ended' | 'conversation_aborted' | 'conversation_failed' | 'max_turns_reached' | 'tester_hung_up';
 
+/** Detailed test statistics for a scenario run or scenario conversation */
+export type TestStatistics = {
+  passedTests: number;
+  failedTests: number;
+};
+
 // Tester table — persona that acts as a user in scenario testing
 export const testers = pgTable('testers', {
   id: text('id').notNull(),
@@ -637,6 +643,7 @@ export const scenarioRuns = pgTable('scenario_runs', {
   status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
   statusDetails: text('status_details'),
   errorCount: integer('error_count').notNull().default(0),
+  testStatistics: jsonb('test_statistics').$type<TestStatistics>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -658,6 +665,7 @@ export const scenarioConversations = pgTable('scenario_conversations', {
   testRunStatus: text('test_run_status').$type<TestRunStatus>(),
   dataExtractionResults: jsonb('data_extraction_results').$type<Record<string, unknown>>(),
   dataTransformationResults: jsonb('data_transformation_results').$type<Record<string, unknown>>(),
+  testStatistics: jsonb('test_statistics').$type<TestStatistics>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),

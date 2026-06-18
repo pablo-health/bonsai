@@ -37,6 +37,10 @@ export const scenarioConversationResponseSchema = z.object({
   testRunStatus: z.enum(['conversation_ended', 'conversation_aborted', 'conversation_failed', 'max_turns_reached', 'tester_hung_up']).nullable().describe('How the test conversation ended'),
   dataExtractionResults: z.record(z.string(), z.unknown()).nullable().describe('Extracted stage variable values at the end of the conversation'),
   dataTransformationResults: z.record(z.string(), z.unknown()).nullable().describe('Post-processed data transformation results'),
+  testStatistics: z.object({
+    passedTests: z.number().int().min(0).describe('Number of individual test assertions that passed'),
+    failedTests: z.number().int().min(0).describe('Number of individual test assertions that failed'),
+  }).nullable().describe('Detailed test statistics for this conversation'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
   version: z.number().int().describe('Version number for optimistic locking'),
   createdAt: z.coerce.date().describe('Timestamp when the scenario conversation was created'),
