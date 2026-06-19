@@ -37,6 +37,7 @@ import { ProjectExchangeController } from './http/controllers/ProjectExchangeCon
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
 import { ScenarioRunExecutorService } from './services/testing/ScenarioRunExecutorService';
 import { ImapInboundService } from './services/ImapInboundService';
+import { OAuth2TokenRefreshService } from './services/OAuth2TokenRefreshService';
 import { errorHandler } from './http/middleware/errorHandler';
 import { optionalAuthMiddleware } from './http/middleware/auth';
 import { requestContextMiddleware } from './http/middleware/requestContext';
@@ -52,6 +53,7 @@ import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
 // import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
 // import { SesChannelHost } from './channels/email/ses/SesChannelHost';
 import { SmtpImapChannelHost } from './channels/email/smtp-imap/SmtpImapChannelHost';
+import { SmtpImapOAuth2Controller } from './http/controllers/SmtpImapOAuth2Controller';
 import logger from './utils/logger';
 import { fileURLToPath } from 'url';
 import { SecretsManagerRegistry } from './services/secrets/SecretsManagerRegistry';
@@ -284,6 +286,9 @@ export async function createApp(): Promise<express.Application> {
   // container.resolve(SesChannelHost).registerRoutes(app);
   container.resolve(SmtpImapChannelHost).registerRoutes(app);
 
+  const smtpImapOAuth2Controller = container.resolve(SmtpImapOAuth2Controller);
+  smtpImapOAuth2Controller.registerRoutes(app);
+
   try {
     await SpeexResamplerClass.initPromise;
     const warmup = new SpeexResamplerClass(1, 16000, 8000, 3);
@@ -309,6 +314,7 @@ export async function createApp(): Promise<express.Application> {
   container.resolve(ScenarioRunExecutorService).start();
   container.resolve(BenchmarkExecutorService).start();
   container.resolve(ImapInboundService).start();
+  container.resolve(OAuth2TokenRefreshService).start();
 
   app.use(errorHandler);
 
