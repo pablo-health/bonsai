@@ -57,6 +57,9 @@ class ImapMailboxSession {
         host: this.imapHost,
         port: this.imapPort,
         tls: this.imapSecure,
+        tlsOptions: {
+          servername: this.imapHost,
+        },
         keepalive: true,
       });
 
