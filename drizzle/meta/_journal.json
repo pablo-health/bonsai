@@ -428,6 +428,13 @@
       "when": 1781810116976,
       "tag": "0060_first_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1781867517358,
+      "tag": "0061_cynical_karen_page",
+      "breakpoints": true
     }
   ]
 }

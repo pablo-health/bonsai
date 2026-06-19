@@ -316,7 +316,7 @@ export const knowledgeItems = pgTable('knowledge_items', {
   id: text('id').notNull(),
   projectId: text('project_id').notNull(),
   categoryId: text('category_id').notNull(),
-  question: text('question').notNull(),
+  questions: text('questions').array().notNull().default([]),
   answer: text('answer').notNull(),
   order: integer('order').notNull().default(0),
   version: integer('version').notNull().default(1),

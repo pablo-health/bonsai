@@ -2535,7 +2535,7 @@ export class ConversationRunner {
     if (knowledgeResults.length > 0) {
       const categoryIds = knowledgeResults.map(r => r.name.slice('__knowledge_'.length));
       const itemArrays = await Promise.all(categoryIds.map(id => this.knowledgeService.getItemsByCategory(this.conversation.projectId, id)));
-      this.stageData.faq = itemArrays.flat().map(item => ({ question: item.question, answer: item.answer }));
+      this.stageData.faq = itemArrays.flat().flatMap(item => item.questions.map(q => ({ question: q, answer: item.answer })));
       logger.debug({ conversationId: this.conversation.id, categoryCount: categoryIds.length, itemCount: this.stageData.faq.length }, 'Updated FAQ from knowledge actions');
     }
 
