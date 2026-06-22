@@ -108,23 +108,13 @@ export class SmtpImapOAuth2Controller {
 
   private async handleAuthorize(req: Request, res: Response): Promise<void> {
     const body = oauth2AuthorizeBodySchema.parse(req.body);
-    const { providerId, tokenUrl, authorizationUrl, clientId, scope, redirectUrl } = body;
+    const { providerId, tokenUrl, authorizationUrl, clientId, clientSecret, scope, redirectUrl } = body;
 
     const provider = await db.query.providers.findFirst({ where: eq(providers.id, providerId) });
     if (!provider || provider.apiType !== 'smtp_imap') {
       res.status(400).json({ error: 'Provider not found or not an SMTP/IMAP channel' });
       return;
     }
-
-    const rawConfig = await this.secretRefUtils.resolveObject(provider.config as Record<string, unknown>);
-    const configResult = smtpImapChannelProviderConfigSchema.safeParse(rawConfig);
-    if (!configResult.success) {
-      res.status(400).json({ error: 'Provider config is invalid' });
-      return;
-    }
-
-    const oauth2 = configResult.data.oauth2;
-    const clientSecret = oauth2?.clientSecret ?? '';
 
     const state = randomBytes(16).toString('hex');
 
@@ -192,6 +182,7 @@ export class SmtpImapOAuth2Controller {
       const oauth2Config = updatedConfig.oauth2 as Record<string, unknown>;
       oauth2Config.tokenUrl = entry.tokenUrl;
       oauth2Config.clientId = entry.clientId;
+      oauth2Config.clientSecret = entry.clientSecret;
       oauth2Config.accessToken = tokenResponse.access_token;
       oauth2Config.refreshToken = tokenResponse.refresh_token;
       oauth2Config.accessTokenExpiry = Date.now() + (tokenResponse.expires_in ?? 3600) * 1000;

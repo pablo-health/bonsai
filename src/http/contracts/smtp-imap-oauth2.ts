@@ -8,6 +8,7 @@ export const oauth2AuthorizeBodySchema = z.strictObject({
   tokenUrl: z.string().url().describe('OAuth2 token endpoint URL (e.g. https://oauth2.googleapis.com/token for Gmail)'),
   authorizationUrl: z.string().url().describe('OAuth2 authorization endpoint URL (e.g. https://accounts.google.com/o/oauth2/v2/auth for Gmail)'),
   clientId: z.string().min(1).describe('OAuth2 client ID'),
+  clientSecret: z.string().min(1).describe('OAuth2 client secret'),
   scope: z.string().min(1).describe('OAuth2 scope string (e.g. https://www.googleapis.com/auth/gmail.modify for Gmail)'),
   redirectUrl: z.string().url().describe('Redirect URI registered with the OAuth2 provider (must match the callback endpoint)'),
 });
