@@ -17,7 +17,7 @@ export const oauth2AuthorizeResponseSchema = z.strictObject({
   state: z.string().describe('Random state parameter for CSRF protection'),
 });
 
-export const oauth2CallbackQuerySchema = z.strictObject({
+export const oauth2CallbackQuerySchema = z.object({
   code: z.string().min(1).describe('Authorization code from the OAuth2 provider'),
   state: z.string().min(1).describe('State parameter that was returned from the authorization URL'),
 });
