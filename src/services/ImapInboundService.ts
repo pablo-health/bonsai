@@ -54,9 +54,9 @@ class ImapMailboxSession {
     try {
       const useOAuth2 = this.oauth2AccessToken != null && this.oauth2AccessToken.length > 0;
 
-      const imap = new ImapConnection({
-        user: useOAuth2 ? undefined : this.imapUser,
-        password: useOAuth2 ? undefined : this.imapPass,
+      const imapOpts: ImapConnection.Config = {
+        user: this.imapUser,
+        password: this.imapPass,
         host: this.imapHost,
         port: this.imapPort,
         tls: this.imapSecure,
@@ -64,29 +64,22 @@ class ImapMailboxSession {
           servername: this.imapHost,
         },
         keepalive: true,
-      });
+      };
 
       if (useOAuth2) {
-        await new Promise<void>((resolve, reject) => {
-          const xoauth2Token = Buffer.from(
-            `user=${this.imapUser}\x01auth=Bearer ${this.oauth2AccessToken}\x01\x01`,
-            'utf-8',
-          ).toString('base64');
-
-          imap.once('connect', () => {
-            (imap as any).C('AUTHENTICATE XOAUTH2 ' + xoauth2Token);
-          });
-          imap.once('ready', () => resolve());
-          imap.once('error', reject);
-          imap.connect();
-        });
-      } else {
-        await new Promise<void>((resolve, reject) => {
-          imap.once('ready', () => resolve());
-          imap.once('error', reject);
-          imap.connect();
-        });
+        imapOpts.xoauth2 = Buffer.from(
+          `user=${this.imapUser}\x01auth=Bearer ${this.oauth2AccessToken}\x01\x01`,
+          'utf-8',
+        ).toString('base64');
       }
+
+      const imap = new ImapConnection(imapOpts);
+
+      await new Promise<void>((resolve, reject) => {
+        imap.once('ready', () => resolve());
+        imap.once('error', reject);
+        imap.connect();
+      });
 
       this.imap = imap;
       this.consecutiveErrors = 0;
