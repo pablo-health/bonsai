@@ -120,6 +120,7 @@ import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
 // import { SesChannelHost } from './channels/email/ses/SesChannelHost';
 // import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
 import { SmtpImapChannelHost } from './channels/email/smtp-imap/SmtpImapChannelHost';
+import { SmtpImapOAuth2Controller } from './http/controllers/SmtpImapOAuth2Controller';
 import { providerHintSchema, providerHintResolutionTargetSchema, providerHintResolutionSchema, asrConfigExchangeV1Schema, storageConfigExchangeV1Schema, moderationConfigExchangeV1Schema, fillerSettingsExchangeV1Schema, projectExchangeV1Schema, agentExchangeV1Schema, stageExchangeV1Schema, classifierExchangeV1Schema, contextTransformerExchangeV1Schema, toolExchangeV1Schema, globalActionExchangeV1Schema, guardrailExchangeV1Schema, knowledgeCategoryExchangeV1Schema, knowledgeItemExchangeV1Schema, projectExchangeBundleV1Schema, projectExchangeImportResultSchema } from './http/contracts/projectExchange';
 
 extendZodWithOpenApi(z);
@@ -664,6 +665,12 @@ export function getOpenAPISpec(): any {
   // Register SMTP/IMAP outgoing send route
   const smtpImapPaths = SmtpImapChannelHost.getOpenAPIPaths();
   for (const path of smtpImapPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register SMTP/IMAP OAuth2 routes
+  const smtpImapOAuth2Paths = SmtpImapOAuth2Controller.getOpenAPIPaths();
+  for (const path of smtpImapOAuth2Paths) {
     registry.registerPath(path);
   }
 

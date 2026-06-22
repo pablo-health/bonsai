@@ -121,7 +121,7 @@ export class SmtpImapChannelHost {
       res.status(500).json({ error: 'Channel provider config is invalid' });
       return;
     }
-    const { fromAddress, smtp, threadingStrategy } = configResult.data;
+    const { fromAddress, smtp, threadingStrategy, oauth2 } = configResult.data;
 
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
@@ -165,6 +165,7 @@ export class SmtpImapChannelHost {
       smtp.secure,
       smtp.auth.user,
       smtp.auth.pass,
+      oauth2?.accessToken,
     );
 
     try {
@@ -241,6 +242,7 @@ export class SmtpImapChannelHost {
     references: string | string[] | undefined,
     stageId: string | undefined,
     agentId: string | undefined,
+    oauth2AccessToken: string | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
     logger.info({ projectId, from: senderEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
@@ -275,6 +277,7 @@ export class SmtpImapChannelHost {
       smtpSecure,
       smtpAuthUser,
       smtpAuthPass,
+      oauth2AccessToken,
     );
 
     try {
