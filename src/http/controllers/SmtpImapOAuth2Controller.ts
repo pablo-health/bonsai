@@ -150,7 +150,26 @@ export class SmtpImapOAuth2Controller {
 
   private async handleCallback(req: Request, res: Response): Promise<void> {
     const query = oauth2CallbackQuerySchema.parse(req.query);
+
+    if (query.error) {
+      const response: OAuth2CallbackResponse = oauth2CallbackResponseSchema.parse({
+        success: false,
+        message: query.error_description ?? query.error,
+      });
+      res.status(400).json(response);
+      return;
+    }
+
     const { code, state } = query;
+
+    if (!code || !state) {
+      const response: OAuth2CallbackResponse = oauth2CallbackResponseSchema.parse({
+        success: false,
+        message: 'Missing code or state parameter',
+      });
+      res.status(400).json(response);
+      return;
+    }
 
     const entry = this.pendingStates.get(state);
     if (!entry) {
@@ -184,7 +203,9 @@ export class SmtpImapOAuth2Controller {
       oauth2Config.clientId = entry.clientId;
       oauth2Config.clientSecret = entry.clientSecret;
       oauth2Config.accessToken = tokenResponse.access_token;
-      oauth2Config.refreshToken = tokenResponse.refresh_token;
+      if (tokenResponse.refresh_token) {
+        oauth2Config.refreshToken = tokenResponse.refresh_token;
+      }
       oauth2Config.accessTokenExpiry = Date.now() + (tokenResponse.expires_in ?? 3600) * 1000;
       oauth2Config.scope = entry.scope;
 
@@ -260,7 +281,7 @@ export class SmtpImapOAuth2Controller {
     clientSecret: string,
     redirectUrl: string,
     code: string,
-  ): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  ): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
@@ -282,8 +303,8 @@ export class SmtpImapOAuth2Controller {
 
     const json = await response.json();
 
-    if (!json.access_token || !json.refresh_token) {
-      throw new Error('Token exchange response missing access_token or refresh_token');
+    if (!json.access_token) {
+      throw new Error('Token exchange response missing access_token');
     }
 
     return {
