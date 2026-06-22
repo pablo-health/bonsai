@@ -142,7 +142,7 @@ export class SmtpImapOAuth2Controller {
       response_type: 'code',
       client_id: clientId,
       redirect_uri: redirectUrl,
-      scope: encodeURIComponent(scope),
+      scope,
       access_type: 'offline',
       prompt: 'consent',
       state,
