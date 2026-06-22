@@ -52,8 +52,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
       secure: this.smtpSecure,
       auth: this.oauth2AccessToken
         ? {
+            type: 'OAuth2',
             user: this.smtpAuthUser,
-            xoauth2: Buffer.from(`user=${this.smtpAuthUser}\x01auth=Bearer ${this.oauth2AccessToken}\x01\x01`, 'utf-8').toString('base64'),
+            accessToken: this.oauth2AccessToken,
           }
         : {
             user: this.smtpAuthUser,
