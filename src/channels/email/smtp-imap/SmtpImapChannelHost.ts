@@ -24,6 +24,7 @@ import { smtpImapSendBodySchema, smtpImapSendResponseSchema } from '../../../htt
 import type { SmtpImapSendResponse } from '../../../http/contracts/smtp-imap-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
+import { OAuth2TokenRefreshService } from '../../../services/OAuth2TokenRefreshService';
 import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -50,6 +51,7 @@ export class SmtpImapChannelHost {
     @inject(ProjectService) private readonly projectService: ProjectService,
     @inject(UserService) private readonly userService: UserService,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(OAuth2TokenRefreshService) private readonly oauth2TokenRefreshService: OAuth2TokenRefreshService,
   ) {}
 
   static getOpenAPIPaths(): RouteConfig[] {
@@ -123,6 +125,18 @@ export class SmtpImapChannelHost {
     }
     const { fromAddress, smtp, threadingStrategy, oauth2 } = configResult.data;
 
+    if (oauth2?.accessToken && oauth2.accessTokenExpiry && Date.now() >= oauth2.accessTokenExpiry) {
+      logger.info({ channelProviderId }, 'SMTP/IMAP outgoing: OAuth2 token expired, refreshing inline');
+      await this.oauth2TokenRefreshService.refreshProvider(channelProviderId);
+      const refreshedRawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
+      const refreshedResult = smtpImapChannelProviderConfigSchema.safeParse(refreshedRawConfig);
+      if (refreshedResult.success) {
+        configResult.data = refreshedResult.data;
+      }
+    }
+
+    const { oauth2: refreshedOAuth2 } = configResult.data;
+
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
       const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
@@ -165,7 +179,7 @@ export class SmtpImapChannelHost {
       smtp.secure,
       smtp.auth.user,
       smtp.auth.pass,
-      oauth2?.accessToken,
+      refreshedOAuth2?.accessToken,
     );
 
     try {
