@@ -1,10 +1,9 @@
-import { inject, singleton } from 'tsyringe';
+import { container, inject, singleton } from 'tsyringe';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db';
 import { providers } from '../db/schema';
 import { smtpImapChannelProviderConfigSchema } from './providers/channel/SmtpImapChannelProvider';
 import { SecretRefUtils } from './secrets/SecretRefUtils';
-import { ImapInboundService } from './ImapInboundService';
 import { logger } from '../utils/logger';
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -24,8 +23,12 @@ export class OAuth2TokenRefreshService {
 
   constructor(
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
-    @inject(ImapInboundService) private readonly imapInboundService: ImapInboundService,
   ) {}
+
+  private async resolveImapInboundService(): Promise<{ reload: (id: string) => Promise<void> }> {
+    const mod = await import('./ImapInboundService');
+    return container.resolve(mod.ImapInboundService);
+  }
 
   start(): void {
     if (this.isRunning) {
@@ -146,7 +149,7 @@ export class OAuth2TokenRefreshService {
 
     logger.info({ providerId: provider.id, newExpiry: oauth2Config.accessTokenExpiry }, 'OAuth2 token refreshed successfully');
 
-    this.imapInboundService.reload(provider.id).catch((error) => {
+    (await this.resolveImapInboundService()).reload(provider.id).catch((error) => {
       logger.error({ error, providerId: provider.id }, 'Failed to reload IMAP session after OAuth2 token refresh');
     });
   }
