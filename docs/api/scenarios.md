@@ -17,9 +17,9 @@ Content-Type: application/json
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | `string` | No | Unique identifier (auto-generated if omitted) |
+| `id` | `string` (min 1) | No | Unique identifier (auto-generated if omitted) |
 | `name` | `string` (min 1) | Yes | Display name |
-| `description` | `string` | No | Detailed description |
+| `description` | `string` | No | Detailed description (nullable) |
 | `language` | `string` (min 1) | Yes | Language code for the conversation (e.g. `en`) |
 | `startingStageId` | `string` (min 1) | Yes | Stage ID where the conversation begins |
 | `maxTurns` | `integer` (min 1) | Yes | Maximum number of conversation turns before the run is marked failed |

@@ -65,8 +65,9 @@ Runs an ad-hoc funnel query and returns per-step conversion metrics.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `steps` | `FunnelStep[]` | Yes | Ordered funnel steps (max 15) |
+| `steps` | `FunnelStep[]` | Yes | Ordered funnel steps (min 2, max 15) |
 | `relativeTime` | `RelativeTime` | No | Relative time window (mutually exclusive with `from`/`to`) |
+| `scenarioRunId` | `string` | No | Filter to conversations used by this scenario run |
 | `from` | `string` (ISO 8601) | No | Start of the absolute date range (inclusive) |
 | `to` | `string` (ISO 8601) | No | End of the absolute date range (inclusive) |
 

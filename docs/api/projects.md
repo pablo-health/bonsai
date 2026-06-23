@@ -34,7 +34,7 @@ Content-Type: application/json
 | `conversationTimeoutSeconds` | `integer` (min: 0) | No | Inactivity timeout in seconds. Active conversations with no new events for this duration are automatically aborted. Set to `0` or omit to disable. Negative values are rejected. |
 | `autoCreateUsers` | `boolean` | No (default: `false`) | When enabled, users are automatically created on first WebSocket connection if they do not exist |
 | `defaultGuardrailClassifierId` | `string` | No | ID of the classifier used to evaluate guardrails for all conversations in this project |
-| `defaultGuardrailClassifierId` | `string` | No | ID of the classifier used to evaluate guardrails for all conversations in this project |
+| `recordingConfig` | `RecordingConfig` | No | Audio recording configuration for conversation debugging |
 | `sampleCopyConfig` | [`SampleCopyConfig`](#sample-copy-config) | No | Sample copy configuration including the default classifier for prompt triggers |
 | `startingStageId` | `string` | No | ID of the stage to start new conversations at when no `stageId` is provided at conversation start time. Acts as the project-level default starting stage. |
 | `costManagementConfig` | [`CostManagementConfig`](#cost-management-config) | No | Project-level LLM token cost management configuration |

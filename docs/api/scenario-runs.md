@@ -22,7 +22,7 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `scenarioId` | `string` (min 1) | Yes | ID of the scenario to run |
-| `testers` | `Record<string, number>` | Yes | Map of tester persona ID to number of conversations to run for that tester (at least one tester required) |
+| `testers` | `Record<string, number>` | Yes | Map of tester persona ID (non-empty string) to number of conversations (positive integer ≥ 1) to run for that tester. At least one tester required. |
 | `metadata` | `object` | No | Additional metadata |
 
 **Response** `201 Created` — [Scenario Run Response](#scenario-run-response)
