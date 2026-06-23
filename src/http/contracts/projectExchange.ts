@@ -348,7 +348,7 @@ export type KnowledgeCategoryExchangeV1 = z.infer<typeof knowledgeCategoryExchan
 export const knowledgeItemExchangeV1Schema = z.object({
   id: z.string().describe('Local document ID; remapped to a fresh UUID on import'),
   categoryId: z.string().describe('Local document ID of the parent knowledge category; remapped on import'),
-  question: z.string().describe('Question text for this knowledge item'),
+  questions: z.array(z.string()).describe('Array of question texts for this knowledge item'),
   answer: z.string().describe('Answer text for this knowledge item'),
   order: z.number().int().min(0).optional().describe('Display order within the category'),
 }).openapi('KnowledgeItemExchangeV1').describe('Knowledge item entity in the exchange format');

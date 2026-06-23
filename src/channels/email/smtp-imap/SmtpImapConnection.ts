@@ -8,8 +8,11 @@ import { logger } from '../../../utils/logger';
 export class SmtpImapConnection extends EmailConnectionBase {
   readonly connectionType = 'smtp_imap' as const;
 
-  private transporter: nodemailer.Transporter;
+  private transporter: nodemailer.Transporter | null = null;
   private readonly smtpAuthUser: string;
+  private readonly smtpHost: string;
+  private readonly smtpPort: number;
+  private readonly smtpSecure: boolean;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
   private referencesChain: string[] = [];
@@ -26,21 +29,49 @@ export class SmtpImapConnection extends EmailConnectionBase {
     smtpSecure: boolean,
     smtpAuthUser: string,
     smtpAuthPass: string,
+    private oauth2AccessToken: string | undefined,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'smtp_imap');
     this.smtpAuthUser = smtpAuthUser;
-    this.transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure,
-      auth: {
-        user: smtpAuthUser,
-        pass: smtpAuthPass,
-      },
-    });
+    this.smtpHost = smtpHost;
+    this.smtpPort = smtpPort;
+    this.smtpSecure = smtpSecure;
+    this.oauth2AccessToken = oauth2AccessToken || undefined;
+    this.createTransporter(smtpAuthPass);
+  }
+
+  setOAuth2AccessToken(token: string): void {
+    this.oauth2AccessToken = token;
+    this.createTransporter();
+  }
+
+  private createTransporter(smtpAuthPass?: string): void {
+    const isOAuth2 = !!this.oauth2AccessToken;
+    const transporterConfig: Record<string, unknown> = {
+      host: this.smtpHost,
+      port: this.smtpPort,
+      secure: this.smtpSecure,
+      connectionTimeout: 30000,
+      socketTimeout: 30000,
+      auth: isOAuth2
+        ? {
+            type: 'OAuth2',
+            user: this.smtpAuthUser,
+            accessToken: this.oauth2AccessToken,
+          }
+        : {
+            user: this.smtpAuthUser,
+            pass: smtpAuthPass,
+          },
+    };
+    logger.info({ host: this.smtpHost, port: this.smtpPort, secure: this.smtpSecure, authType: isOAuth2 ? 'OAuth2' : 'LOGIN' }, 'SMTP/IMAP: creating transporter');
+    this.transporter = nodemailer.createTransport(transporterConfig as nodemailer.TransportOptions);
   }
 
   async verifyConnection(): Promise<void> {
+    if (!this.transporter) {
+      throw new Error('SMTP transporter not initialized');
+    }
     try {
       await this.transporter.verify();
       logger.info({ to: this.toAddress }, 'SMTP/IMAP: transporter verified successfully');
@@ -127,6 +158,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
       (mailOptions.headers as Record<string, string>)['References'] = headers.references;
     }
 
+    if (!this.transporter) {
+      logger.error({ to }, 'SMTP/IMAP: transporter not initialized');
+      return;
+    }
     try {
       const info = await this.transporter.sendMail(mailOptions);
       logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId }, 'SMTP/IMAP email sent');

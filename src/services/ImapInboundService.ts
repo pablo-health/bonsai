@@ -44,6 +44,7 @@ class ImapMailboxSession {
     public readonly smtpAuthUser: string,
     public readonly smtpAuthPass: string,
     public readonly keySettings: Record<string, unknown> | null,
+    public readonly oauth2AccessToken: string | undefined,
   ) {}
 
   public async connect(): Promise<void> {
@@ -51,14 +52,28 @@ class ImapMailboxSession {
     this.state = 'connecting';
 
     try {
-      const imap = new ImapConnection({
+      const useOAuth2 = this.oauth2AccessToken != null && this.oauth2AccessToken.length > 0;
+
+      const imapOpts: ImapConnection.Config = {
         user: this.imapUser,
         password: this.imapPass,
         host: this.imapHost,
         port: this.imapPort,
         tls: this.imapSecure,
+        tlsOptions: {
+          servername: this.imapHost,
+        },
         keepalive: true,
-      });
+      };
+
+      if (useOAuth2) {
+        imapOpts.xoauth2 = Buffer.from(
+          `user=${this.imapUser}\x01auth=Bearer ${this.oauth2AccessToken}\x01\x01`,
+          'utf-8',
+        ).toString('base64');
+      }
+
+      const imap = new ImapConnection(imapOpts);
 
       await new Promise<void>((resolve, reject) => {
         imap.once('ready', () => resolve());
@@ -68,7 +83,7 @@ class ImapMailboxSession {
 
       this.imap = imap;
       this.consecutiveErrors = 0;
-      logger.info({ providerId: this.providerId, host: this.imapHost }, 'IMAP connected');
+      logger.info({ providerId: this.providerId, host: this.imapHost, authMethod: useOAuth2 ? 'XOAUTH2' : 'password' }, 'IMAP connected');
 
       await this.openInbox();
     } catch (error) {
@@ -279,6 +294,7 @@ class ImapMailboxSession {
         references,
         undefined,
         undefined,
+        this.oauth2AccessToken,
       );
 
       this.processedUids.add(uid);
@@ -437,6 +453,7 @@ export class ImapInboundService {
       config.smtp.auth.user,
       config.smtp.auth.pass,
       apiKeyRecord.keySettings ?? null,
+      config.oauth2?.accessToken,
     );
 
     this.sessions.set(provider.id, session);
@@ -493,6 +510,7 @@ export class ImapInboundService {
           config.smtp.auth.user,
           config.smtp.auth.pass,
           apiKeyRecord.keySettings ?? null,
+          config.oauth2?.accessToken,
         );
 
         this.sessions.set(provider.id, session);

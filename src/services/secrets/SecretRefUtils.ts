@@ -25,6 +25,9 @@ export const SENSITIVE_PROVIDER_CONFIG_FIELDS = new Set([
 const SENSITIVE_NESTED_PATHS = [
   'smtp.auth.pass',
   'imap.auth.pass',
+  'oauth2.clientSecret',
+  'oauth2.refreshToken',
+  'oauth2.accessToken',
 ];
 
 /**

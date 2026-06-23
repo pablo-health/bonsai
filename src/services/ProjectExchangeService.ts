@@ -329,7 +329,7 @@ export class ProjectExchangeService extends BaseService {
       knowledgeItems: knowledgeItemRows.map(k => ({
         id: k.id,
         categoryId: k.categoryId,
-        question: k.question,
+        questions: k.questions,
         answer: k.answer,
         order: k.order,
       })),
@@ -725,7 +725,7 @@ export class ProjectExchangeService extends BaseService {
           id: k.id,
           projectId: newProjectId,
           categoryId: k.categoryId,
-          question: k.question,
+          questions: k.questions,
           answer: k.answer,
           order: k.order ?? 0,
         });

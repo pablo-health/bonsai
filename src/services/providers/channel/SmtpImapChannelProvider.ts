@@ -28,12 +28,23 @@ const imapConfigSchema = z.strictObject({
   pollingIntervalMs: z.number().int().min(1000).default(30000).describe('Fallback polling interval in milliseconds when IDLE is unavailable'),
 }).openapi('SmtpImapImapConfig');
 
+const oauth2ConfigSchema = z.strictObject({
+  tokenUrl: z.string().url().describe('OAuth2 token endpoint URL (e.g. https://oauth2.googleapis.com/token for Gmail)'),
+  clientId: z.string().describe('OAuth2 client ID'),
+  clientSecret: z.string().describe('OAuth2 client secret'),
+  refreshToken: z.string().optional().describe('OAuth2 refresh token (long-lived, managed by the OAuth2 callback/refresh service)'),
+  accessToken: z.string().optional().describe('Current OAuth2 access token (managed by the OAuth2 callback/refresh service)'),
+  accessTokenExpiry: z.number().int().optional().describe('Unix timestamp in milliseconds when the access token expires (managed by the OAuth2 callback/refresh service)'),
+  scope: z.string().describe('OAuth2 scope string (e.g. https://www.googleapis.com/auth/gmail.modify for Gmail)'),
+}).openapi('SmtpImapOauth2Config');
+
 export const smtpImapChannelProviderConfigSchema = z.strictObject({
   projectId: z.string().describe('Project ID that this email channel belongs to (required for IMAP inbound routing)'),
   fromAddress: z.string().email().describe('Sender email address'),
   smtp: smtpConfigSchema.describe('SMTP server configuration for sending emails'),
   imap: imapConfigSchema.describe('IMAP server configuration for receiving inbound email replies'),
   threadingStrategy: z.enum(['messageId', 'senderSubject']).default('messageId').describe('How to derive thread ID for conversation continuity'),
+  oauth2: oauth2ConfigSchema.optional().describe('Optional OAuth2/XOAUTH2 configuration. When present, supersedes password-based authentication for both SMTP and IMAP.'),
 }).openapi('SmtpImapChannelConfig');
 
 export type SmtpImapChannelProviderConfig = z.infer<typeof smtpImapChannelProviderConfigSchema>;

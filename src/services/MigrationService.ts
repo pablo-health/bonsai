@@ -374,7 +374,7 @@ export class MigrationService extends BaseService {
       tools: bundle.tools.map(toProjectStub),
       globalActions: bundle.globalActions.map(toProjectStub),
       knowledgeCategories: bundle.knowledgeCategories.map(toProjectStub),
-      knowledgeItems: bundle.knowledgeItems.map(r => ({ id: r.id as string, name: (r.question ?? r.id) as string })),
+      knowledgeItems: bundle.knowledgeItems.map(r => ({ id: r.id as string, name: (r.questions?.[0] ?? r.id) as string })),
       copyDecorators: bundle.copyDecorators.map(toProjectStub),
       sampleCopies: bundle.sampleCopies.map(toProjectStub),
       savedSliceQueries: bundle.savedSliceQueries.map(r => ({ id: r.id as string, name: r.name as string })),
@@ -1069,7 +1069,7 @@ export class MigrationService extends BaseService {
       target: [knowledgeItems.projectId, knowledgeItems.id],
       set: {
         categoryId: sql`excluded.category_id`,
-        question: sql`excluded.question`,
+        questions: sql`excluded.questions`,
         answer: sql`excluded.answer`,
         order: sql`excluded.order`,
         version: sql`${knowledgeItems.version} + 1`,
