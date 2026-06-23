@@ -46,11 +46,14 @@ export class SmtpImapConnection extends EmailConnectionBase {
   }
 
   private createTransporter(smtpAuthPass?: string): void {
-    this.transporter = nodemailer.createTransport({
+    const isOAuth2 = !!this.oauth2AccessToken;
+    const transporterConfig: Record<string, unknown> = {
       host: this.smtpHost,
       port: this.smtpPort,
       secure: this.smtpSecure,
-      auth: this.oauth2AccessToken
+      connectionTimeout: 30000,
+      socketTimeout: 30000,
+      auth: isOAuth2
         ? {
             type: 'OAuth2',
             user: this.smtpAuthUser,
@@ -60,7 +63,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
             user: this.smtpAuthUser,
             pass: smtpAuthPass,
           },
-    } as nodemailer.TransportOptions);
+    };
+    logger.info({ host: this.smtpHost, port: this.smtpPort, secure: this.smtpSecure, authType: isOAuth2 ? 'OAuth2' : 'LOGIN' }, 'SMTP/IMAP: creating transporter');
+    this.transporter = nodemailer.createTransport(transporterConfig as nodemailer.TransportOptions);
   }
 
   async verifyConnection(): Promise<void> {
