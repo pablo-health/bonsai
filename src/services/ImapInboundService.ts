@@ -5,6 +5,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db';
 import { providers, apiKeys } from '../db/schema';
 import { SmtpImapChannelHost } from '../channels/email/smtp-imap/SmtpImapChannelHost';
+import { OAuth2TokenRefreshService } from './OAuth2TokenRefreshService';
 import { smtpImapChannelProviderConfigSchema } from './providers/channel/SmtpImapChannelProvider';
 import { SecretRefUtils } from './secrets/SecretRefUtils';
 import { logger } from '../utils/logger';
@@ -430,6 +431,12 @@ export class ImapInboundService {
 
     const config = configResult.data;
 
+    if (config.oauth2?.accessToken && config.oauth2.accessTokenExpiry && Date.now() >= config.oauth2.accessTokenExpiry) {
+      logger.info({ providerId }, 'IMAP reload: OAuth2 token expired, refreshing inline');
+      await container.resolve(OAuth2TokenRefreshService).refreshProvider(providerId);
+      return;
+    }
+
     const apiKeyRecord = await this.findProjectApiKey(config.projectId);
     if (!apiKeyRecord) {
       logger.warn({ providerId, projectId: config.projectId }, 'No API key found for project, skipping IMAP reload');
@@ -486,6 +493,12 @@ export class ImapInboundService {
         }
 
         const config = configResult.data;
+
+        if (config.oauth2?.accessToken && config.oauth2.accessTokenExpiry && Date.now() >= config.oauth2.accessTokenExpiry) {
+          logger.info({ providerId: provider.id }, 'IMAP discovery: OAuth2 token expired, refreshing inline');
+          await container.resolve(OAuth2TokenRefreshService).refreshProvider(provider.id);
+          continue;
+        }
 
         const apiKeyRecord = await this.findProjectApiKey(config.projectId);
         if (!apiKeyRecord) {
