@@ -32,9 +32,9 @@ const oauth2ConfigSchema = z.strictObject({
   tokenUrl: z.string().url().describe('OAuth2 token endpoint URL (e.g. https://oauth2.googleapis.com/token for Gmail)'),
   clientId: z.string().describe('OAuth2 client ID'),
   clientSecret: z.string().describe('OAuth2 client secret'),
-  refreshToken: z.string().describe('OAuth2 refresh token (long-lived)'),
-  accessToken: z.string().describe('Current OAuth2 access token (rotated by the refresh service)'),
-  accessTokenExpiry: z.number().int().describe('Unix timestamp in milliseconds when the access token expires'),
+  refreshToken: z.string().optional().describe('OAuth2 refresh token (long-lived, managed by the OAuth2 callback/refresh service)'),
+  accessToken: z.string().optional().describe('Current OAuth2 access token (managed by the OAuth2 callback/refresh service)'),
+  accessTokenExpiry: z.number().int().optional().describe('Unix timestamp in milliseconds when the access token expires (managed by the OAuth2 callback/refresh service)'),
   scope: z.string().describe('OAuth2 scope string (e.g. https://www.googleapis.com/auth/gmail.modify for Gmail)'),
 }).openapi('SmtpImapOauth2Config');
 
