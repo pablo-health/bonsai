@@ -114,7 +114,7 @@ export class OAuth2TokenRefreshService {
     const { oauth2 } = config;
     const now = Date.now();
 
-    if (oauth2.accessTokenExpiry - now > EXPIRY_BUFFER_MS) {
+    if (!oauth2.accessTokenExpiry || !oauth2.refreshToken || oauth2.accessTokenExpiry - now > EXPIRY_BUFFER_MS) {
       return;
     }
 
