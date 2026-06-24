@@ -281,6 +281,7 @@ class ImapMailboxSession {
         this.keySettings,
         this.fromAddress,
         this.threadingStrategy,
+        this.providerId,
         this.smtpHost,
         this.smtpPort,
         this.smtpSecure,
@@ -294,7 +295,6 @@ class ImapMailboxSession {
         references,
         undefined,
         undefined,
-        this.oauth2AccessToken,
       );
 
       this.processedUids.add(uid);

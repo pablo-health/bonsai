@@ -128,14 +128,7 @@ export class SmtpImapChannelHost {
     if (oauth2?.accessToken && oauth2.accessTokenExpiry && Date.now() >= oauth2.accessTokenExpiry) {
       logger.info({ channelProviderId }, 'SMTP/IMAP outgoing: OAuth2 token expired, refreshing inline');
       await this.oauth2TokenRefreshService.refreshProvider(channelProviderId);
-      const refreshedRawConfig = await this.secretRefUtils.resolveObject(providerRecord.config as Record<string, unknown>);
-      const refreshedResult = smtpImapChannelProviderConfigSchema.safeParse(refreshedRawConfig);
-      if (refreshedResult.success) {
-        configResult.data = refreshedResult.data;
-      }
     }
-
-    const { oauth2: refreshedOAuth2 } = configResult.data;
 
     let resolvedStageId = body.stageId ?? queryStageId;
     if (!resolvedStageId) {
@@ -174,12 +167,12 @@ export class SmtpImapChannelHost {
       threadingStrategy ?? 'messageId',
       this.sessionManager,
       subject,
+      channelProviderId,
       smtp.host,
       smtp.port,
       smtp.secure,
       smtp.auth.user,
       smtp.auth.pass,
-      refreshedOAuth2?.accessToken,
     );
 
     try {
@@ -243,6 +236,7 @@ export class SmtpImapChannelHost {
     keySettings: Record<string, unknown> | null,
     fromAddress: string,
     threadingStrategy: 'messageId' | 'senderSubject',
+    providerId: string,
     smtpHost: string,
     smtpPort: number,
     smtpSecure: boolean,
@@ -256,7 +250,6 @@ export class SmtpImapChannelHost {
     references: string | string[] | undefined,
     stageId: string | undefined,
     agentId: string | undefined,
-    oauth2AccessToken: string | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
     logger.info({ projectId, from: senderEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
@@ -286,12 +279,12 @@ export class SmtpImapChannelHost {
       threadingStrategy ?? 'messageId',
       this.sessionManager,
       subject ?? 'Re: Conversation',
+      providerId,
       smtpHost,
       smtpPort,
       smtpSecure,
       smtpAuthUser,
       smtpAuthPass,
-      oauth2AccessToken,
     );
 
     try {
