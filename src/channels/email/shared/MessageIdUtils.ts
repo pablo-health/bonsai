@@ -13,8 +13,9 @@ export function extractDomainFromEmail(email?: string): string | undefined {
  * Generates a unique Message-ID for an email.
  *
  * When a conversation ID is provided, the format is:
- *   <{uuid}.{YYYYMMDD}.{HHMMSS}@domain>
- * where {uuid} is the conversation ID without the "conv_" prefix.
+ *   <{uuid}.{timestamp}@domain>
+ * where {uuid} is the conversation ID without the "conv_" prefix,
+ * and {timestamp} is Date.now() in base-36 to ensure uniqueness per message.
  *
  * Falls back to a random ID if no conversation ID is provided.
  * Uses the given domain, or `bonsai.ai` as a last resort.
@@ -24,7 +25,8 @@ export function generateEmailMessageId(conversationId?: string, domain?: string)
 
   if (conversationId) {
     const id = conversationId.replace(/^conv_/, '').replace(/-/g, '');
-    return `<${id}@${fallbackDomain}>`;
+    const timestamp = Date.now().toString(36);
+    return `<${id}.${timestamp}@${fallbackDomain}>`;
   }
 
   return `<${randomBytes(16).toString('hex')}@${fallbackDomain}>`;
