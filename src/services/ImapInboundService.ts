@@ -362,6 +362,11 @@ async function markSeen(imap: ImapConnection, uid: number): Promise<void> {
   });
 }
 
+async function resolveOAuth2RefreshService(): Promise<{ refreshProvider: (id: string) => Promise<void> }> {
+  const mod = await import('./OAuth2TokenRefreshService');
+  return container.resolve(mod.OAuth2TokenRefreshService);
+}
+
 @singleton()
 export class ImapInboundService {
   private sessions: Map<string, ImapMailboxSession> = new Map();
@@ -430,6 +435,12 @@ export class ImapInboundService {
 
     const config = configResult.data;
 
+    if (config.oauth2?.accessToken && config.oauth2.accessTokenExpiry && Date.now() >= config.oauth2.accessTokenExpiry) {
+      logger.info({ providerId }, 'IMAP reload: OAuth2 token expired, refreshing inline');
+      await (await resolveOAuth2RefreshService()).refreshProvider(providerId);
+      return;
+    }
+
     const apiKeyRecord = await this.findProjectApiKey(config.projectId);
     if (!apiKeyRecord) {
       logger.warn({ providerId, projectId: config.projectId }, 'No API key found for project, skipping IMAP reload');
@@ -486,6 +497,12 @@ export class ImapInboundService {
         }
 
         const config = configResult.data;
+
+        if (config.oauth2?.accessToken && config.oauth2.accessTokenExpiry && Date.now() >= config.oauth2.accessTokenExpiry) {
+          logger.info({ providerId: provider.id }, 'IMAP discovery: OAuth2 token expired, refreshing inline');
+          await (await resolveOAuth2RefreshService()).refreshProvider(provider.id);
+          continue;
+        }
 
         const apiKeyRecord = await this.findProjectApiKey(config.projectId);
         if (!apiKeyRecord) {
