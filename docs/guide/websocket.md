@@ -25,7 +25,7 @@ After connecting, the client must authenticate with an API key:
     "sendTextInput": true,
     "receiveVoiceOutput": true,
     "receiveTranscriptionUpdates": true,
-    "receiveEvents": false
+    "receiveEvents": true
   }
 }
 ```

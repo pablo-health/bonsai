@@ -234,8 +234,6 @@ Voice input uses the `control` channel for signaling. The audio itself flows aut
 
 **1. Signal start (control channel):**
 
-**1. Signal start (control channel):**
-
 ```json
 {
   "requestId": "req-6",

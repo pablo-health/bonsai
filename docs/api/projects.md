@@ -34,7 +34,10 @@ Content-Type: application/json
 | `conversationTimeoutSeconds` | `integer` (min: 0) | No | Inactivity timeout in seconds. Active conversations with no new events for this duration are automatically aborted. Set to `0` or omit to disable. Negative values are rejected. |
 | `autoCreateUsers` | `boolean` | No (default: `false`) | When enabled, users are automatically created on first WebSocket connection if they do not exist |
 | `defaultGuardrailClassifierId` | `string` | No | ID of the classifier used to evaluate guardrails for all conversations in this project |
+| `recordingConfig` | `RecordingConfig` | No | Audio recording configuration for conversation debugging |
+| `sampleCopyConfig` | [`SampleCopyConfig`](#sample-copy-config) | No | Sample copy configuration including the default classifier for prompt triggers |
 | `startingStageId` | `string` | No | ID of the stage to start new conversations at when no `stageId` is provided at conversation start time. Acts as the project-level default starting stage. |
+| `costManagementConfig` | [`CostManagementConfig`](#cost-management-config) | No | Project-level LLM token cost management configuration |
 | `recordingConfig` | [`RecordingConfig`](#recording-config) | No | Audio recording configuration for conversation debugging |
 
 **Response** `201 Created` — [Project Response](#project-response)
@@ -102,6 +105,8 @@ All fields from the create body are optional. `version` is required for optimist
 | `autoCreateUsers` | `boolean` | No | Updated auto-create users setting |
 | `defaultGuardrailClassifierId` | `string` or `null` | No | Updated guardrail classifier ID. Set to `null` to disable. |
 | `startingStageId` | `string` or `null` | No | Updated default starting stage ID. Set to `null` to remove. |
+| `sampleCopyConfig` | [`SampleCopyConfig`](#sample-copy-config) or `null` | No | Updated sample copy configuration. Set to `null` to clear. |
+| `costManagementConfig` | [`CostManagementConfig`](#cost-management-config) or `null` | No | Updated cost management configuration. Set to `null` to remove. |
 | `recordingConfig` | [`RecordingConfig`](#recording-config) or `null` | No | Updated recording configuration. Set to `null` to disable. |
 
 **Response** `200 OK` — [Project Response](#project-response)
@@ -143,6 +148,8 @@ DELETE /api/projects/:id
 | `autoCreateUsers` | `boolean` | No | Whether users are auto-created on first WebSocket connection |
 | `defaultGuardrailClassifierId` | `string` | Yes | Classifier ID for evaluating guardrails |
 | `startingStageId` | `string` | Yes | Default starting stage ID. `null` means no project-level default is set. |
+| `sampleCopyConfig` | [`SampleCopyConfig`](#sample-copy-config) | Yes | Sample copy configuration. `null` means not configured. |
+| `costManagementConfig` | [`CostManagementConfig`](#cost-management-config) | Yes | LLM token cost management configuration. `null` means not configured. |
 | `recordingConfig` | [`RecordingConfig`](#recording-config) | Yes | Audio recording configuration. `null` means recording is not configured. |
 | `version` | `integer` | No | Version number |
 | `createdAt` | `string` | No | ISO 8601 creation timestamp |
@@ -157,7 +164,10 @@ DELETE /api/projects/:id
 | `asrProviderId` | `string` | No | ASR provider ID |
 | `settings` | `object` | No | ASR-specific settings (varies by provider: Azure, ElevenLabs, Deepgram) |
 | `unintelligiblePlaceholder` | `string` | No | Placeholder text for unintelligible speech |
-| `voiceActivityDetection` | `boolean` | No | Client-side VAD hint. When `true`, the client should apply local VAD before sending audio. Has no effect on the server. |
+| `voiceActivityDetection` | `boolean` | No | Whether to enable voice activity detection to automatically start/stop recording based on speech presence |
+| `silenceTimeoutMs` | `integer` (min: 0) | No | Milliseconds of user silence before triggering an AI response. Set to 0 or omit to disable. |
+| `maxSilences` | `integer` (min: 0) | No | Maximum number of consecutive silence responses before ending the conversation. Set to 0 or omit for unlimited. |
+| `silencePlaceholder` | `string` or `null` | No | Text fed to the AI as user input when silence is detected. The stage prompt can reference this text to generate an appropriate response. |
 | `serverVad` | [`ServerVadConfig`](#server-vad-config) | No | Server-side VAD configuration. When set, the server manages the turn lifecycle automatically — see [Server-Side VAD](#server-vad-config). |
 
 ## Server VAD Config
@@ -259,6 +269,30 @@ Describes a single field in a typed schema. Used in `userProfileVariableDescript
 | `format` | `string` | No (default: `pcm_16000`) | Audio format for saved recordings (e.g. `pcm_16000`, `pcm_48000`, `g711_ulaw`, `opus`) |
 
 When enabled, two separate audio files are produced per conversation: `user_voice` and `ai_voice`. Source audio is automatically converted to the configured recording format. Recordings are uploaded as conversation artifacts to the project's configured storage provider.
+
+## Sample Copy Config
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `defaultClassifierId` | `string` | No | ID of the classifier used to evaluate sample copy prompt triggers for all stages in this project. Individual sample copies can override this with `classifierOverrideId`. |
+
+## Cost Management Config
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `llmProviderId` | `string` | Yes | ID of the LLM provider whose cost rates to use |
+| `monthlyBudgetUsd` | `number` (positive) | No | Monthly budget limit in USD. When exceeded, LLM calls will fail with a budget error. |
+| `perConversationBudgetUsd` | `number` (positive) | No | Per-conversation budget limit in USD. When exceeded, the conversation will fail with a budget error. |
+
+## Get Audit Logs
+
+```http
+GET /api/projects/:id/audit-logs
+```
+
+**Required permission:** `audit:read`
+
+Returns audit log entries for the specified project. See [Audit Logs](./audit-logs) for response format.
 
 ## Archive Project
 

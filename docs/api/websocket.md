@@ -528,6 +528,15 @@ When `receiveEvents` is enabled, the server pushes conversation events:
 | `conversation_aborted` | Conversation aborted | `reason`, `stageId` |
 | `conversation_failed` | Conversation failed | `reason`, `stageId` |
 | `jump_to_stage` | Stage transition | `fromStageId`, `toStageId` |
+| `execution_plan` | Planned actions before execution | `stageId`, `actions[]` |
+| `moderation` | Content moderation decision | `action`, `reason` |
+| `variables_updated` | Stage variables modified | `stageId`, `variables` |
+| `user_profile_updated` | User profile fields changed | `profile` |
+| `user_input_modified` | User input altered by middleware | `originalText`, `modifiedText` |
+| `user_banned` | User banned during conversation | `reason` |
+| `visibility_changed` | Conversation visibility toggled | `isVisible` |
+| `sample_copy_selection` | Sample copy variant selected | `sampleCopyName`, `selection` |
+| `turn_aborted` | Current AI turn aborted | `reason` |
 
 The `eventData.metadata` object of `message`, `classification`, `transformation`, and `tool_call` events carries timing measurements. See [Event Metadata — Timing Fields](./conversations#event-metadata-timing-fields) for the full field reference.
 
