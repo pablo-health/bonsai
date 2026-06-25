@@ -64,26 +64,29 @@ async function refreshToken(config: any): Promise<string | null> {
 
 export async function runOperation(op: OperationConfig, options: RunOptions): Promise<number> {
   const startTime = Date.now();
+  const cmd = options as any;
+  const opts = cmd._optionValues || cmd;
   const config = await loadConfig({
-    project: options.project as string | undefined,
-    token: options.token as string | undefined,
+    baseUrl: opts.baseUrl as string | undefined,
+    project: opts.project as string | undefined,
+    token: opts.token as string | undefined,
   });
 
   if (!config.baseUrl) {
     const env = errorEnvelope('CONFIG_ERROR', 'No API base URL configured. Set --base-url, BONSAI_API_BASE_URL, or configure via `bonsai config set`.', 1);
-    printEnvelope(env, options.json);
+    printEnvelope(env, opts.json);
     return 2;
   }
 
   if (!config.token) {
     const env = errorEnvelope('UNAUTHORIZED', 'No authentication token. Set --token, BONSAI_API_TOKEN, or run `bonsai auth login`.', 401);
-    printEnvelope(env, options.json);
+    printEnvelope(env, opts.json);
     return 3;
   }
 
   if (op.scope === 'project' && !config.project) {
     const env = errorEnvelope('MISSING_PROJECT', 'No project ID. Set --project, BONSAI_PROJECT_ID, or configure default.', 400);
-    printEnvelope(env, options.json);
+    printEnvelope(env, opts.json);
     return 2;
   }
 
@@ -92,10 +95,10 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
     pathParams.projectId = config.project!;
   }
   for (const name of op.pathParamNames) {
-    const value = options[name];
+    const value = opts[name];
     if (value === undefined || value === null) {
       const env = errorEnvelope('MISSING_ARG', `Missing required parameter: ${name}`, 400);
-      printEnvelope(env, options.json);
+      printEnvelope(env, opts.json);
       return 2;
     }
     pathParams[name] = String(value);
@@ -103,38 +106,43 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
 
   const queryParams: Record<string, string | number | boolean> = {};
   for (const name of op.queryParamNames) {
-    const value = options[name];
+    const value = opts[name];
     if (value !== undefined && value !== null && value !== '') {
       queryParams[name] = value as string | number | boolean;
     }
   }
 
   let body: unknown = undefined;
-  if (options.data !== undefined && options.data !== null && options.data !== '') {
-    if (typeof options.data === 'string') {
-      if (options.data === '-') {
+  if (opts.data !== undefined && opts.data !== null && opts.data !== '') {
+    if (typeof opts.data === 'string') {
+      if (opts.data === '-') {
         const chunks: Buffer[] = [];
         for await (const chunk of process.stdin) {
           chunks.push(chunk);
         }
         body = JSON.parse(Buffer.concat(chunks).toString());
       } else {
-        body = JSON.parse(options.data);
+        body = JSON.parse(opts.data);
       }
     }
-  } else if (options.dataFile) {
+  } else if (opts.dataFile) {
     const { readFileSync } = await import('node:fs');
-    body = JSON.parse(readFileSync(options.dataFile as string, 'utf-8'));
+    body = JSON.parse(readFileSync(opts.dataFile as string, 'utf-8'));
   } else {
-    const fieldKeys = Object.keys(options).filter(k =>
-      !['json', 'verbose', 'quiet', 'project', 'token', 'baseUrl', 'timeout', 'data', 'dataFile', 'help', 'noHelp'].includes(k) &&
+    const excludedKeys = new Set([
+      'json', 'verbose', 'quiet', 'project', 'token', 'baseUrl', 'timeout',
+      'data', 'dataFile', 'help', 'noHelp', 'paginate', 'jsonSchema',
+    ]);
+    const fieldKeys = Object.keys(opts).filter(k =>
+      !excludedKeys.has(k) &&
       !op.pathParamNames.includes(k) &&
-      !op.queryParamNames.includes(k)
+      !op.queryParamNames.includes(k) &&
+      typeof opts[k] !== 'object'
     );
     if (fieldKeys.length > 0) {
       body = {};
       for (const key of fieldKeys) {
-        const value = options[key];
+        const value = opts[key];
         if (value !== undefined && value !== null) {
           (body as Record<string, unknown>)[key] = value;
         }
@@ -171,18 +179,18 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
       }
     }
 
-    if (options.verbose) {
+    if (opts.verbose) {
       process.stderr.write(`[verbose] ${op.method} ${op.pathTemplate} → ${resp.status} (${Date.now() - startTime}ms)\n`);
     }
 
     if (resp.status >= 400) {
       const env = translateServerError(resp.status, resp.data);
-      printEnvelope(env, options.json);
+      printEnvelope(env, opts.json);
       return getExitCode(env.error.code);
     }
 
     // Handle pagination
-    if (op.isPaginated && options.paginate) {
+    if (op.isPaginated && opts.paginate) {
       const allItems: unknown[] = [];
       let currentData = resp.data as Record<string, unknown> | unknown[] | null;
 
@@ -236,19 +244,19 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
         paginated: true,
         totalItems: allItems.length,
       });
-      printEnvelope(envelope, options.json);
+      printEnvelope(envelope, opts.json);
       return 0;
     }
 
     const envelope: Envelope = successEnvelope(resp.data ?? null, {
       duration_ms: Date.now() - startTime,
     });
-    printEnvelope(envelope, options.json);
+    printEnvelope(envelope, opts.json);
     return 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const env = errorEnvelope('NETWORK_ERROR', message, 0);
-    printEnvelope(env, options.json);
+    printEnvelope(env, opts.json);
     return 8;
   }
 }

@@ -17,9 +17,6 @@ program
   .option('--json', 'Emit JSON envelope', false)
   .option('-v, --verbose', 'Verbose output', false)
   .option('-q, --quiet', 'Suppress non-essential output', false)
-  .option('--base-url <url>', 'API base URL')
-  .option('--project <id>', 'Default project ID')
-  .option('--token <string>', 'Auth token')
   .option('--timeout <ms>', 'Request timeout', '30000')
   .hook('preAction', async () => {
     // Config is resolved per-command in handler

@@ -479,13 +479,16 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '    for (const op of res.operations) {\n';
   code += '      const argStr = op.pathParams.map((p: PathParam) => `<${p.name}>`).join(\' \');\n';
    code += '      const actionCmd = cmd.command(op.action)\n';
-  code += '        .description(op.summary)\n';
-  code += '        .option(\'--json\', \'Emit JSON envelope\', false)\n';
-  code += '        .option(\'-v, --verbose\', \'Verbose output\', false)\n';
+   code += '        .description(op.summary)\n';
+   code += '        .option(\'--json\', \'Emit JSON envelope\', false)\n';
+   code += '        .option(\'-v, --verbose\', \'Verbose output\', false)\n';
+   code += '        .option(\'--base-url <url>\', \'API base URL\')\n';
+   code += '        .option(\'--token <string>\', \'Auth token\')\n';
+   code += '        .option(\'--timeout <ms>\', \'Request timeout\', \'30000\')\n';
 
-  code += '      if (res.scope === "project") {\n';
-  code += '        actionCmd.option(\'--project <id>\', \'Project ID\');\n';
-  code += '      }\n';
+   code += '      if (res.scope === "project") {\n';
+   code += '        actionCmd.option(\'--project <id>\', \'Project ID\');\n';
+   code += '      }\n';
 
   code += '      if (op.hasBody) {\n';
   code += '        actionCmd\n';
@@ -549,9 +552,6 @@ function generateIndex(resources: Map<string, ResourceDef>): string {
   code += '  .option(\'--json\', \'Emit JSON envelope\', false)\n';
   code += '  .option(\'-v, --verbose\', \'Verbose output\', false)\n';
   code += '  .option(\'-q, --quiet\', \'Suppress non-essential output\', false)\n';
-  code += '  .option(\'--base-url <url>\', \'API base URL\')\n';
-  code += '  .option(\'--project <id>\', \'Default project ID\')\n';
-  code += '  .option(\'--token <string>\', \'Auth token\')\n';
   code += '  .option(\'--timeout <ms>\', \'Request timeout\', \'30000\')\n';
   code += '  .hook(\'preAction\', async () => {\n';
   code += '    // Config is resolved per-command in handler\n';

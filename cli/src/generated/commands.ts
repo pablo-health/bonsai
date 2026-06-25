@@ -25,6 +25,9 @@ export function registerCommands(program: Command): void {
         .description(op.summary)
         .option('--json', 'Emit JSON envelope', false)
         .option('-v, --verbose', 'Verbose output', false)
+        .option('--base-url <url>', 'API base URL')
+        .option('--token <string>', 'Auth token')
+        .option('--timeout <ms>', 'Request timeout', '30000')
       if (res.scope === "project") {
         actionCmd.option('--project <id>', 'Project ID');
       }
