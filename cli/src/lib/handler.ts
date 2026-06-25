@@ -10,6 +10,7 @@ export interface OperationConfig {
   action: string;
   pathParamNames: string[];
   queryParamNames: string[];
+  bodySchemaRef?: string | null;
 }
 
 interface RunOptions {

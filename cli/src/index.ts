@@ -5,6 +5,8 @@ import { registerCommands } from './generated/commands.js';
 import { getResourceNames } from './generated/resources.js';
 import { loadConfig } from './lib/config.js';
 import { registerAuthCommands } from './lib/auth.js';
+import { registerOpenApiCommands } from './lib/openapi.js';
+import { getOperationSchema } from './lib/schema.js';
 
 const program = new Command();
 
@@ -25,6 +27,7 @@ program
 
 registerCommands(program);
 registerAuthCommands(program);
+registerOpenApiCommands(program);
 
 // Discovery commands
 program.command('resources')
