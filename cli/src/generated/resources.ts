@@ -12,6 +12,7 @@ export interface Operation {
   action: string;
   summary: string;
   description: string;
+  isPaginated: boolean;
 }
 export interface ResourceDef {
   name: string;
@@ -35,6 +36,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List operator users",
         description: "Retrieves a paginated list of operator users with optional filtering",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -47,6 +49,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new operator user",
         description: "Creates a new operator user with the specified credentials and roles",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -59,6 +62,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get operator user by ID",
         description: "Retrieves a single operator user by their unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -71,6 +75,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update operator user",
         description: "Updates an existing operator user with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -83,6 +88,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete operator user",
         description: "Deletes an operator user with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -95,6 +101,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get operator audit logs",
         description: "Retrieves audit logs for a specific operator user",
+        isPaginated: false,
       },
     ],
   },
@@ -113,6 +120,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get own profile",
         description: "Retrieves the profile information of the currently logged-in operator user",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -125,6 +133,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update own profile",
         description: "Updates the profile of the currently logged-in operator user. Allows changing display name and/or password. When changing password, the old password must be provided for verification.",
+        isPaginated: false,
       },
     ],
   },
@@ -143,6 +152,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "status",
         summary: "Check system setup status",
         description: "Returns whether the system has been initialized with at least one operator account",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -155,6 +165,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "initial_operator",
         summary: "Create initial operator account",
         description: "Creates the first operator account with super_admin role. This endpoint only works when no operator accounts exist. Returns operator details and authentication tokens for immediate login.",
+        isPaginated: false,
       },
     ],
   },
@@ -173,6 +184,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List projects",
         description: "Retrieves a paginated list of projects with optional filtering, sorting, and searching. Use ?archived=true to list archived projects.",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -185,6 +197,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new project",
         description: "Creates a new project that groups stages, agents, classifiers, context transformers, tools, knowledge, actions, and issues",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -197,6 +210,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get project by ID",
         description: "Retrieves a single project by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -209,6 +223,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update project",
         description: "Updates an existing project with optimistic locking support",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -221,6 +236,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete project",
         description: "Deletes a project and all its associated entities",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -233,6 +249,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "archive",
         summary: "Archive project",
         description: "Archives a project. Archived projects cannot be modified. Pass current version for optimistic locking.",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -245,6 +262,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "unarchive",
         summary: "Unarchive project",
         description: "Restores an archived project to active status. Pass current version for optimistic locking.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -257,6 +275,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get project audit logs",
         description: "Retrieves audit logs for a specific project",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -269,6 +288,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "export",
         summary: "Export a project as an exchange bundle",
         description: "Produces a self-contained, provider-agnostic exchange bundle for the specified project. All child entities (agents, stages, classifiers, context transformers, tools, global actions, guardrails, knowledge base) are included. Provider UUID references are replaced by provider hints (`type` + `apiType`) so the bundle can be imported into any environment. Credentials are never included. Entity IDs in the bundle are preserved as local cross-references and remapped to fresh UUIDs on import.",
+        isPaginated: false,
       },
     ],
   },
@@ -287,6 +307,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "List audit logs",
         description: "Retrieves a paginated list of audit logs with optional filtering by entity type, action, user, or date range. Use filters for precise queries: entityType, action (CREATE/UPDATE/DELETE), userId, entityId, or date ranges with operators (gte, lte, between).",
+        isPaginated: true,
       },
     ],
   },
@@ -305,6 +326,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get aggregated latency statistics",
         description: "Returns aggregated latency statistics (avg, median, p95, min, max) for key turn-level metrics across conversations in the project. Supports filtering by date range, stage, and input source.",
+        isPaginated: false,
       },
     ],
   },
@@ -323,6 +345,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get latency percentile distributions",
         description: "Returns percentile distributions (p50, p75, p90, p95, p99) for key turn-level duration metrics. Useful for understanding latency spread and tail performance.",
+        isPaginated: false,
       },
     ],
   },
@@ -341,6 +364,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get latency trend over time",
         description: "Returns a time-series of average latency values bucketed by the specified interval (hour, day, or week). Useful for detecting latency regressions or improvements over time.",
+        isPaginated: false,
       },
     ],
   },
@@ -359,6 +383,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "timeline",
         summary: "Get conversation timeline",
         description: "Returns an ordered list of per-turn timing breakdowns for a specific conversation. Each turn combines user-side and assistant-side timing into a single row for waterfall visualization.",
+        isPaginated: false,
       },
     ],
   },
@@ -377,6 +402,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get aggregated token usage statistics",
         description: "Returns aggregated LLM token usage statistics broken down by event type (message, classification, transformation, tool_call). Includes total prompt tokens, completion tokens, and combined totals.",
+        isPaginated: false,
       },
     ],
   },
@@ -395,6 +421,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get token usage trend over time",
         description: "Returns a time-series of token consumption bucketed by the specified interval (hour, day, or week). Useful for tracking LLM usage growth and optimizing prompt costs.",
+        isPaginated: false,
       },
     ],
   },
@@ -413,6 +440,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get analytics source catalog",
         description: "Returns the available analytics sources with their queryable dimensions and metrics. Use this to discover what can be queried via the /analytics/query endpoint.",
+        isPaginated: false,
       },
     ],
   },
@@ -431,6 +459,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Slice-and-dice analytics query",
         description: "Generic analytics query engine. Specify a source, metrics to aggregate, optional groupBy dimensions, time interval for bucketing, and filters. Use normalizeBy to enable two-phase aggregation: metrics are first summed within each unit of that dimension (e.g. conversationId), then the requested aggregation function is applied across those sums — enabling queries like \"average total tokens per conversation\". Returns flat rows with dimension values and computed metrics. Use GET /analytics/sources to discover available sources, dimensions, and metrics.",
+        isPaginated: false,
       },
     ],
   },
@@ -449,6 +478,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List saved slice queries",
         description: "Returns the operator's own saved queries plus all shared queries within the project",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -461,6 +491,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a saved slice query",
         description: "Saves a named slice query configuration for later reuse. The name must be unique within the project.",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -473,6 +504,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update a saved slice query",
         description: "Updates an existing saved slice query with optimistic locking. Only the owning operator or a super_admin may update.",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -485,6 +517,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a saved slice query",
         description: "Deletes a saved slice query with optimistic locking. Only the owning operator or a super_admin may delete.",
+        isPaginated: false,
       },
     ],
   },
@@ -503,6 +536,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Run a funnel query",
         description: "Executes a user-centric funnel query that cascades qualifying users through ordered event steps. Returns per-step user counts and conversion rates.",
+        isPaginated: false,
       },
     ],
   },
@@ -521,6 +555,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List saved funnel queries",
         description: "Returns the operator's own saved funnel queries plus all shared queries within the project, sorted by updatedAt descending.",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -533,6 +568,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a saved funnel query",
         description: "Saves a named funnel query configuration for later reuse. The name must be unique within the project.",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -545,6 +581,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update a saved funnel query",
         description: "Updates an existing saved funnel query with optimistic locking. Only the owning operator or a super_admin may update.",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -557,6 +594,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a saved funnel query",
         description: "Deletes a saved funnel query with optimistic locking. Only the owning operator or a super_admin may delete.",
+        isPaginated: false,
       },
     ],
   },
@@ -575,6 +613,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List classifiers",
         description: "Retrieves a paginated list of classifiers with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -587,6 +626,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new classifier",
         description: "Creates a new classifier with specified name, prompt, and configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -599,6 +639,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get classifier by ID",
         description: "Retrieves a single classifier by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -611,6 +652,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update classifier",
         description: "Updates an existing classifier with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -623,6 +665,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete classifier",
         description: "Deletes a classifier with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -635,6 +678,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get classifier audit logs",
         description: "Retrieves audit logs for a specific classifier",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -647,6 +691,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone classifier",
         description: "Creates a copy of an existing classifier with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -665,6 +710,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List context transformers",
         description: "Retrieves a paginated list of context transformers with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -677,6 +723,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new context transformer",
         description: "Creates a new context transformer with specified name, prompt, and configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -689,6 +736,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get context transformer by ID",
         description: "Retrieves a single context transformer by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -701,6 +749,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update context transformer",
         description: "Updates an existing context transformer with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -713,6 +762,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete context transformer",
         description: "Deletes a context transformer with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -725,6 +775,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get context transformer audit logs",
         description: "Retrieves audit logs for a specific context transformer",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -737,6 +788,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone context transformer",
         description: "Creates a copy of an existing context transformer with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -755,6 +807,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get conversation by ID",
         description: "Retrieves a single conversation by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -767,6 +820,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete conversation",
         description: "Deletes a conversation and all its associated events (via cascade delete)",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -779,6 +833,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List conversations",
         description: "Retrieves a paginated list of conversations with optional filtering, sorting, and search. Supports filtering by userId, sessionId, stageId, status, and timestamps.",
+        isPaginated: true,
       },
       {
         method: "get",
@@ -791,6 +846,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "events",
         summary: "List conversation events",
         description: "Retrieves a paginated list of events for a specific conversation with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "get",
@@ -803,6 +859,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "event",
         summary: "Get conversation event by ID",
         description: "Retrieves a specific event for a conversation by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -815,6 +872,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get conversation audit logs",
         description: "Retrieves audit logs for a specific conversation",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -827,6 +885,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "artifacts",
         summary: "List conversation artifacts",
         description: "Retrieves a paginated list of artifacts for a specific conversation with optional filtering by type",
+        isPaginated: true,
       },
       {
         method: "get",
@@ -839,6 +898,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "artifact",
         summary: "Get conversation artifact by ID",
         description: "Retrieves a specific artifact for a conversation by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -851,6 +911,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "artifacts_download",
         summary: "Download conversation artifact",
         description: "Downloads the binary data for a specific artifact",
+        isPaginated: false,
       },
     ],
   },
@@ -869,6 +930,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List knowledge categories",
         description: "Retrieves a paginated list of knowledge categories with their items. Supports filtering, sorting, and text search",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -881,6 +943,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new knowledge category",
         description: "Creates a new knowledge category with trigger phrase and associated tags",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -893,6 +956,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get knowledge category by ID",
         description: "Retrieves a single knowledge category with all its items by unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -905,6 +969,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update knowledge category",
         description: "Updates an existing knowledge category with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -917,6 +982,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete knowledge category",
         description: "Deletes a knowledge category with optimistic locking. This will also delete all items in the category",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -929,6 +995,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "items_list",
         summary: "Get items by category",
         description: "Retrieves all knowledge items belonging to a specific category, ordered by their display order",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -941,6 +1008,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get knowledge category audit logs",
         description: "Retrieves audit logs for a specific knowledge category",
+        isPaginated: false,
       },
     ],
   },
@@ -959,6 +1027,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List knowledge items",
         description: "Retrieves a paginated list of knowledge items. Supports filtering by categoryId, text search, sorting, and pagination",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -971,6 +1040,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new knowledge item",
         description: "Creates a new knowledge item (Q&A pair) within a specific category",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -983,6 +1053,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get knowledge item by ID",
         description: "Retrieves a single knowledge item by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -995,6 +1066,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update knowledge item",
         description: "Updates an existing knowledge item with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1007,6 +1079,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete knowledge item",
         description: "Deletes a knowledge item with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1019,6 +1092,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get knowledge item audit logs",
         description: "Retrieves audit logs for a specific knowledge item",
+        isPaginated: false,
       },
     ],
   },
@@ -1037,6 +1111,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List agents",
         description: "Retrieves a paginated list of agents with optional filtering",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1049,6 +1124,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new agent",
         description: "Creates a new AI agent with specified characteristics and voice configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1061,6 +1137,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get agent by ID",
         description: "Retrieves a single agent by their unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1073,6 +1150,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update agent",
         description: "Updates an existing agent with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1085,6 +1163,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete agent",
         description: "Deletes an agent with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1097,6 +1176,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get agent audit logs",
         description: "Retrieves audit logs for a specific agent",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1109,6 +1189,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone agent",
         description: "Creates a copy of an existing agent with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -1127,6 +1208,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List providers",
         description: "Retrieves a paginated list of provider configurations with optional filtering by providerType, apiType, tags, etc.",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1139,6 +1221,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new provider",
         description: "Creates a new provider configuration for AI services (ASR, TTS, LLM, Embeddings)",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1151,6 +1234,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get provider by ID",
         description: "Retrieves a single provider configuration by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1163,6 +1247,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update provider",
         description: "Updates an existing provider configuration with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1175,6 +1260,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete provider",
         description: "Deletes a provider configuration with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1187,6 +1273,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get provider audit logs",
         description: "Retrieves audit logs for a specific provider configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1199,6 +1286,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "models",
         summary: "Enumerate LLM models",
         description: "Enumerates available models for a configured LLM provider by querying the provider API. Falls back to a static model list when the API is unavailable.",
+        isPaginated: false,
       },
     ],
   },
@@ -1217,6 +1305,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get complete provider catalog",
         description: "Returns information about all available ASR, TTS, and LLM providers including their models, capabilities, and supported features",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1229,6 +1318,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get specific provider information",
         description: "Returns detailed information about a specific provider by type and API type",
+        isPaginated: false,
       },
     ],
   },
@@ -1247,6 +1337,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get ASR providers",
         description: "Returns information about all available ASR (Automatic Speech Recognition) providers including supported languages and capabilities",
+        isPaginated: false,
       },
     ],
   },
@@ -1265,6 +1356,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get TTS providers",
         description: "Returns information about all available TTS (Text-to-Speech) providers including models, voices, and supported languages",
+        isPaginated: false,
       },
     ],
   },
@@ -1283,6 +1375,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get LLM providers",
         description: "Returns information about all available LLM (Large Language Model) providers including models, capabilities like tool calling, JSON output, and context windows",
+        isPaginated: false,
       },
     ],
   },
@@ -1301,6 +1394,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get storage providers",
         description: "Returns information about all available storage providers including S3, Azure Blob, Google Cloud Storage, and local filesystem",
+        isPaginated: false,
       },
     ],
   },
@@ -1319,6 +1413,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "Get moderation providers",
         description: "Returns information about all available content moderation providers including supported models and detectable categories. Category names listed here are the exact strings to use in moderationConfig.blockedCategories.",
+        isPaginated: false,
       },
     ],
   },
@@ -1337,6 +1432,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List all supported channels",
         description: "Returns all communication channel types supported by this backend instance, including their capabilities and supported audio formats.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1349,6 +1445,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get a channel by type",
         description: "Returns details and capabilities for a single channel type.",
+        isPaginated: false,
       },
     ],
   },
@@ -1367,6 +1464,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List environments",
         description: "Retrieves a paginated list of environments with optional filtering and sorting (passwords excluded)",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1379,6 +1477,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new environment",
         description: "Creates a new environment configuration for data migration between server instances",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1391,6 +1490,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get environment by ID",
         description: "Retrieves a single environment by its unique identifier (password excluded)",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1403,6 +1503,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update environment",
         description: "Updates an existing environment with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1415,6 +1516,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete environment",
         description: "Deletes an environment with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1427,6 +1529,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get environment audit logs",
         description: "Retrieves audit logs for a specific environment",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1439,6 +1542,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "migration_scope",
         summary: "Preview remote migration scope",
         description: "Authenticates against the stored environment and returns lightweight stubs (id + name) of all entities that would be pulled with the given selection — without writing any data. Same query params as GET /api/migration/preview on the source instance.",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1451,6 +1555,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "migration_pull",
         summary: "Pull data from environment",
         description: "Authenticates against the stored environment, checks schema compatibility, fetches the remote export bundle, and imports it locally — all server-side. Returns a job immediately with status \"pending\"; poll GET /api/environments/{id}/migration/jobs/{jobId} for progress.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1463,6 +1568,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "migration_job",
         summary: "Get migration job status",
         description: "Returns the current state of an async pull job scoped to this environment. Jobs are held in process memory — a server restart clears all job history.",
+        isPaginated: false,
       },
     ],
   },
@@ -1481,6 +1587,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List global actions",
         description: "Retrieves a paginated list of global actions with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1493,6 +1600,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new global action",
         description: "Creates a new global action with specified name, prompt trigger, operations, and configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1505,6 +1613,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get global action by ID",
         description: "Retrieves a single global action by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1517,6 +1626,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update global action",
         description: "Updates an existing global action with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1529,6 +1639,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete global action",
         description: "Deletes a global action with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1541,6 +1652,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get global action audit logs",
         description: "Retrieves audit logs for a specific global action",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1553,6 +1665,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone global action",
         description: "Creates a copy of an existing global action with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -1571,6 +1684,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List sample copies",
         description: "Retrieves a paginated list of sample copies with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1583,6 +1697,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new sample copy",
         description: "Creates a new sample copy with a set of variant answers and classifier trigger configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1595,6 +1710,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get sample copy by ID",
         description: "Retrieves a single sample copy by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1607,6 +1723,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update sample copy",
         description: "Updates an existing sample copy with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1619,6 +1736,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete sample copy",
         description: "Deletes a sample copy with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1631,6 +1749,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get sample copy audit logs",
         description: "Retrieves audit logs for a specific sample copy",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1643,6 +1762,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone sample copy",
         description: "Creates a copy of an existing sample copy with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -1661,6 +1781,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List copy decorators",
         description: "Retrieves a paginated list of copy decorators with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1673,6 +1794,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new copy decorator",
         description: "Creates a new copy decorator with a name and template string",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1685,6 +1807,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get copy decorator by ID",
         description: "Retrieves a single copy decorator by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1697,6 +1820,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update copy decorator",
         description: "Updates an existing copy decorator with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1709,6 +1833,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete copy decorator",
         description: "Deletes a copy decorator with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1721,6 +1846,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get copy decorator audit logs",
         description: "Retrieves audit logs for a specific copy decorator",
+        isPaginated: false,
       },
     ],
   },
@@ -1739,6 +1865,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List guardrails",
         description: "Retrieves a paginated list of guardrails with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1751,6 +1878,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new guardrail",
         description: "Creates a new guardrail with specified name, classification trigger, and effects. Guardrails fire on every stage using the project-level classifier.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1763,6 +1891,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get guardrail by ID",
         description: "Retrieves a single guardrail by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1775,6 +1904,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update guardrail",
         description: "Updates an existing guardrail with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1787,6 +1917,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete guardrail",
         description: "Deletes a guardrail with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1799,6 +1930,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get guardrail audit logs",
         description: "Retrieves audit logs for a specific guardrail",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1811,6 +1943,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone guardrail",
         description: "Creates a copy of an existing guardrail with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -1829,6 +1962,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List issues",
         description: "Retrieves a paginated list of issues with optional filtering by projectId, status, severity, environment, and text search in bug descriptions. Use filters[projectId]=value to filter by project.",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1841,6 +1975,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new issue",
         description: "Creates a new issue report with bug details, environment, and severity information",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1853,6 +1988,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get issue by ID",
         description: "Retrieves a single issue by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1865,6 +2001,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update issue",
         description: "Updates an existing issue with new information, typically used to change status, add comments, or update severity",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1877,6 +2014,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete issue",
         description: "Deletes an issue from the system",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1889,6 +2027,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get issue audit logs",
         description: "Retrieves audit logs for a specific issue showing its change history",
+        isPaginated: false,
       },
     ],
   },
@@ -1907,6 +2046,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List stages",
         description: "Retrieves a paginated list of stages with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -1919,6 +2059,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new stage",
         description: "Creates a new stage with specified behavior, prompts, and configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1931,6 +2072,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get stage by ID",
         description: "Retrieves a single stage by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -1943,6 +2085,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update stage",
         description: "Updates an existing stage with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -1955,6 +2098,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete stage",
         description: "Deletes a stage with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -1967,6 +2111,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get stage audit logs",
         description: "Retrieves audit logs for a specific stage",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -1979,6 +2124,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone stage",
         description: "Creates a copy of an existing stage with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -1997,6 +2143,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List tools",
         description: "Retrieves a paginated list of tools with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2009,6 +2156,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new tool",
         description: "Creates a new tool with specified name, prompt, input/output types, and configuration",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2021,6 +2169,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get tool by ID",
         description: "Retrieves a single tool by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2033,6 +2182,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update tool",
         description: "Updates an existing tool with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2045,6 +2195,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete tool",
         description: "Deletes a tool with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2057,6 +2208,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get tool audit logs",
         description: "Retrieves audit logs for a specific tool",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -2069,6 +2221,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "clone",
         summary: "Clone tool",
         description: "Creates a copy of an existing tool with a new ID and optional name override",
+        isPaginated: false,
       },
     ],
   },
@@ -2087,6 +2240,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List users",
         description: "Retrieves a paginated list of users within a project with optional filtering",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2099,6 +2253,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new user",
         description: "Creates a new user within the specified project",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2111,6 +2266,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get user by ID",
         description: "Retrieves a single user by their unique identifier within a project",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2123,6 +2279,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update user",
         description: "Updates an existing user within a project",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2135,6 +2292,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete user",
         description: "Deletes a user from a project",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2147,6 +2305,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get user audit logs",
         description: "Retrieves audit logs for a specific user within a project",
+        isPaginated: false,
       },
     ],
   },
@@ -2165,6 +2324,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List API keys",
         description: "Retrieves a list of API keys with optional filtering, sorting, and pagination. Filter by projectId to get keys for a specific project.",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2177,6 +2337,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new API key",
         description: "Creates a new API key for WebSocket authentication. The secret key is only returned in the response to this creation request.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2189,6 +2350,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get API key by ID",
         description: "Retrieves a single API key by its unique identifier. The full secret key is never returned, only a preview.",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2201,6 +2363,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update API key",
         description: "Updates an existing API key with optimistic locking support. Can update name, active status, and metadata.",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2213,6 +2376,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete API key",
         description: "Permanently deletes an API key. This action cannot be undone and will immediately invalidate the key.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2225,6 +2389,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get API key audit logs",
         description: "Retrieves audit logs for a specific API key",
+        isPaginated: false,
       },
     ],
   },
@@ -2243,6 +2408,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "preview",
         summary: "Preview migration scope",
         description: "Returns lightweight stubs (id + name) for every entity that would be included in an export with the given selection — same query params as GET /api/migration/export. Use this to review what will be migrated before committing to an actual pull. No data is written and the full entity records are never serialised.",
+        isPaginated: false,
       },
     ],
   },
@@ -2261,6 +2427,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "export",
         summary: "Export config bundle",
         description: "Produces a self-contained JSON bundle of all migratable config entities. Intended to be called by a remote instance during a server-side pull. Pass one or more ID arrays (projectIds, stageIds, agentIds, …) to select specific entities — all transitive FK dependencies are resolved automatically so the bundle is always self-consistent. An empty query (no params) exports everything. Provider config fields that reference secrets (API keys, auth tokens, etc.) are included as opaque @sec:* references. Supply bundlePassword to encrypt the corresponding plaintext values into the bundle so they can be re-encrypted under the target instance’s master key during import. If bundlePassword is omitted and any provider has secret config fields the request will be rejected.",
+        isPaginated: false,
       },
     ],
   },
@@ -2279,6 +2446,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "import",
         summary: "Import a project from an exchange bundle",
         description: "Imports a project from a provider-agnostic exchange bundle. All entity IDs are remapped to fresh UUIDs so repeated imports never overwrite existing data. Provider hints are resolved to local provider IDs by matching `type` + `apiType` (first match wins). If no matching local provider is found for a hint, the corresponding provider field is set to null. Returns the newly assigned project ID and a count of created entities.",
+        isPaginated: false,
       },
     ],
   },
@@ -2297,6 +2465,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List all secrets",
         description: "Lists all secrets in the store. Secret values are never returned. Also returns orphan refs — secrets that exist in the store but are not referenced by any provider config or environment.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2309,6 +2478,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get_value",
         summary: "Reveal secret value",
         description: "Returns the decrypted plaintext value of a secret. Restricted to super_admin only. Use only in emergency situations.",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2321,6 +2491,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a secret",
         description: "Deletes a secret by its ID. Returns 409 if the secret is still referenced by a provider config or environment.",
+        isPaginated: false,
       },
     ],
   },
@@ -2339,6 +2510,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List testers",
         description: "Retrieves a paginated list of testers with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2351,6 +2523,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new tester",
         description: "Creates a new tester persona for use in scenario testing",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2363,6 +2536,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get tester by ID",
         description: "Retrieves a single tester by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2375,6 +2549,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update tester",
         description: "Updates an existing tester with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2387,6 +2562,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete tester",
         description: "Deletes a tester with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2399,6 +2575,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get tester audit logs",
         description: "Retrieves audit logs for a specific tester",
+        isPaginated: false,
       },
     ],
   },
@@ -2417,6 +2594,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List scenarios",
         description: "Retrieves a paginated list of scenarios with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2429,6 +2607,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new scenario",
         description: "Creates a new test scenario defining the conversation flow, data extraction, and success criteria",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2441,6 +2620,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get scenario by ID",
         description: "Retrieves a single scenario by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2453,6 +2633,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update scenario",
         description: "Updates an existing scenario with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2465,6 +2646,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete scenario",
         description: "Deletes a scenario with optimistic locking",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2477,6 +2659,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "audit",
         summary: "Get scenario audit logs",
         description: "Retrieves audit logs for a specific scenario",
+        isPaginated: false,
       },
     ],
   },
@@ -2495,6 +2678,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List scenario runs",
         description: "Retrieves a paginated list of scenario runs with optional filtering and sorting",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2507,6 +2691,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a new scenario run",
         description: "Creates a new scenario run instance with status queued, ready to be picked up by the testing engine",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2519,6 +2704,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get scenario run by ID",
         description: "Retrieves a single scenario run by its unique identifier",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2531,6 +2717,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a scenario run",
         description: "Permanently deletes a scenario run and all its associated conversations. Only runs in terminal states (passed, failed, cancelled) can be deleted.",
+        isPaginated: false,
       },
       {
         method: "post",
@@ -2543,6 +2730,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "cancel",
         summary: "Cancel a scenario run",
         description: "Cancels a scenario run that is currently queued or in progress. Already-running conversation slots will complete but no new slots will start.",
+        isPaginated: false,
       },
     ],
   },
@@ -2561,6 +2749,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get scheduler status",
         description: "Returns whether the scenario run scheduler (circuit breaker) is currently enabled",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2573,6 +2762,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update scheduler status",
         description: "Enables or disables the scenario run scheduler circuit breaker. Disabling stops new executions from starting; in-flight runs complete normally.",
+        isPaginated: false,
       },
     ],
   },
@@ -2591,6 +2781,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List scenario conversations",
         description: "Retrieves a paginated list of scenario conversations. Use the scenarioRunId query parameter to filter by run.",
+        isPaginated: true,
       },
       {
         method: "get",
@@ -2603,6 +2794,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get scenario conversation by ID",
         description: "Retrieves a single scenario conversation by its unique identifier",
+        isPaginated: false,
       },
     ],
   },
@@ -2621,6 +2813,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Exchange SDP offer/answer for WebRTC session",
         description: "Accepts a WebRTC SDP offer from the client and returns an SDP answer with all ICE candidates embedded (gather-and-return; no trickle ICE). The client must add a microphone audio track and open a \"control\" DataChannel (ordered: true) before creating the offer. The server adds an outbound audio track to the answer for AI voice output. Once the control DataChannel is open, authenticate by sending an \"auth\" JSON message over it. All JSON messages use the same protocol as WebSocket. Voice audio flows over native RTP/SRTP media tracks.",
+        isPaginated: false,
       },
     ],
   },
@@ -2639,6 +2832,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Initiate an outgoing Twilio Voice call",
         description: "Places an outbound call to the specified phone number using the given Twilio Voice channel provider. A conversation record is created immediately. The call session is established asynchronously when the callee answers and Twilio fires the voice webhook. The voice webhook URL is passed directly as the `url` parameter unless the provider has an `applicationSid` configured.",
+        isPaginated: false,
       },
     ],
   },
@@ -2657,6 +2851,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Initiate an outgoing Twilio Messaging conversation",
         description: "Starts a conversation for the specified recipient. The AI generates and sends the opening message automatically. Future inbound replies from the recipient will be attached to the same virtual session.",
+        isPaginated: false,
       },
     ],
   },
@@ -2675,6 +2870,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Initiate an outgoing WhatsApp conversation",
         description: "Sends an approved WhatsApp template message to the specified phone number and pre-creates a conversation record. WhatsApp requires an approved template for business-initiated conversations. Future inbound replies will be attached to the same virtual session.",
+        isPaginated: false,
       },
     ],
   },
@@ -2693,6 +2889,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "deploy",
         summary: "Deploy Telegram webhook",
         description: "Registers the server webhook URL with the Telegram Bot API so incoming messages are forwarded to this instance. Called from the admin UI after configuring a Telegram channel provider.",
+        isPaginated: false,
       },
     ],
   },
@@ -2711,6 +2908,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "send",
         summary: "Initiate an outgoing SMTP/IMAP email conversation",
         description: "Sends an email via SMTP and pre-creates a conversation record. Future inbound replies will be picked up by the IMAP polling service.",
+        isPaginated: false,
       },
     ],
   },
@@ -2729,6 +2927,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "refresh",
         summary: "Manually trigger OAuth2 token refresh",
         description: "Immediately refreshes the OAuth2 access token for the given provider.",
+        isPaginated: false,
       },
     ],
   },
@@ -2747,6 +2946,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List benchmark suites",
         description: "Returns paginated benchmark suites ordered by creation date descending",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2759,6 +2959,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a benchmark suite",
         description: "Creates a new benchmark suite with optional cron schedule",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2771,6 +2972,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get a benchmark suite",
         description: "Returns a single benchmark suite by ID",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2783,6 +2985,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update a benchmark suite",
         description: "Updates an existing benchmark suite",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2795,6 +2998,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a benchmark suite",
         description: "Deletes a benchmark suite and all its associated configs (cascade). Blocked if any runs exist for the suite.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2807,6 +3011,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "configs_list",
         summary: "List configs for a suite",
         description: "Returns paginated benchmark configs belonging to a suite",
+        isPaginated: true,
       },
     ],
   },
@@ -2825,6 +3030,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List benchmark provider configs",
         description: "Returns paginated benchmark provider configs ordered by creation date descending",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2837,6 +3043,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a benchmark provider config",
         description: "Creates a reusable provider configuration snapshot for use in benchmark configs",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2849,6 +3056,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get a benchmark provider config",
         description: "Returns a single benchmark provider config by ID",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2861,6 +3069,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update a benchmark provider config",
         description: "Updates an existing benchmark provider config",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2873,6 +3082,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a benchmark provider config",
         description: "Deletes a benchmark provider config. Blocked if any benchmark configs reference it.",
+        isPaginated: false,
       },
     ],
   },
@@ -2891,6 +3101,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Create a benchmark config",
         description: "Creates a new benchmark test case, linked to a suite and provider config",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2903,6 +3114,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get a benchmark config",
         description: "Returns a single benchmark config by ID",
+        isPaginated: false,
       },
       {
         method: "put",
@@ -2915,6 +3127,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "update",
         summary: "Update a benchmark config",
         description: "Updates an existing benchmark config",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2927,6 +3140,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a benchmark config",
         description: "Deletes a benchmark config. Blocked if any config executions exist (i.e., the config has been run). Delete the associated runs first.",
+        isPaginated: false,
       },
     ],
   },
@@ -2945,6 +3159,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "list",
         summary: "List benchmark runs",
         description: "Returns paginated benchmark runs, optionally filtered by suiteId or status",
+        isPaginated: true,
       },
       {
         method: "post",
@@ -2957,6 +3172,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "create",
         summary: "Trigger a benchmark run",
         description: "Triggers a manual benchmark run for the specified suite. The run is queued and executed asynchronously.",
+        isPaginated: false,
       },
       {
         method: "get",
@@ -2969,6 +3185,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "get",
         summary: "Get a benchmark run",
         description: "Returns a single benchmark run with its embedded config executions",
+        isPaginated: false,
       },
       {
         method: "delete",
@@ -2981,6 +3198,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "delete",
         summary: "Delete a benchmark run",
         description: "Deletes a benchmark run and all its associated executions and results. Blocked if the run is currently in progress.",
+        isPaginated: false,
       },
     ],
   },
@@ -2999,6 +3217,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         action: "results_get",
         summary: "Get iteration results for a config execution",
         description: "Returns all raw iteration results for a given config execution ID",
+        isPaginated: false,
       },
     ],
   },

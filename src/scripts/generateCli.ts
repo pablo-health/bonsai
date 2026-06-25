@@ -29,6 +29,7 @@ interface Operation {
   action: string;
   summary: string;
   description: string;
+  isPaginated: boolean;
 }
 
 interface ResourceDef {
@@ -326,6 +327,7 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
         action,
         summary,
         description,
+        isPaginated: queryParamNames.includes('offset') && queryParamNames.includes('limit'),
       });
     }
   }
@@ -415,7 +417,7 @@ function generateResourcesManifest(resources: Map<string, ResourceDef>): string 
   code += '  method: string;\n  path: string;\n  pathTemplate: string;\n';
   code += '  pathParams: PathParam[];\n  queryParamNames: string[];\n';
   code += '  hasBody: boolean;\n  bodySchemaRef: string | null;\n';
-  code += '  action: string;\n  summary: string;\n  description: string;\n';
+  code += '  action: string;\n  summary: string;\n  description: string;\n  isPaginated: boolean;\n';
   code += '}\nexport interface ResourceDef {\n';
   code += '  name: string;\n  scope: "global" | "project";\n  operations: Operation[];\n}\n\n';
 
@@ -437,6 +439,7 @@ function generateResourcesManifest(resources: Map<string, ResourceDef>): string 
       code += `        action: "${op.action}",\n`;
       code += `        summary: ${JSON.stringify(op.summary)},\n`;
       code += `        description: ${JSON.stringify(op.description)},\n`;
+      code += `        isPaginated: ${op.isPaginated},\n`;
       code += `      },\n`;
     }
     code += `    ],\n`;
@@ -493,7 +496,8 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '      for (const qp of op.queryParamNames) {\n';
   code += '        actionCmd.option(`--${qp} <value>`, qp);\n';
   code += '      }\n';
-  code += '      actionCmd.option(\'--json-schema\', \'Output JSON schema for this operation\', false);\n\n';
+  code += '      actionCmd.option(\'--json-schema\', \'Output JSON schema for this operation\', false);\n';
+  code += '      actionCmd.option(\'--paginate\', \'Fetch all pages\', false);\n\n';
 
   code += '      actionCmd\n';
   code += '        .action(async (args: Record<string, string>, opts: any) => {\n';
@@ -509,7 +513,7 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '            process.exit(0);\n';
   code += '          }\n';
   code += '          const exitCode = await runOperation(\n';
-  code += '            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map(p => p.name), queryParamNames: op.queryParamNames },\n';
+  code += '            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map(p => p.name), queryParamNames: op.queryParamNames, isPaginated: op.isPaginated },\n';
   code += '            allOpts\n';
   code += '          );\n';
   code += '          process.exit(exitCode);\n';

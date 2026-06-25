@@ -37,6 +37,7 @@ export function registerCommands(program: Command): void {
         actionCmd.option(`--${qp} <value>`, qp);
       }
       actionCmd.option('--json-schema', 'Output JSON schema for this operation', false);
+      actionCmd.option('--paginate', 'Fetch all pages', false);
 
       actionCmd
         .action(async (args: Record<string, string>, opts: any) => {
@@ -52,7 +53,7 @@ export function registerCommands(program: Command): void {
             process.exit(0);
           }
           const exitCode = await runOperation(
-            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map(p => p.name), queryParamNames: op.queryParamNames },
+            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map(p => p.name), queryParamNames: op.queryParamNames, isPaginated: op.isPaginated },
             allOpts
           );
           process.exit(exitCode);

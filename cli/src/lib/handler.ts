@@ -2,6 +2,9 @@ import { loadConfig } from './config.js';
 import { request } from './http.js';
 import { successEnvelope, errorEnvelope, printEnvelope, Envelope } from './output.js';
 import { translateServerError, getExitCode } from './errors.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { BONSAI_CONFIG_PATH } from './constants.js';
 
 export interface OperationConfig {
   method: string;
@@ -11,12 +14,52 @@ export interface OperationConfig {
   pathParamNames: string[];
   queryParamNames: string[];
   bodySchemaRef?: string | null;
+  isPaginated?: boolean;
 }
 
 interface RunOptions {
   json: boolean;
   verbose: boolean;
   [key: string]: unknown;
+}
+
+async function refreshToken(config: any): Promise<string | null> {
+  if (!config.refreshToken) return null;
+
+  try {
+    const resp = await request({
+      method: 'post',
+      baseUrl: config.baseUrl,
+      pathTemplate: '/api/auth/refresh',
+      pathParams: {},
+      body: { refreshToken: config.refreshToken },
+      timeout: config.timeout,
+      token: null,
+    });
+
+    if (resp.status >= 400) return null;
+
+    const data = resp.data as Record<string, unknown>;
+    const newToken = data.accessToken as string;
+    const newRefreshToken = data.refreshToken as string;
+
+    const envPath = process.env.BONSAI_CONFIG_PATH;
+    const configPath = envPath || resolve(BONSAI_CONFIG_PATH);
+
+    try {
+      const raw = readFileSync(configPath, 'utf-8');
+      const fileConfig = JSON.parse(raw);
+      fileConfig.token = newToken;
+      fileConfig.refreshToken = newRefreshToken;
+      writeFileSync(configPath, JSON.stringify(fileConfig, null, 2), 'utf-8');
+    } catch {
+      // Config file write failed, but we can still use the new token
+    }
+
+    return newToken;
+  } catch {
+    return null;
+  }
 }
 
 export async function runOperation(op: OperationConfig, options: RunOptions): Promise<number> {
@@ -100,7 +143,7 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
   }
 
   try {
-    const resp = await request({
+    let resp = await request({
       method: op.method,
       baseUrl: config.baseUrl,
       pathTemplate: op.pathTemplate,
@@ -111,6 +154,23 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
       token: config.token,
     });
 
+    // Auto-refresh token on 401
+    if (resp.status === 401 && config.refreshToken) {
+      const newToken = await refreshToken(config);
+      if (newToken) {
+        resp = await request({
+          method: op.method,
+          baseUrl: config.baseUrl,
+          pathTemplate: op.pathTemplate,
+          pathParams,
+          queryParams,
+          body,
+          timeout: config.timeout,
+          token: newToken,
+        });
+      }
+    }
+
     if (options.verbose) {
       process.stderr.write(`[verbose] ${op.method} ${op.pathTemplate} → ${resp.status} (${Date.now() - startTime}ms)\n`);
     }
@@ -119,6 +179,65 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
       const env = translateServerError(resp.status, resp.data);
       printEnvelope(env, options.json);
       return getExitCode(env.error.code);
+    }
+
+    // Handle pagination
+    if (op.isPaginated && options.paginate) {
+      const allItems: unknown[] = [];
+      let currentData = resp.data as Record<string, unknown> | unknown[] | null;
+
+      if (Array.isArray(currentData)) {
+        allItems.push(...currentData);
+      } else if (currentData && typeof currentData === 'object' && 'items' in currentData) {
+        const items = (currentData as Record<string, unknown>).items;
+        if (Array.isArray(items)) {
+          allItems.push(...items);
+        }
+      }
+
+      let offset = Number(queryParams.offset || 0);
+      const limit = Number(queryParams.limit || 100);
+
+      while (allItems.length > offset) {
+        offset += limit;
+        const pageQueryParams = { ...queryParams, offset };
+
+        const pageResp = await request({
+          method: op.method,
+          baseUrl: config.baseUrl,
+          pathTemplate: op.pathTemplate,
+          pathParams,
+          queryParams: pageQueryParams,
+          body,
+          timeout: config.timeout,
+          token: config.token,
+        });
+
+        if (pageResp.status >= 400) break;
+
+        const pageData = pageResp.data as Record<string, unknown> | unknown[] | null;
+
+        if (Array.isArray(pageData)) {
+          if (pageData.length === 0) break;
+          allItems.push(...pageData);
+        } else if (pageData && typeof pageData === 'object' && 'items' in pageData) {
+          const items = (pageData as Record<string, unknown>).items;
+          if (Array.isArray(items) && items.length === 0) break;
+          if (Array.isArray(items)) {
+            allItems.push(...items);
+          }
+        } else {
+          break;
+        }
+      }
+
+      const envelope: Envelope = successEnvelope(allItems, {
+        duration_ms: Date.now() - startTime,
+        paginated: true,
+        totalItems: allItems.length,
+      });
+      printEnvelope(envelope, options.json);
+      return 0;
     }
 
     const envelope: Envelope = successEnvelope(resp.data ?? null, {
