@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "npm run schemas:generate && tsc",
+    "build": "npm run schemas:generate && npm run cli:generate && tsc",
     "start": "npm run db:migrate && tsx src/index.ts",
     "dev": "npm run schemas:generate && npm run db:migrate && tsx src/index.ts",
     "db:generate": "drizzle-kit generate",
@@ -13,6 +13,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "schemas:generate": "tsx src/scripts/generateWebSocketSchemas.ts",
+    "cli:generate": "tsx src/scripts/generateCli.ts",
     "secrets:migrate": "tsx src/scripts/migrateSecretsToEncrypted.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
