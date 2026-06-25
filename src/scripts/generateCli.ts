@@ -472,14 +472,10 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '      .option(\'--json\', \'Emit JSON envelope\', false)\n';
   code += '      .option(\'-v, --verbose\', \'Verbose output\', false)\n';
 
-  code += '    if (res.scope === "project") {\n';
-  code += '      cmd.option(\'--project <id>\', \'Project ID\');\n';
-  code += '    }\n\n';
-
-  code += '    for (const op of res.operations) {\n';
+   code += '    for (const op of res.operations) {\n';
   code += '      const argStr = op.pathParams.map((p: PathParam) => `<${p.name}>`).join(\' \');\n';
-   code += '      const actionCmd = cmd.command(op.action)\n';
-   code += '        .description(op.summary)\n';
+    code += '      const actionCmd = cmd.command(op.action + (argStr ? \' \' + argStr : \'\'))\n';
+    code += '        .description(op.summary)\n';
    code += '        .option(\'--json\', \'Emit JSON envelope\', false)\n';
    code += '        .option(\'-v, --verbose\', \'Verbose output\', false)\n';
    code += '        .option(\'--base-url <url>\', \'API base URL\')\n';
@@ -502,12 +498,12 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '      actionCmd.option(\'--json-schema\', \'Output JSON schema for this operation\', false);\n';
   code += '      actionCmd.option(\'--paginate\', \'Fetch all pages\', false);\n\n';
 
-  code += '      actionCmd\n';
-  code += '        .action(async (args: Record<string, string>, opts: any) => {\n';
-  code += '          const allOpts = { ...opts };\n';
-  code += '          if (args && typeof args === "object") {\n';
-  code += '            Object.assign(allOpts, args);\n';
-  code += '          }\n';
+   code += '      actionCmd\n';
+   code += '        .action(async (...allArgs: any[]) => {\n';
+   code += '          const opts = allArgs.length > 1 ? allArgs[allArgs.length - 2] : allArgs[0];\n';
+   code += '          const positionalArgs = allArgs.length > 1 ? allArgs.slice(0, -2) : [];\n';
+   code += '          const allOpts: any = { ...opts };\n';
+   code += '          op.pathParams.forEach((p: PathParam, i: number) => { allOpts[p.name] = positionalArgs[i]; });\n';
   code += '          if (allOpts.jsonSchema) {\n';
   code += '            const schema = await getOperationSchema(\n';
   code += '              { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, bodySchemaRef: op.bodySchemaRef }\n';

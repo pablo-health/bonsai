@@ -15,13 +15,9 @@ export function registerCommands(program: Command): void {
       .description(`${res.name.charAt(0).toUpperCase() + res.name.slice(1)} ${res.scope === "project" ? "(project-scoped)" : "(global)"}`)
       .option('--json', 'Emit JSON envelope', false)
       .option('-v, --verbose', 'Verbose output', false)
-    if (res.scope === "project") {
-      cmd.option('--project <id>', 'Project ID');
-    }
-
     for (const op of res.operations) {
       const argStr = op.pathParams.map((p: PathParam) => `<${p.name}>`).join(' ');
-      const actionCmd = cmd.command(op.action)
+      const actionCmd = cmd.command(op.action + (argStr ? ' ' + argStr : ''))
         .description(op.summary)
         .option('--json', 'Emit JSON envelope', false)
         .option('-v, --verbose', 'Verbose output', false)
@@ -43,11 +39,11 @@ export function registerCommands(program: Command): void {
       actionCmd.option('--paginate', 'Fetch all pages', false);
 
       actionCmd
-        .action(async (args: Record<string, string>, opts: any) => {
-          const allOpts = { ...opts };
-          if (args && typeof args === "object") {
-            Object.assign(allOpts, args);
-          }
+        .action(async (...allArgs: any[]) => {
+          const opts = allArgs.length > 1 ? allArgs[allArgs.length - 2] : allArgs[0];
+          const positionalArgs = allArgs.length > 1 ? allArgs.slice(0, -2) : [];
+          const allOpts: any = { ...opts };
+          op.pathParams.forEach((p: PathParam, i: number) => { allOpts[p.name] = positionalArgs[i]; });
           if (allOpts.jsonSchema) {
             const schema = await getOperationSchema(
               { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, bodySchemaRef: op.bodySchemaRef }
