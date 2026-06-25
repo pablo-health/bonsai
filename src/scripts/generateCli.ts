@@ -99,6 +99,41 @@ function extractResourceName(path: string): string {
   return '';
 }
 
+function hasDetermineActionSpecialCase(method: string, path: string): boolean {
+  const segs = path.split('/').filter(Boolean);
+  const last = segs[segs.length - 1];
+  const secondLast = segs.length > 1 ? segs[segs.length - 2] : '';
+
+  if (path.includes('/login')) return true;
+  if (path.includes('/refresh')) return true;
+  if (path.includes('/status')) return true;
+  if (path.includes('/initial-operator')) return true;
+  if (path.includes('/models')) return true;
+  if (path === '/api/profile') return true;
+  if (path.includes('/scheduler')) return true;
+  if (path.includes('/deploy-webhook')) return true;
+  if (path.includes('/smtp-imap/send')) return true;
+  if (path.includes('/migration/export')) return true;
+  if (path.includes('/projects/import')) return true;
+  if (path.includes('/secrets') && path.includes('/value')) return true;
+  if (last === 'clone') return true;
+  if (last === 'archive') return true;
+  if (last === 'unarchive') return true;
+  if (last === 'events') return true;
+  if (last === 'event' && secondLast === 'events') return true;
+  if (last === 'artifacts') return true;
+  if (last === 'artifact' && secondLast === 'artifacts') return true;
+  if (last === 'artifact_download') return true;
+  if (last === 'audit-logs') return true;
+  if (last === 'results') return true;
+  if (last === 'cancel') return true;
+  if (last === 'execute') return true;
+  if (last === 'preview') return true;
+  if (last === 'reveal') return true;
+
+  return false;
+}
+
 function determineAction(method: string, path: string): string {
   const segs = path.split('/').filter(Boolean);
   const last = segs[segs.length - 1];
@@ -107,9 +142,16 @@ function determineAction(method: string, path: string): string {
   if (path.includes('/login')) return 'login';
   if (path.includes('/refresh')) return 'refresh';
   if (path.includes('/status')) return 'status';
-  if (path.includes('/initial-operator')) return 'setup';
-  if (path.includes('/profile')) return 'profile';
+  if (path.includes('/initial-operator')) return 'initial_operator';
   if (path.includes('/models')) return 'models';
+  if (path === '/api/profile' && method === 'get') return 'get';
+  if (path === '/api/profile' && method === 'post') return 'update';
+  if (path.includes('/scheduler')) return method === 'get' ? 'get' : 'update';
+  if (path.includes('/deploy-webhook')) return 'deploy';
+  if (path.includes('/smtp-imap/send')) return 'send';
+  if (path.includes('/migration/export')) return 'export';
+  if (path.includes('/projects/import')) return 'import';
+  if (path.includes('/secrets') && path.includes('/value')) return method === 'get' ? 'get_value' : 'update_value';
 
   if (last === 'clone') return 'clone';
   if (last === 'archive') return 'archive';
@@ -133,6 +175,86 @@ function determineAction(method: string, path: string): string {
   if (method === 'delete') return 'delete';
 
   return last || 'execute';
+}
+
+function deriveActionFromPath(method: string, path: string, resourceName: string): string | null {
+  const segs = path.split('/').filter(Boolean);
+  const resourceHyphen = resourceName.replace(/_/g, '-');
+
+  // Get non-param segments from path (excluding 'api', 'projects', and params)
+  const pathSegments = segs.filter(s =>
+    s !== 'api' && s !== 'projects' && !s.includes('{')
+  );
+
+  // If path segments exactly match the resource name, it's a base CRUD operation
+  if (pathSegments.join('-') === resourceHyphen) {
+    return null;
+  }
+
+  // Find where the resource name ends in the path
+  let resourceEndIdx = -1;
+
+  // Try 1: exact segment match (e.g. "api-keys" matches segment "api-keys")
+  for (let i = 0; i < segs.length; i++) {
+    if (segs[i] === resourceHyphen) {
+      resourceEndIdx = i;
+    }
+  }
+
+  // Try 2: consecutive segments (e.g. "analytics" + "saved-queries")
+  if (resourceEndIdx < 0) {
+    const resourceParts = resourceHyphen.split('-');
+    for (let i = 0; i <= segs.length - resourceParts.length; i++) {
+      let match = true;
+      for (let j = 0; j < resourceParts.length; j++) {
+        if (segs[i + j].includes('{') || segs[i + j] !== resourceParts[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        resourceEndIdx = i + resourceParts.length - 1;
+        break;
+      }
+    }
+  }
+
+  // Try 3: individual parts — prefer the LAST match to avoid false positives
+  // (e.g. "api" in "api_keys" shouldn't match the "api" prefix at index 0)
+  if (resourceEndIdx < 0) {
+    const singleParts = resourceName.split('_');
+    for (let i = segs.length - 1; i >= 0; i--) {
+      if (segs[i].includes('{')) continue;
+      if (singleParts.includes(segs[i])) {
+        resourceEndIdx = i;
+        break;
+      }
+    }
+  }
+
+  // Get meaningful segments after the resource name
+  const afterResource = resourceEndIdx >= 0 ? segs.slice(resourceEndIdx + 1) : [];
+  const actionSegments: string[] = [];
+
+  for (const s of afterResource) {
+    if (s.startsWith('{')) continue;
+    if (s === 'audit-logs') actionSegments.push('audit');
+    else actionSegments.push(s.replace(/-/g, '_'));
+  }
+
+  if (actionSegments.length > 0) {
+    // If the path ends with a param (e.g. /events/{eventId}), use singular form
+    const lastSeg = afterResource[afterResource.length - 1];
+    if (lastSeg && lastSeg.startsWith('{') && actionSegments.length > 0) {
+      const lastAction = actionSegments[actionSegments.length - 1];
+      if (lastAction.endsWith('s')) {
+        actionSegments[actionSegments.length - 1] = lastAction.slice(0, -1);
+      }
+    }
+    return actionSegments.join('_');
+  }
+
+  return null;
 }
 
 function parseOperations(spec: any): Map<string, ResourceDef> {
@@ -180,12 +302,15 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
       const summary = op.summary || `${action} ${resourceName}`;
       const description = op.description || summary;
 
-      const key = `${scope}/${resourceName}`;
-      let resource = resources.get(key);
+      // Merge same-name resources regardless of scope
+      let resource = resources.get(resourceName);
 
       if (!resource) {
         resource = { name: resourceName, scope, operations: [] };
-        resources.set(key, resource);
+        resources.set(resourceName, resource);
+      } else if (scope === 'project') {
+        // Project-scoped takes priority
+        resource.scope = 'project';
       }
 
       resource.operations.push({
@@ -203,16 +328,65 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
     }
   }
 
-  // Deduplicate action names within each resource
+  // Derive better action names from paths, then deduplicate
   for (const [, resource] of resources) {
-    const seen = new Map<string, number>();
     for (const op of resource.operations) {
-      const count = seen.get(op.action) || 0;
-      seen.set(op.action, count + 1);
-      if (count > 0) {
-        op.action = `${op.action}_${count}`;
+      // Only use path-derived action when determineAction has no special case for this path
+      if (!hasDetermineActionSpecialCase(op.method, op.path)) {
+        const pathAction = deriveActionFromPath(op.method, op.path, resource.name);
+        if (pathAction) {
+          op.action = pathAction;
+        }
       }
     }
+
+    // Deduplicate: prefer project-scoped paths, drop global duplicates
+    const byAction = new Map<string, Operation[]>();
+    for (const op of resource.operations) {
+      if (!byAction.has(op.action)) byAction.set(op.action, []);
+      byAction.get(op.action)!.push(op);
+    }
+
+    const deduped: Operation[] = [];
+    for (const [, ops] of byAction) {
+      if (ops.length === 1) {
+        deduped.push(ops[0]);
+      } else {
+        // Sort: project-scoped first, then by path length
+        ops.sort((a, b) => {
+          const aProject = isProjectScoped(a.path) ? 0 : 1;
+          const bProject = isProjectScoped(b.path) ? 0 : 1;
+          if (aProject !== bProject) return aProject - bProject;
+          return a.path.length - b.path.length;
+        });
+        // Keep project-scoped, drop global duplicates with same action
+        const kept = ops[0];
+        deduped.push(kept);
+        // For distinct operations (different methods or truly different paths), keep with suffix
+        for (let i = 1; i < ops.length; i++) {
+          const op = ops[i];
+          // If same method and same base path, it's a true duplicate — skip
+          if (op.method === kept.method && !isProjectScoped(op.path)) continue;
+          const pathSegs = op.path.split('/').filter(Boolean);
+          const last = pathSegs[pathSegs.length - 1];
+          if (last && !last.includes('{')) {
+            op.action = `${op.action}_${last.replace(/-/g, '_')}`;
+          } else {
+            // Last segment is a param — use the preceding segment (singularized)
+            const secondLast = pathSegs[pathSegs.length - 2];
+            if (secondLast && !secondLast.includes('{')) {
+              const singular = secondLast.endsWith('s') ? secondLast.slice(0, -1) : secondLast;
+              op.action = `${op.action}_${singular.replace(/-/g, '_')}`;
+            } else {
+              op.action = `${op.action}_${op.method}`;
+            }
+          }
+          deduped.push(op);
+        }
+      }
+    }
+
+    resource.operations = deduped;
   }
 
   return resources;
