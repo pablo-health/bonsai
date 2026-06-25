@@ -116,6 +116,7 @@ function hasDetermineActionSpecialCase(method: string, path: string): boolean {
   if (path.includes('/migration/export')) return true;
   if (path.includes('/projects/import')) return true;
   if (path.includes('/secrets') && path.includes('/value')) return true;
+  if (last === 'export') return true;
   if (last === 'clone') return true;
   if (last === 'archive') return true;
   if (last === 'unarchive') return true;
@@ -153,6 +154,7 @@ function determineAction(method: string, path: string): string {
   if (path.includes('/projects/import')) return 'import';
   if (path.includes('/secrets') && path.includes('/value')) return method === 'get' ? 'get_value' : 'update_value';
 
+  if (last === 'export') return 'export';
   if (last === 'clone') return 'clone';
   if (last === 'archive') return 'archive';
   if (last === 'unarchive') return 'unarchive';
@@ -162,7 +164,7 @@ function determineAction(method: string, path: string): string {
   if (last === 'artifact' && secondLast === 'artifacts') return 'artifact';
   if (last === 'artifact_download') return 'artifact_download';
   if (last === 'audit-logs') return 'audit';
-  if (last === 'results') return 'results';
+  if (last === 'results') return method === 'get' ? 'results_get' : 'results';
   if (last === 'cancel') return 'cancel';
   if (last === 'execute') return 'execute';
   if (last === 'preview') return 'preview';
@@ -329,6 +331,7 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
   }
 
   // Derive better action names from paths, then deduplicate
+  const allResourceNames = new Set(resources.keys());
   for (const [, resource] of resources) {
     for (const op of resource.operations) {
       // Only use path-derived action when determineAction has no special case for this path
@@ -336,6 +339,17 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
         const pathAction = deriveActionFromPath(op.method, op.path, resource.name);
         if (pathAction) {
           op.action = pathAction;
+        }
+      }
+      // Disambiguate: if action name matches or is a suffix of another resource name, append _list
+      if (op.method === 'get' && op.action !== resource.name) {
+        const KNOWN_ACTIONS = new Set(['export', 'import', 'clone', 'archive', 'unarchive', 'audit', 'preview', 'reveal', 'cancel', 'execute', 'login', 'refresh', 'status', 'setup', 'initial_operator', 'deploy', 'send', 'models', 'results_get']);
+        if (!KNOWN_ACTIONS.has(op.action)) {
+          const isAmbiguous = allResourceNames.has(op.action) ||
+            [...allResourceNames].some(name => name !== resource.name && name.endsWith(`_${op.action}`));
+          if (isAmbiguous) {
+            op.action = `${op.action}_list`;
+          }
         }
       }
     }
