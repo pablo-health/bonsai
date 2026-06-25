@@ -1,10 +1,10 @@
 import { Command } from 'commander';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { BONSAI_CONFIG_PATH } from './constants';
-import { loadConfig, CliConfig } from './config';
-import { createHttpClient } from './http';
-import { printEnvelope, successEnvelope, errorEnvelope } from './output';
+import { BONSAI_CONFIG_PATH } from './constants.js';
+import { loadConfig, CliConfig } from './config.js';
+import { createHttpClient } from './http.js';
+import { printEnvelope, successEnvelope, errorEnvelope } from './output.js';
 
 export function registerAuthCommands(program: Command): void {
   const auth = new Command('auth');

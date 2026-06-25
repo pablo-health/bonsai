@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { printEnvelope, successEnvelope, errorEnvelope } from './output';
+import { printEnvelope, successEnvelope, errorEnvelope } from './output.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OPENAPI_PATH = resolve(__dirname, '../../bundled/openapi.json');
