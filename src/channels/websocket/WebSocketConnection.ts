@@ -13,7 +13,8 @@ import { logger } from '../../utils/logger';
 export class WebSocketConnection implements IClientConnection {
   readonly connectionType = 'websocket' as const;
 
-  private session: Session;
+  private session: Session | null = null;
+  private isClosed = false;
 
   constructor(
     private readonly ws: WebSocket,
@@ -24,11 +25,16 @@ export class WebSocketConnection implements IClientConnection {
    * Closes the connection.
    */
   async close(): Promise<void> {
+    if (this.isClosed) return;
+    this.isClosed = true;
+
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.close();
     }
 
-    await this.sessionManager.unregisterSession(this.session.id);
+    if (this.session) {
+      await this.sessionManager.unregisterSession(this.session.id);
+    }
   }
 
   attachSession(session: Session): void {
@@ -100,6 +106,30 @@ export class WebSocketConnection implements IClientConnection {
           chunkId: msg.chunkId,
           ordinal: msg.ordinal,
           isFinal: msg.isFinal,
+        });
+        break;
+      }
+
+      case 'abort_ai_generation_output': {
+        this.send({
+          type: 'abort_ai_generation_output',
+          sessionId,
+          conversationId,
+          requestId: msg.correlationId,
+          outputTurnId: msg.outputTurnId,
+          accumulatedText: msg.accumulatedText,
+          abortTimestampMs: msg.abortTimestampMs,
+        });
+        break;
+      }
+
+      case 'user_speaking_started': {
+        this.send({
+          type: 'user_speaking_started',
+          sessionId,
+          conversationId,
+          requestId: msg.correlationId,
+          inputTurnId: msg.inputTurnId,
         });
         break;
       }

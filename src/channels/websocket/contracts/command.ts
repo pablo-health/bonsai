@@ -13,6 +13,7 @@ import {
   calRunActionResponseSchema,
   calCallToolRequestSchema,
   calCallToolResponseSchema,
+  calAbortAiGenerationRequestSchema,
 } from '../../messages';
 
 /** Request to navigate to a specific stage in a conversation. */
@@ -27,10 +28,7 @@ export type GoToStageResponse = z.infer<typeof goToStageResponseSchema>;
 export const setVarRequestSchema = calToWsInput(calSetVarRequestSchema);
 export type SetVarRequest = z.infer<typeof setVarRequestSchema>;
 
-/**
- * Response to set variable request.
- * Note: the response type is `set_var_result` (not `set_var`) to distinguish it from the request.
- */
+/** Response to set variable request. */ 
 export const setVarResponseSchema = calToWsOutput(calSetVarResponseSchema);
 export type SetVarResponse = z.infer<typeof setVarResponseSchema>;
 
@@ -65,3 +63,7 @@ export type CallToolRequest = z.infer<typeof callToolRequestSchema>;
 /** Response to call tool request. */
 export const callToolResponseSchema = calToWsOutput(calCallToolResponseSchema);
 export type CallToolResponse = z.infer<typeof callToolResponseSchema>;
+
+/** Request to abort (barge-in on) an ongoing AI generation. */
+export const abortAiGenerationRequestSchema = calToWsInput(calAbortAiGenerationRequestSchema);
+export type AbortAiGenerationRequest = z.infer<typeof abortAiGenerationRequestSchema>;

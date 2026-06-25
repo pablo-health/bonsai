@@ -1,8 +1,8 @@
 import { injectable } from 'tsyringe';
-import { eq, and, SQL, desc } from 'drizzle-orm';
+import { eq, and, SQL, desc, isNotNull } from 'drizzle-orm';
 import { db } from '../../db/index';
 import { scenarioConversations } from '../../db/schema';
-import type { ScenarioRunStatus } from '../../db/schema';
+import type { ScenarioRunStatus, TestRunStatus } from '../../db/schema';
 import type { ScenarioConversationResponse, ScenarioConversationListResponse, ScenarioConversationListParams } from '../../http/contracts/scenarioConversation';
 import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from '../../http/contracts/scenarioConversation';
 import { NotFoundError } from '../../errors';
@@ -25,6 +25,8 @@ export type CreateScenarioConversationInput = {
 export type ScenarioConversationResults = {
   dataExtractionResults?: Record<string, unknown>;
   dataTransformationResults?: Record<string, unknown>;
+  testRunStatus?: TestRunStatus;
+  testStatistics?: { passedTests: number; failedTests: number };
 };
 
 /**
@@ -143,6 +145,8 @@ export class ScenarioConversationService extends BaseService {
       const updateData: Record<string, unknown> = { status, updatedAt: new Date() };
       if (results?.dataExtractionResults !== undefined) updateData.dataExtractionResults = results.dataExtractionResults;
       if (results?.dataTransformationResults !== undefined) updateData.dataTransformationResults = results.dataTransformationResults;
+      if (results?.testRunStatus !== undefined) updateData.testRunStatus = results.testRunStatus;
+      if (results?.testStatistics !== undefined) updateData.testStatistics = results.testStatistics;
       await db.update(scenarioConversations).set(updateData).where(and(eq(scenarioConversations.id, id), eq(scenarioConversations.projectId, projectId)));
       logger.info({ id, status }, 'Scenario conversation status updated');
     } catch (error) {
@@ -162,6 +166,30 @@ export class ScenarioConversationService extends BaseService {
       await db.update(scenarioConversations).set({ conversationId, updatedAt: new Date() }).where(and(eq(scenarioConversations.id, id), eq(scenarioConversations.projectId, projectId)));
     } catch (error) {
       logger.error({ error, id, conversationId }, 'Failed to link conversation to scenario conversation');
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves all non-null conversation IDs linked to a scenario run.
+   * Used by analytics to filter data to only conversations used during testing.
+   * @param projectId - The project the scenario run belongs to
+   * @param scenarioRunId - The scenario run ID to filter by
+   * @returns Array of conversation IDs linked to the scenario run
+   */
+  async getConversationIdsByScenarioRun(projectId: string, scenarioRunId: string): Promise<string[]> {
+    try {
+      const results = await db.query.scenarioConversations.findMany({
+        where: and(
+          eq(scenarioConversations.projectId, projectId),
+          eq(scenarioConversations.scenarioRunId, scenarioRunId),
+          isNotNull(scenarioConversations.conversationId),
+        ),
+        columns: { conversationId: true },
+      });
+      return results.map((r) => r.conversationId!).filter(Boolean);
+    } catch (error) {
+      logger.error({ error, scenarioRunId }, 'Failed to fetch conversation IDs for scenario run');
       throw error;
     }
   }

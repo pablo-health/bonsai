@@ -10,6 +10,7 @@ import { StorageProviderConfig, ChannelProviderConfig } from '../http/contracts/
 import { ConversationEventData, ConversationEventType } from '../types/conversationEvents';
 import { FillerSettings } from '../http/contracts/agent';
 import type { ApiKeySettings } from '../http/contracts/apiKey';
+import type { IterationResultData } from '../types/benchmark';
 
 
 export type ProviderConfig = LlmProviderConfig | AsrProviderConfig | TtsProviderConfig | StorageProviderConfig | ChannelProviderConfig;
@@ -84,16 +85,41 @@ export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   description: text('description'),
-  asrConfig: jsonb('asr_config').$type<{
+asrConfig: jsonb('asr_config').$type<{
     asrProviderId?: string;
     settings?: unknown;
     unintelligiblePlaceholder?: string;
     voiceActivityDetection?: boolean;
+    silenceTimeoutMs?: number;
+    maxSilences?: number;
+    silencePlaceholder?: string;
     serverVad?: {
+      algorithm?: 'legacy' | 'silero' | 'firered';
       mode?: number;
       frameDurationMs?: 10 | 20 | 30;
       silencePaddingMs?: number;
       autoEndSilenceDurationMs?: number;
+      gracePeriodMs?: number;
+      model?: 'v5' | 'legacy';
+      positiveSpeechThreshold?: number;
+      negativeSpeechThreshold?: number;
+      frameSamples?: number;
+      redemptionFrames?: number;
+      preSpeechPadFrames?: number;
+      minSpeechFrames?: number;
+      submitUserSpeechOnPause?: boolean;
+      speechThreshold?: number;
+      smoothWindowSize?: number;
+      minSpeechFrame?: number;
+      maxSpeechFrame?: number;
+      minSilenceFrame?: number;
+      padStartFrame?: number;
+      smartTurn?: {
+        enabled?: boolean;
+        threshold?: number;
+      };
+      bargeInSilenceTimeout?: number;
+      bargeInSilencePlaceholder?: string;
     };
   }>(),
   acceptVoice: boolean('accept_voice').notNull().default(true),
@@ -126,6 +152,7 @@ export const projects = pgTable('projects', {
   }>(),
   startingStageId: text('starting_stage_id'),
   conversationTimeoutSeconds: integer('conversation_timeout_seconds'),
+  recordingConfig: jsonb('recording_config').$type<{ enabled: boolean; recordInput?: boolean; recordOutput?: boolean; format?: string }>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -289,7 +316,7 @@ export const knowledgeItems = pgTable('knowledge_items', {
   id: text('id').notNull(),
   projectId: text('project_id').notNull(),
   categoryId: text('category_id').notNull(),
-  question: text('question').notNull(),
+  questions: text('questions').array().notNull().default([]),
   answer: text('answer').notNull(),
   order: integer('order').notNull().default(0),
   version: integer('version').notNull().default(1),
@@ -533,15 +560,34 @@ export const conversationArtifacts = pgTable('conversation_artifacts', {
   foreignKey({ columns: [table.projectId, table.conversationId], foreignColumns: [conversations.projectId, conversations.id] }).onDelete('cascade'),
 ]);
 
-/** Entry in the data extraction configuration: a stage variable with an optional expected value */
+/** Comparison modes for evaluation assertions */
+export type EvaluationComparisonMode = 'exists' | 'not_exists' | 'eq' | 'contains' | 'includes' | 'matches' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'nin';
+
+/** Expected value entry with optional comparison mode */
+export type ExpectedValueEntry = {
+  value?: unknown;
+  mode?: EvaluationComparisonMode;
+};
+
+/** Entry in the data extraction configuration: a stage variable with an optional expected value and comparison mode */
 export type DataExtractionEntry = {
   stageId: string;
   varName: string;
   expectedValue?: unknown;
+  expectedMode?: EvaluationComparisonMode;
 };
 
 /** Status of a scenario run or scenario conversation */
-export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed' | 'cancelled';
+export type ScenarioRunStatus = 'queued' | 'in_progress' | 'passed' | 'failed' | 'cancelled' | 'error';
+
+/** Possible outcomes for a single test run conversation (persisted on scenarioConversations) */
+export type TestRunStatus = 'conversation_ended' | 'conversation_aborted' | 'conversation_failed' | 'max_turns_reached' | 'tester_hung_up';
+
+/** Detailed test statistics for a scenario run or scenario conversation */
+export type TestStatistics = {
+  passedTests: number;
+  failedTests: number;
+};
 
 // Tester table — persona that acts as a user in scenario testing
 export const testers = pgTable('testers', {
@@ -577,7 +623,7 @@ export const scenarios = pgTable('scenarios', {
   conversationOpener: text('conversation_opener'),
   dataExtraction: jsonb('data_extraction').$type<DataExtractionEntry[]>(),
   contextTransformerId: text('context_transformer_id'),
-  dataPostProcessingExpected: jsonb('data_post_processing_expected').$type<Record<string, unknown>>(),
+  dataPostProcessingExpected: jsonb('data_post_processing_expected').$type<Record<string, ExpectedValueEntry>>(),
   tags: jsonb('tags').notNull().default([]).$type<string[]>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
@@ -596,6 +642,8 @@ export const scenarioRuns = pgTable('scenario_runs', {
   totalConversations: integer('total_conversations').notNull(),
   status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
   statusDetails: text('status_details'),
+  errorCount: integer('error_count').notNull().default(0),
+  testStatistics: jsonb('test_statistics').$type<TestStatistics>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -614,8 +662,10 @@ export const scenarioConversations = pgTable('scenario_conversations', {
   testerId: text('tester_id').notNull(),
   conversationId: text('conversation_id'),
   status: text('status').notNull().$type<ScenarioRunStatus>().default('queued'),
+  testRunStatus: text('test_run_status').$type<TestRunStatus>(),
   dataExtractionResults: jsonb('data_extraction_results').$type<Record<string, unknown>>(),
   dataTransformationResults: jsonb('data_transformation_results').$type<Record<string, unknown>>(),
+  testStatistics: jsonb('test_statistics').$type<TestStatistics>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
   version: integer('version').notNull().default(1),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -861,5 +911,161 @@ export const scenarioConversationsRelations = relations(scenarioConversations, (
   scenarioRun: one(scenarioRuns, {
     fields: [scenarioConversations.projectId, scenarioConversations.scenarioRunId],
     references: [scenarioRuns.projectId, scenarioRuns.id],
+  }),
+}));
+
+// ─── Benchmarking ────────────────────────────────────────────────────────────
+
+export type BenchmarkProviderType = 'llm' | 'tts' | 'asr';
+export type BenchmarkRunTrigger = 'manual' | 'scheduled';
+export type BenchmarkRunStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+export type BenchmarkInputType = 'messages' | 'text' | 'audio';
+
+// benchmark_suites — groups multiple benchmark configs into a single executable unit
+export const benchmarkSuites = pgTable('benchmark_suites', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  cronExpression: text('cron_expression'),
+  isActive: boolean('is_active').notNull().default(true),
+  tags: jsonb('tags').notNull().default([]).$type<string[]>(),
+  createdBy: text('created_by').references(() => operators.id),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// benchmark_provider_configs — reusable provider + settings snapshot for benchmarking
+export const benchmarkProviderConfigs = pgTable('benchmark_provider_configs', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  providerType: text('provider_type').notNull().$type<BenchmarkProviderType>(),
+  providerId: text('provider_id').notNull().references(() => providers.id),
+  settings: jsonb('settings').notNull().$type<Record<string, unknown>>(),
+  providerSettings: jsonb('provider_settings').$type<Record<string, unknown>>(),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// benchmark_configs — single test case linking a provider config with typed input data
+export const benchmarkConfigs = pgTable('benchmark_configs', {
+  id: text('id').primaryKey(),
+  suiteId: text('suite_id').notNull().references(() => benchmarkSuites.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  providerConfigId: text('provider_config_id').notNull().references(() => benchmarkProviderConfigs.id),
+  inputType: text('input_type').notNull().$type<BenchmarkInputType>(),
+  inputData: jsonb('input_data').notNull().$type<Record<string, unknown>>(),
+  repeats: integer('repeats').notNull().default(3),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('idx_benchmark_configs_suite_id').on(table.suiteId),
+]);
+
+// benchmark_runs — one execution of a full benchmark suite
+export const benchmarkRuns = pgTable('benchmark_runs', {
+  id: text('id').primaryKey(),
+  suiteId: text('suite_id').notNull().references(() => benchmarkSuites.id),
+  trigger: text('trigger').notNull().$type<BenchmarkRunTrigger>(),
+  status: text('status').notNull().default('pending').$type<BenchmarkRunStatus>(),
+  startedAt: timestamp('started_at'),
+  completedAt: timestamp('completed_at'),
+  error: text('error'),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('idx_benchmark_runs_suite_id').on(table.suiteId),
+  index('idx_benchmark_runs_status').on(table.status),
+]);
+
+// benchmark_config_executions — one row per (config × run); the unique execution ID grouping all iteration results
+export const benchmarkConfigExecutions = pgTable('benchmark_config_executions', {
+  id: text('id').primaryKey(),
+  runId: text('run_id').notNull().references(() => benchmarkRuns.id, { onDelete: 'cascade' }),
+  configId: text('config_id').notNull().references(() => benchmarkConfigs.id),
+  status: text('status').notNull().default('pending').$type<BenchmarkRunStatus>(),
+  stats: jsonb('stats').$type<Record<string, unknown>>(),
+  startedAt: timestamp('started_at'),
+  completedAt: timestamp('completed_at'),
+  error: text('error'),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('idx_benchmark_config_executions_run_id').on(table.runId, table.configId),
+]);
+
+// benchmark_results — one row per iteration within a config execution; raw timing data
+export const benchmarkResults = pgTable('benchmark_results', {
+  id: text('id').primaryKey(),
+  configExecutionId: text('config_execution_id').notNull().references(() => benchmarkConfigExecutions.id, { onDelete: 'cascade' }),
+  iterationIndex: integer('iteration_index').notNull(),
+  startedAt: timestamp('started_at').notNull(),
+  completedAt: timestamp('completed_at'),
+  result: jsonb('result').notNull().$type<IterationResultData>(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (table) => [
+  index('idx_benchmark_results_config_execution_id').on(table.configExecutionId),
+]);
+
+// ─── Benchmarking Relations ───────────────────────────────────────────────────
+
+export const benchmarkSuitesRelations = relations(benchmarkSuites, ({ one, many }) => ({
+  creator: one(operators, {
+    fields: [benchmarkSuites.createdBy],
+    references: [operators.id],
+  }),
+  configs: many(benchmarkConfigs),
+  runs: many(benchmarkRuns),
+}));
+
+export const benchmarkProviderConfigsRelations = relations(benchmarkProviderConfigs, ({ one, many }) => ({
+  provider: one(providers, {
+    fields: [benchmarkProviderConfigs.providerId],
+    references: [providers.id],
+  }),
+  benchmarkConfigs: many(benchmarkConfigs),
+}));
+
+export const benchmarkConfigsRelations = relations(benchmarkConfigs, ({ one, many }) => ({
+  suite: one(benchmarkSuites, {
+    fields: [benchmarkConfigs.suiteId],
+    references: [benchmarkSuites.id],
+  }),
+  providerConfig: one(benchmarkProviderConfigs, {
+    fields: [benchmarkConfigs.providerConfigId],
+    references: [benchmarkProviderConfigs.id],
+  }),
+  executions: many(benchmarkConfigExecutions),
+}));
+
+export const benchmarkRunsRelations = relations(benchmarkRuns, ({ one, many }) => ({
+  suite: one(benchmarkSuites, {
+    fields: [benchmarkRuns.suiteId],
+    references: [benchmarkSuites.id],
+  }),
+  executions: many(benchmarkConfigExecutions),
+}));
+
+export const benchmarkConfigExecutionsRelations = relations(benchmarkConfigExecutions, ({ one, many }) => ({
+  run: one(benchmarkRuns, {
+    fields: [benchmarkConfigExecutions.runId],
+    references: [benchmarkRuns.id],
+  }),
+  config: one(benchmarkConfigs, {
+    fields: [benchmarkConfigExecutions.configId],
+    references: [benchmarkConfigs.id],
+  }),
+  results: many(benchmarkResults),
+}));
+
+export const benchmarkResultsRelations = relations(benchmarkResults, ({ one }) => ({
+  execution: one(benchmarkConfigExecutions, {
+    fields: [benchmarkResults.configExecutionId],
+    references: [benchmarkConfigExecutions.id],
   }),
 }));

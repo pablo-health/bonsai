@@ -8,10 +8,10 @@
  */
 
 /** Permitted transport channel types for an API key. */
-export type ApiKeyChannel = 'websocket' | 'webrtc' | 'twilio_voice' | 'twilio_messaging' | 'whatsapp' | 'telegram' | 'testing';
+export type ApiKeyChannel = 'websocket' | 'webrtc' | 'twilio_voice' | 'twilio_messaging' | 'whatsapp' | 'telegram' | 'sendgrid' | 'ses' | 'smtp_imap' | 'testing';
 
 /** All supported API key channel values. */
-export const ALL_API_KEY_CHANNELS: Array<ApiKeyChannel> = ['websocket', 'webrtc', 'twilio_voice', 'twilio_messaging', 'whatsapp', 'telegram', 'testing'];
+export const ALL_API_KEY_CHANNELS: Array<ApiKeyChannel> = ['websocket', 'webrtc', 'twilio_voice', 'twilio_messaging', 'whatsapp', 'telegram', 'sendgrid', 'ses', 'smtp_imap', 'testing'];
 
 /**
  * Permitted feature capabilities for an API key.
@@ -27,6 +27,7 @@ export type ApiKeyFeature =
   | 'stage_control'
   | 'run_action'
   | 'call_tool'
+  | 'abort_generation'
   | 'events';
 
 /** All supported API key feature values. */
@@ -40,6 +41,7 @@ export const ALL_API_KEY_FEATURES: Array<ApiKeyFeature> = [
   'stage_control',
   'run_action',
   'call_tool',
+  'abort_generation',
   'events',
 ];
 

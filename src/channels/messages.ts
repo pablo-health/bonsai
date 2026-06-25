@@ -25,7 +25,7 @@ import { conversationEventTypeSchema, conversationEventDataSchema } from '../typ
  * Base fields shared by all inbound (input) messages.
  */
 export const calBaseInputMessageSchema = z.object({
-  conversationId: z.string().describe('Unique identifier of the conversation'),
+  conversationId: z.string().min(1).describe('Unique identifier of the conversation'),
   correlationId: z.string().optional().describe('Optional caller-supplied identifier echoed back in the corresponding result message'),
 });
 
@@ -50,6 +50,8 @@ export const calStartConversationRequestSchema = calBaseInputMessageSchema.omit(
   timezone: z.string().optional().describe('IANA timezone identifier for this conversation (e.g. America/New_York, Europe/Warsaw). Overrides user profile and project timezone settings. Defaults to UTC when not provided by any source.'),
   direction: z.enum(['incoming', 'outgoing']).optional().describe('Direction of the conversation. Defaults to incoming when not specified.'),
   existingConversationId: z.string().optional().describe('When set, the handler attaches to this pre-created conversation instead of creating a new one. Used for outgoing call flows where the conversation record is created at call initiation time.'),
+  userProfile: z.record(z.string(), z.unknown()).optional().describe('Optional user profile data to inject and deep-merge into the user\'s existing profile on the users table.'),
+  stageVariables: z.record(z.string(), z.unknown()).optional().describe('Optional initial stage variable values to set for the starting stage when the conversation is created. Merged into stageVars for the resolved starting stage.'),
 });
 
 /**
@@ -144,6 +146,33 @@ export const calCallToolRequestSchema = calBaseInputMessageSchema.extend({
 });
 
 /**
+ * Signals that the client wishes to abort (barge-in on) an ongoing AI generation.
+ * Sent when the user starts speaking while the agent is mid-response during a voice conversation.
+ */
+export const calAbortAiGenerationRequestSchema = calBaseInputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  stageId: z.string().describe('Identifier of the stage whose generation should be aborted'),
+});
+
+/**
+ * Signals that the client has finished playing back the AI's audio output.
+ * Used to trigger the silence timer after the user has fully heard the response.
+ */
+export const calAudioPlaybackEndedRequestSchema = calBaseInputMessageSchema.extend({
+  type: z.literal('audio_playback_ended'),
+  outputTurnId: z.string().optional().describe('Identifier of the output turn whose playback has completed'),
+});
+
+/**
+ * Result of an abort_ai_generation command.
+ */
+export const calAbortAiGenerationResponseSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation'),
+  success: z.boolean().describe('Whether the AI generation was successfully aborted'),
+  error: z.string().optional().describe('Error message if abort failed'),
+});
+
+/**
  * Discriminated union of all inbound message types accepted by a communication channel.
  */
 export const calInputMessageSchema = z.discriminatedUnion('type', [
@@ -159,6 +188,8 @@ export const calInputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsRequestSchema,
   calRunActionRequestSchema,
   calCallToolRequestSchema,
+  calAbortAiGenerationRequestSchema,
+  calAudioPlaybackEndedRequestSchema,
 ]);
 
 // Output result message schemas
@@ -236,7 +267,7 @@ export const calGoToStageResponseSchema = calBaseOutputMessageSchema.extend({
  * Result of a set_var command.
  */
 export const calSetVarResponseSchema = calBaseOutputMessageSchema.extend({
-  type: z.literal('set_var_result'),
+  type: z.literal('set_var'),
   success: z.boolean().describe('Whether the variable was successfully set'),
   error: z.string().optional().describe('Error message if setting the variable failed'),
 });
@@ -292,6 +323,7 @@ export const calStartAiGenerationOutputMessageSchema = calBaseOutputMessageSchem
   type: z.literal('start_ai_generation_output'),
   outputTurnId: z.string().describe('Unique identifier for this generation turn; used to correlate all subsequent output messages'),
   expectVoice: z.boolean().describe('Whether the response will include synthesised voice audio'),
+  flushBuffer: z.boolean().optional().describe('Whether the channel adapter should flush any buffered audio from a previous turn before delivering this turn. Set to false for filler delivery on non-barge-in turns to avoid unnecessary silence.'),
 });
 
 /**
@@ -308,6 +340,17 @@ export const calSendAiVoiceChunkMessageSchema = calBaseOutputMessageSchema.exten
   isFinal: z.boolean().describe('Whether this is the final audio chunk for this output turn'),
   sampleRate: z.number().optional().describe('Sample rate in Hz (e.g. 24000)'),
   bitRate: z.number().optional().describe('Bit rate in bits per second (e.g. 64000)'),
+});
+
+/**
+ * Signals that the AI generation was aborted due to user barge-in (voice interruption).
+ * Sent by the server when it receives a voice interruption during agent speech synthesis.
+ */
+export const calAbortAiGenerationOutputMessageSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('abort_ai_generation_output'),
+  outputTurnId: z.string().describe('Generation turn that was aborted'),
+  accumulatedText: z.string().describe('Full text generated and sent to TTS before the barge-in occurred'),
+  abortTimestampMs: z.number().describe('Unix timestamp in milliseconds when the generation was aborted'),
 });
 
 /**
@@ -329,6 +372,15 @@ export const calAiTranscribedChunkMessageSchema = calBaseOutputMessageSchema.ext
   chunkText: z.string().describe('Transcribed text content'),
   ordinal: z.number().describe('Sequential 0-based position within the transcription stream'),
   isFinal: z.boolean().describe('Whether this is the final transcription chunk for this output turn'),
+});
+
+/**
+ * Signals that VAD detected the user started speaking while AI was generating a response.
+ * Sent immediately so the UI can stop AI audio playback and switch to listening state.
+ */
+export const calUserSpeakingStartedMessageSchema = calBaseOutputMessageSchema.extend({
+  type: z.literal('user_speaking_started'),
+  inputTurnId: z.string().describe('Input turn that was assigned for this user utterance'),
 });
 
 // Output push message schemas — user transcription
@@ -419,10 +471,13 @@ export const calOutputMessageSchema = z.discriminatedUnion('type', [
   calGetAllVarsResponseSchema,
   calRunActionResponseSchema,
   calCallToolResponseSchema,
+  calAbortAiGenerationResponseSchema,
   calStartAiGenerationOutputMessageSchema,
   calSendAiVoiceChunkMessageSchema,
+  calAbortAiGenerationOutputMessageSchema,
   calEndAiGenerationOutputMessageSchema,
   calAiTranscribedChunkMessageSchema,
+  calUserSpeakingStartedMessageSchema,
   calUserTranscribedChunkMessageSchema,
   calSendAiImageOutputMessageSchema,
   calSendAiAudioOutputMessageSchema,
@@ -447,6 +502,8 @@ export type CALGetVarRequest = z.infer<typeof calGetVarRequestSchema>;
 export type CALGetAllVarsRequest = z.infer<typeof calGetAllVarsRequestSchema>;
 export type CALRunActionRequest = z.infer<typeof calRunActionRequestSchema>;
 export type CALCallToolRequest = z.infer<typeof calCallToolRequestSchema>;
+export type CALAbortAiGenerationRequest = z.infer<typeof calAbortAiGenerationRequestSchema>;
+export type CALAudioPlaybackEndedRequest = z.infer<typeof calAudioPlaybackEndedRequestSchema>;
 export type CALInputMessage = z.infer<typeof calInputMessageSchema>;
 
 export type CALStartConversationResponse = z.infer<typeof calStartConversationResponseSchema>;
@@ -461,11 +518,14 @@ export type CALGetVarResponse = z.infer<typeof calGetVarResponseSchema>;
 export type CALGetAllVarsResponse = z.infer<typeof calGetAllVarsResponseSchema>;
 export type CALRunActionResponse = z.infer<typeof calRunActionResponseSchema>;
 export type CALCallToolResponse = z.infer<typeof calCallToolResponseSchema>;
+export type CALAbortAiGenerationResponse = z.infer<typeof calAbortAiGenerationResponseSchema>;
 
 export type CALStartAiGenerationOutputMessage = z.infer<typeof calStartAiGenerationOutputMessageSchema>;
 export type CALSendAiVoiceChunkMessage = z.infer<typeof calSendAiVoiceChunkMessageSchema>;
+export type CALAbortAiGenerationOutputMessage = z.infer<typeof calAbortAiGenerationOutputMessageSchema>;
 export type CALEndAiGenerationOutputMessage = z.infer<typeof calEndAiGenerationOutputMessageSchema>;
 export type CALAiTranscribedChunkMessage = z.infer<typeof calAiTranscribedChunkMessageSchema>;
+export type CALUserSpeakingStartedMessage = z.infer<typeof calUserSpeakingStartedMessageSchema>;
 export type CALUserTranscribedChunkMessage = z.infer<typeof calUserTranscribedChunkMessageSchema>;
 export type CALSendAiImageOutputMessage = z.infer<typeof calSendAiImageOutputMessageSchema>;
 export type CALSendAiAudioOutputMessage = z.infer<typeof calSendAiAudioOutputMessageSchema>;

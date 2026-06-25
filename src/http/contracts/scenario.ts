@@ -7,14 +7,24 @@ extendZodWithOpenApi(z);
 
 export { listParamsSchema, type ListParams };
 
+/** Comparison modes for evaluating expected values in scenario runs */
+export const evaluationComparisonModeSchema = z.enum(['exists', 'not_exists', 'eq', 'contains', 'includes', 'matches', 'gt', 'gte', 'lt', 'lte', 'in', 'nin']).describe('Comparison mode: exists (value is non-null), not_exists (value is null), eq (strict equality), contains (string contains substring), includes (array includes item), matches (regex pattern match), gt (greater than), gte (>=), lt (<), lte (<=), in (value in array), nin (not in array)');
+
+/** Schema for a post-processing expected value entry with mode and value */
+export const expectedValueEntrySchema = z.object({
+  value: z.unknown().optional().describe('Expected value to compare against'),
+  mode: evaluationComparisonModeSchema.optional().describe('Comparison mode. Default is "eq" (strict equality)'),
+}).openapi('ExpectedValueEntry');
+
 /**
- * Schema for a single data extraction entry: a stage variable with an optional expected value.
+ * Schema for a single data extraction entry: a stage variable with an optional expected value and comparison mode.
  * Used to define what variables to extract at the end of a scenario run and what constitutes success.
  */
 export const dataExtractionEntrySchema = z.object({
   stageId: z.string().min(1).describe('ID of the stage whose variable should be extracted'),
   varName: z.string().min(1).describe('Name of the stage variable to extract'),
   expectedValue: z.unknown().optional().describe('Expected value of the variable — defines a successful outcome when provided'),
+  expectedMode: evaluationComparisonModeSchema.optional().describe('Comparison mode for this value. Default is "eq" (strict equality)'),
 }).openapi('DataExtractionEntry');
 
 /**
@@ -40,7 +50,7 @@ export const createScenarioSchema = z.object({
   conversationOpener: z.string().optional().describe('Opening message sent by the tester when the first stage awaits user input, instead of calling the LLM. Defaults to "[Conversation begins.]" when not set.'),
   dataExtraction: z.array(dataExtractionEntrySchema).optional().describe('Stage variables to extract at the end of the run and their expected values'),
   contextTransformerId: z.string().min(1).optional().describe('ID of the context transformer used to post-process extracted data'),
-  dataPostProcessingExpected: z.record(z.string(), z.unknown()).optional().describe('Expected values after post-processing — defines additional success criteria'),
+  dataPostProcessingExpected: z.record(z.string(), expectedValueEntrySchema).optional().describe('Expected values after post-processing — each entry has an optional value and comparison mode (default "eq")'),
   tags: z.array(z.string()).optional().default([]).describe('Tags for categorizing and filtering this scenario'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Additional scenario-specific metadata'),
 });
@@ -60,7 +70,7 @@ export const updateScenarioBodySchema = z.object({
   conversationOpener: z.string().nullable().optional().describe('Updated conversation opener message'),
   dataExtraction: z.array(dataExtractionEntrySchema).optional().describe('Updated data extraction configuration'),
   contextTransformerId: z.string().min(1).nullable().optional().describe('Updated context transformer ID'),
-  dataPostProcessingExpected: z.record(z.string(), z.unknown()).nullable().optional().describe('Updated post-processing expected values'),
+  dataPostProcessingExpected: z.record(z.string(), expectedValueEntrySchema).nullable().optional().describe('Updated post-processing expected values — each entry has an optional value and comparison mode (default "eq")'),
   tags: z.array(z.string()).optional().describe('Updated tags'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Updated metadata'),
   version: z.number().int().min(1).describe('Current version number for optimistic locking'),
@@ -89,7 +99,7 @@ export const scenarioResponseSchema = z.object({
   conversationOpener: z.string().nullable().describe('Opening message sent by the tester when the first stage awaits user input'),
   dataExtraction: z.array(dataExtractionEntrySchema).nullable().describe('Data extraction configuration'),
   contextTransformerId: z.string().nullable().describe('ID of the context transformer for post-processing'),
-  dataPostProcessingExpected: z.record(z.string(), z.unknown()).nullable().describe('Expected values after post-processing'),
+  dataPostProcessingExpected: z.record(z.string(), expectedValueEntrySchema).nullable().describe('Expected values after post-processing — each entry has an optional value and comparison mode (default "eq")'),
   tags: z.array(z.string()).describe('Tags for categorizing and filtering'),
   metadata: z.record(z.string(), z.unknown()).nullable().describe('Additional metadata'),
   version: z.number().int().describe('Version number for optimistic locking'),
@@ -116,8 +126,14 @@ export type UpdateScenarioRequest = z.infer<typeof updateScenarioBodySchema>;
 /** Request body for deleting a scenario */
 export type DeleteScenarioRequest = z.infer<typeof deleteScenarioBodySchema>;
 
+/** Comparison mode for evaluation assertions */
+export type EvaluationComparisonMode = z.infer<typeof evaluationComparisonModeSchema>;
+
 /** Single data extraction entry */
 export type DataExtractionEntry = z.infer<typeof dataExtractionEntrySchema>;
+
+/** Expected value entry with optional mode and value */
+export type ExpectedValueEntry = z.infer<typeof expectedValueEntrySchema>;
 
 /** Response for a single scenario */
 export type ScenarioResponse = z.infer<typeof scenarioResponseSchema>;

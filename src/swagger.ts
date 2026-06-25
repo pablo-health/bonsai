@@ -28,7 +28,7 @@ import { auditLogResponseSchema, auditLogListResponseSchema } from './http/contr
 import { latencyMetricSchema, percentileSetSchema, latencyTrendPointSchema, tokenUsageByEventTypeSchema, tokenUsageTrendPointSchema } from './http/contracts/analytics';
 import { sourceDimensionSchema, sourceMetricSchema, sourceEntrySchema, sliceQueryRowSchema } from './http/contracts/sliceAnalytics';
 import { createApiKeySchema, updateApiKeySchema, deleteApiKeyBodySchema, apiKeyResponseSchema, apiKeyListResponseSchema, apiKeySettingsSchema } from './http/contracts/apiKey';
-import { listParamsSchema, llmSettingsSchema } from './http/contracts/common';
+import { listParamsSchema, llmSettingsSchema, vadSettingsSchema } from './http/contracts/common';
 import { asrConfigSchema } from './http/contracts/project';
 import { effectSchema, endConversationEffectSchema, abortConversationEffectSchema, goToStageEffectSchema, modifyUserInputEffectSchema, modifyVariablesEffectSchema, modifyUserProfileEffectSchema, variableOperationSchema, userProfileOperationSchema, callToolEffectSchema, generateResponseEffectSchema, stageActionSchema, stageActionParameterSchema, toolParameterSchema, changeVisibilityEffectSchema, banUserEffectSchema } from './types/actions';
 import { fieldDescriptorSchema } from './types/parameters';
@@ -46,6 +46,8 @@ import { perplexityLlmSettingsSchema } from './services/providers/llm/Perplexity
 import { cohereLlmSettingsSchema } from './services/providers/llm/CohereLlmProvider';
 import { xAILlmSettingsSchema } from './services/providers/llm/XAILlmProvider';
 import { ollamaLlmSettingsSchema } from './services/providers/llm/OllamaLlmProvider';
+import { ovhLlmSettingsSchema } from './services/providers/llm/OVHLlmProvider';
+import { scalewayLlmSettingsSchema } from './services/providers/llm/ScalewayLlmProvider';
 import { elevenLabsTtsSettingsSchema } from './services/providers/tts/ElevenLabsTtsProvider';
 import { openAiTtsSettingsSchema } from './services/providers/tts/OpenAiTtsProvider';
 import { deepgramTtsSettingsSchema } from './services/providers/tts/DeepgramTtsProvider';
@@ -61,7 +63,7 @@ import { elevenLabsAsrSettingsSchema } from './services/providers/asr/ElevenLabs
 import { deepgramAsrSettingsSchema } from './services/providers/asr/DeepgramAsrProvider';
 import { assemblyAiAsrSettingsSchema } from './services/providers/asr/AssemblyAiAsrProvider';
 import { speechmaticsAsrSettingsSchema } from './services/providers/asr/SpeechmaticsAsrProvider';
-import { serverVadConfigSchema } from './http/contracts/vad';
+import { serverVadConfigSchema, legacyVadConfigSchema, sileroVadConfigSchema, fireredVadConfigSchema, smartTurnConfigSchema } from './http/contracts/vad';
 import { OperatorController } from './http/controllers/OperatorController';
 import { UserController } from './http/controllers/UserController';
 import { ProjectController } from './http/controllers/ProjectController';
@@ -105,11 +107,20 @@ import { ScenarioRunController } from './http/controllers/ScenarioRunController'
 import { scenarioRunStatusSchema, createScenarioRunSchema, scenarioRunResponseSchema, scenarioRunListResponseSchema } from './http/contracts/scenarioRun';
 import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
 import { scenarioConversationResponseSchema, scenarioConversationListResponseSchema } from './http/contracts/scenarioConversation';
+import { BenchmarkSuiteController } from './http/controllers/BenchmarkSuiteController';
+import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkProviderConfigController';
+import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
+import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
+import { timingStatsSchema, benchmarkStatsSchema, createBenchmarkSuiteSchema, updateBenchmarkSuiteSchema, benchmarkSuiteResponseSchema, benchmarkSuiteListResponseSchema, createBenchmarkProviderConfigSchema, updateBenchmarkProviderConfigSchema, benchmarkProviderConfigResponseSchema, benchmarkProviderConfigListResponseSchema, createBenchmarkConfigSchema, updateBenchmarkConfigSchema, benchmarkConfigResponseSchema, benchmarkConfigListResponseSchema, triggerBenchmarkRunSchema, benchmarkConfigExecutionResponseSchema, benchmarkRunResponseSchema, benchmarkRunListResponseSchema, llmIterationOutputSchema, ttsIterationOutputSchema, asrIterationOutputSchema, benchmarkIterationResultDataSchema, benchmarkResultResponseSchema } from './http/contracts/benchmark';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
 import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
+// import { SesChannelHost } from './channels/email/ses/SesChannelHost';
+// import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
+import { SmtpImapChannelHost } from './channels/email/smtp-imap/SmtpImapChannelHost';
+import { SmtpImapOAuth2Controller } from './http/controllers/SmtpImapOAuth2Controller';
 import { providerHintSchema, providerHintResolutionTargetSchema, providerHintResolutionSchema, asrConfigExchangeV1Schema, storageConfigExchangeV1Schema, moderationConfigExchangeV1Schema, fillerSettingsExchangeV1Schema, projectExchangeV1Schema, agentExchangeV1Schema, stageExchangeV1Schema, classifierExchangeV1Schema, contextTransformerExchangeV1Schema, toolExchangeV1Schema, globalActionExchangeV1Schema, guardrailExchangeV1Schema, knowledgeCategoryExchangeV1Schema, knowledgeItemExchangeV1Schema, projectExchangeBundleV1Schema, projectExchangeImportResultSchema } from './http/contracts/projectExchange';
 
 extendZodWithOpenApi(z);
@@ -148,6 +159,8 @@ export function getOpenAPISpec(): any {
   registry.register('CohereLlmSettings', cohereLlmSettingsSchema);
   registry.register('XAILlmSettings', xAILlmSettingsSchema);
   registry.register('OllamaLlmSettings', ollamaLlmSettingsSchema);
+  registry.register('OVHLlmSettings', ovhLlmSettingsSchema);
+  registry.register('ScalewayLlmSettings', scalewayLlmSettingsSchema);
   registry.register('LlmSettings', llmSettingsSchema);
 
   // TTS settings schemas (provider-specific)
@@ -160,6 +173,11 @@ export function getOpenAPISpec(): any {
 
   // Voice and ASR configuration schemas
   registry.register('ServerVadConfig', serverVadConfigSchema);
+  registry.register('LegacyVadConfig', legacyVadConfigSchema);
+  registry.register('SileroVadConfig', sileroVadConfigSchema);
+  registry.register('FireRedVadConfig', fireredVadConfigSchema);
+  registry.register('SmartTurnConfig', smartTurnConfigSchema);
+  registry.register('VadSettings', vadSettingsSchema);
   registry.register('AsrConfig', asrConfigSchema);
   registry.register('ModerationConfig', moderationConfigSchema);
   registry.register('SampleCopyConfig', sampleCopyConfigSchema);
@@ -629,6 +647,71 @@ export function getOpenAPISpec(): any {
   // Register Telegram webhook route
   const telegramPaths = TelegramChannelHost.getOpenAPIPaths();
   for (const path of telegramPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register SES outgoing send route
+  // const sesPaths = SesChannelHost.getOpenAPIPaths();
+  // for (const path of sesPaths) {
+  //   registry.registerPath(path);
+  // }
+
+  // Register SendGrid outgoing send route
+  // const sendGridPaths = SendGridChannelHost.getOpenAPIPaths();
+  // for (const path of sendGridPaths) {
+  //   registry.registerPath(path);
+  // }
+
+  // Register SMTP/IMAP outgoing send route
+  const smtpImapPaths = SmtpImapChannelHost.getOpenAPIPaths();
+  for (const path of smtpImapPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register SMTP/IMAP OAuth2 routes
+  const smtpImapOAuth2Paths = SmtpImapOAuth2Controller.getOpenAPIPaths();
+  for (const path of smtpImapOAuth2Paths) {
+    registry.registerPath(path);
+  }
+
+  // Register Benchmark sub-schemas (reusable components) and routes
+  registry.register('BenchmarkTimingStats', timingStatsSchema);
+  registry.register('BenchmarkStats', benchmarkStatsSchema);
+  registry.register('CreateBenchmarkSuiteRequest', createBenchmarkSuiteSchema);
+  registry.register('UpdateBenchmarkSuiteRequest', updateBenchmarkSuiteSchema);
+  registry.register('BenchmarkSuiteResponse', benchmarkSuiteResponseSchema);
+  registry.register('BenchmarkSuiteListResponse', benchmarkSuiteListResponseSchema);
+  registry.register('CreateBenchmarkProviderConfigRequest', createBenchmarkProviderConfigSchema);
+  registry.register('UpdateBenchmarkProviderConfigRequest', updateBenchmarkProviderConfigSchema);
+  registry.register('BenchmarkProviderConfigResponse', benchmarkProviderConfigResponseSchema);
+  registry.register('BenchmarkProviderConfigListResponse', benchmarkProviderConfigListResponseSchema);
+  registry.register('CreateBenchmarkConfigRequest', createBenchmarkConfigSchema);
+  registry.register('UpdateBenchmarkConfigRequest', updateBenchmarkConfigSchema);
+  registry.register('BenchmarkConfigResponse', benchmarkConfigResponseSchema);
+  registry.register('BenchmarkConfigListResponse', benchmarkConfigListResponseSchema);
+  registry.register('TriggerBenchmarkRunRequest', triggerBenchmarkRunSchema);
+  registry.register('BenchmarkConfigExecutionResponse', benchmarkConfigExecutionResponseSchema);
+  registry.register('BenchmarkRunResponse', benchmarkRunResponseSchema);
+  registry.register('BenchmarkRunListResponse', benchmarkRunListResponseSchema);
+  registry.register('LlmIterationOutput', llmIterationOutputSchema);
+  registry.register('TtsIterationOutput', ttsIterationOutputSchema);
+  registry.register('AsrIterationOutput', asrIterationOutputSchema);
+  registry.register('BenchmarkIterationResultData', benchmarkIterationResultDataSchema);
+  registry.register('BenchmarkResultResponse', benchmarkResultResponseSchema);
+  const benchmarkSuitePaths = BenchmarkSuiteController.getOpenAPIPaths();
+  for (const path of benchmarkSuitePaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkProviderConfigPaths = BenchmarkProviderConfigController.getOpenAPIPaths();
+  for (const path of benchmarkProviderConfigPaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkConfigPaths = BenchmarkConfigController.getOpenAPIPaths();
+  for (const path of benchmarkConfigPaths) {
+    registry.registerPath(path);
+  }
+  const benchmarkRunPaths = BenchmarkRunController.getOpenAPIPaths();
+  for (const path of benchmarkRunPaths) {
     registry.registerPath(path);
   }
 

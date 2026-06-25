@@ -2,7 +2,9 @@ import { injectable, inject } from 'tsyringe';
 import { eq, or, and, like, SQL, desc, sql } from 'drizzle-orm';
 import { db } from '../db/index';
 import { users } from '../db/schema';
+import { deepMerge } from '../utils/deepMerge';
 import type { CreateUserRequest, UpdateUserRequest, UserResponse, UserListResponse } from '../http/contracts/user';
+import type { AuditLog } from '../types/models';
 import type { ListParams } from '../http/contracts/common';
 import { userResponseSchema, userListResponseSchema } from '../http/contracts/user';
 import { AuditService } from './AuditService';
@@ -238,11 +240,53 @@ export class UserService extends BaseService {
 
       const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
 
+      if (!existing) {
+        throw new NotFoundError(`User with id ${userId} not found in project ${projectId}`);
+      }
+
       return userResponseSchema.parse(existing);
     } catch (error) {
       logger.error({ error, userId, projectId }, 'Failed to ensure user exists');
       throw error;
     }
+  }
+
+  /**
+   * Deep-merges profile data into an existing user's profile, creating the user with the profile if they do not exist.
+   * This is used to inject user profile data at conversation start time across all communication channels.
+   * @param projectId - The project the user belongs to
+   * @param userId - The ID of the user
+   * @param profileUpdate - Profile fields to deep-merge into the existing profile
+   */
+  async updateUserProfile(projectId: string, userId: string, profileUpdate: Record<string, unknown>): Promise<void> {
+    logger.info({ userId, projectId }, 'Updating user profile');
+
+    try {
+      const existing = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
+
+      if (!existing) {
+        await db.insert(users).values({ id: userId, projectId, profile: profileUpdate });
+        logger.info({ userId, projectId }, 'User created with injected profile');
+        return;
+      }
+
+      const mergedProfile = deepMerge((existing.profile ?? {}) as Record<string, unknown>, profileUpdate);
+      await db.update(users).set({ profile: mergedProfile, updatedAt: new Date() }).where(and(eq(users.projectId, projectId), eq(users.id, userId)));
+      logger.info({ userId, projectId }, 'User profile updated successfully');
+    } catch (error) {
+      logger.error({ error, userId, projectId }, 'Failed to update user profile');
+      throw error;
+    }
+  }
+
+  /**
+   * Resets a user's profile to the provided value. Used to restore test user state between scenario runs.
+   * @param projectId - The project the user belongs to
+   * @param userId - The unique identifier of the user
+   * @param profile - The profile to reset to
+   */
+  async resetUserProfile(projectId: string, userId: string, profile: Record<string, unknown>): Promise<void> {
+    await db.update(users).set({ profile, updatedAt: new Date() }).where(and(eq(users.projectId, projectId), eq(users.id, userId)));
   }
 
   /**
@@ -283,7 +327,8 @@ export class UserService extends BaseService {
    * @param projectId - The project ID the user belongs to
    * @returns Array of audit log entries for the user
    */
-  async getUserAuditLogs(userId: string, projectId: string): Promise<any[]> {
+  async getUserAuditLogs(userId: string, projectId: string, context: RequestContext): Promise<AuditLog[]> {
+    this.requirePermission(context, PERMISSIONS.AUDIT_READ);
     logger.debug({ userId, projectId }, 'Fetching audit logs for user');
 
     try {

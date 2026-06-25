@@ -25,14 +25,13 @@ export const deepgramTtsSettingsSchema = z.object({
   provider: z.literal('deepgram').describe('TTS provider type identifier'),
   model: z.enum(['aura-1', 'aura-2']).optional().describe('Model version to use ("aura-1" or "aura-2")'),
   voiceId: z.string().optional().describe('Voice ID to use for speech synthesis (e.g., "thalia-en", "andromeda-en"). Combined with model to form full model string (e.g., "aura-2-thalia-en")'),
-  audioFormat: z.enum(['pcm_8000', 'pcm_16000', 'pcm_24000', 'pcm_48000', 'mulaw', 'alaw']).optional().describe('Preferred audio output format. Defaults to "pcm_16000"'),  
+  audioFormat: z.enum(['pcm_8000', 'pcm_16000', 'pcm_24000', 'pcm_48000', 'mulaw', 'alaw']).optional().describe('Preferred audio output format. Defaults to "pcm_16000"'),
   sampleRate: z.number().int().positive().optional().describe('Sample rate for audio output in Hz (e.g., 8000, 16000, 24000, 48000). Availability depends on audio format'),
-  bitRate: z.number().int().positive().optional().describe('Bit rate for audio output (e.g., 32000, 64000, 128000). Applies to certain formats like mp3, opus, aac'),
-  container: z.enum(['none', 'wav', 'ogg']).optional().describe('Audio container format. Use "none" for raw audio, "wav" for WAV container, "ogg" for Ogg container'),
   noSpeechMarkers: z.array(z.object({ start: z.string(), end: z.string() })).optional().describe('Markers to identify sections of text that should not be spoken'),
   removeExclamationMarks: z.boolean().optional().describe('Whether to replace exclamation marks with periods'),
   useSentenceSplitter: z.boolean().optional().describe('Whether to use sentence splitter for text processing, defaults to true'),
-}).openapi('DeepgramTtsSettings');
+  speed: z.number().min(0.75).max(1.5).optional().describe('Speaking rate multiplier (0.75 to 1.5, default: 1.0)'),
+}).loose().openapi('DeepgramTtsSettings');
 
 export type DeepgramTtsSettings = z.infer<typeof deepgramTtsSettingsSchema>;
 
@@ -42,8 +41,6 @@ export type DeepgramTtsSettings = z.infer<typeof deepgramTtsSettingsSchema>;
 export type DeepgramAudioChunk = GeneratedAudioChunk & {
   /** Sample rate in Hz for this audio chunk */
   sampleRate: number;
-  /** Bit rate in bits per second for this audio chunk */
-  bitRate?: number;
 };
 
 /**
@@ -90,12 +87,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
   /** Sample rate for audio output */
   private sampleRate: number = 24000;
 
-  /** Bit rate for audio output (optional) */
-  private bitRate?: number;
-
-  /** Container format (optional) */
-  private container?: string;
-
   /** Buffer for the first audio chunk to avoid playback timing issues */
   private firstChunkBuffer: DeepgramAudioChunk | null = null;
 
@@ -111,15 +102,34 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
   /** Maximum text length per Speak message (Deepgram limit: 2000) */
   private readonly MAX_TEXT_LENGTH = 2000;
 
-  /** Whether generation has ended */
-  private generationEnded: boolean = false;
+  /** Whether an utterance generation is currently active */
+  private isActiveGeneration: boolean = false;
+
+  /** Whether we're waiting for generation to finalize after end() is called */
+  private pendingGenerationEnd: boolean = false;
+
+  /** Number of Flush messages sent that haven't received a Flushed response yet */
+  private pendingFlushCount: number = 0;
+
+  /** Set to true during cleanup() to suppress the background reconnect triggered by handleWebSocketClose */
+  private isCleaningUp: boolean = false;
+
+  /** Resolves when a background reconnect (triggered by an unexpected server close) has completed */
+  private reconnectPromise: Promise<void> | null = null;
 
   constructor(config: DeepgramTtsProviderConfig, settings: DeepgramTtsSettings) {
     super(config);
     this.settings = settings;
   }
 
-  async init(): Promise<void> { }
+  /**
+   * Initializes the provider by opening the persistent WebSocket connection to Deepgram.
+   * Called once per session — the connection is kept alive until cleanup().
+   */
+  async init(): Promise<void> {
+    this.resolveAudioFormatAndEncoding();
+    await this.connect();
+  }
 
   /**
    * Gets the list of supported audio output formats for Deepgram
@@ -148,11 +158,12 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
     this.resetOrdinal();
     this.inNoSpeechSection = undefined;
     this.flushTimestamps = [];
-    this.generationEnded = false;
+    this.pendingGenerationEnd = false;
+    this.pendingFlushCount = 0;
     this.firstChunkBuffer = null;
     this.textBuffer = '';
+    this.isActiveGeneration = true;
 
-    // Construct full model string from model version and voice ID
     const modelVersion = this.settings.model ?? 'aura-2';
     const voiceId = this.settings.voiceId ?? 'thalia-en';
     const effectiveModel = `${modelVersion}-${voiceId}`;
@@ -172,52 +183,20 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
       this.sentenceSplitter = null;
     }
 
-    // Resolve audio format and encoding
-    this.resolveAudioFormatAndEncoding();
-
-    logger.info(`[Deepgram] Starting speech generation with model: ${effectiveModel}, encoding: ${this.audioFormat}, sample_rate: ${this.sampleRate}, audioFormat: ${this.audioFormat}`);
-
-    // Build WebSocket URL with query parameters
-    // Map pcm_* formats to Deepgram's API encoding name 'linear16' (sample rate is set separately)
-    const deepgramEncoding = this.audioFormat.startsWith('pcm_') ? 'linear16' : this.audioFormat;
-    let wsUrl = `wss://api.deepgram.com/v1/speak?model=${effectiveModel}&encoding=${deepgramEncoding}`;
-
-    // Add optional parameters
-    if (this.sampleRate) {
-      wsUrl += `&sample_rate=${this.sampleRate}`;
-    }
-    if (this.bitRate) {
-      wsUrl += `&bit_rate=${this.bitRate}`;
-    }
-    if (this.container) {
-      wsUrl += `&container=${this.container}`;
+    // If a background reconnect is in progress, wait for it before checking socket state
+    if (this.reconnectPromise) {
+      logger.info(`[Deepgram] Awaiting background reconnect...`);
+      await this.reconnectPromise;
     }
 
-    return new Promise<void>((resolve, reject) => {
-      this.socket = new WebSocket(wsUrl, {
-        headers: {
-          'Authorization': `Token ${this.config.apiKey}`,
-        },
-      });
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      logger.warn(`[Deepgram] Socket not open at start(), reconnecting for model: ${effectiveModel}`);
+      await this.connect();
+    } else {
+      logger.info(`[Deepgram] Reusing existing WebSocket connection for model: ${effectiveModel}`);
+    }
 
-      this.socket.on('open', async () => {
-        await this.handleWebSocketOpen();
-        resolve();
-      });
-
-      this.socket.on('message', async (data: Buffer | string) => {
-        await this.handleWebSocketMessage(data);
-      });
-
-      this.socket.on('error', async (error: Error) => {
-        await this.handleWebSocketError(error);
-        reject(error);
-      });
-
-      this.socket.on('close', async (code: number, reason: Buffer) => {
-        await this.handleWebSocketClose(code, reason.toString());
-      });
-    });
+    this.handleGenerationStarted();
   }
 
   /**
@@ -247,12 +226,36 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
       this.textBuffer = '';
     }
 
-    logger.info(`[Deepgram] Ending speech generation`);
+    logger.info(`[Deepgram] Ending utterance, keeping connection alive`);
+    this.isActiveGeneration = false;
+    this.pendingGenerationEnd = true;
 
-    // Send Close message
-    if (this.socket.readyState === WebSocket.OPEN) {
-      const closeMessage: DeepgramCloseMessage = { type: 'Close' };
-      this.socket.send(JSON.stringify(closeMessage));
+    // If no flushes are pending, signal generation end immediately
+    if (this.pendingFlushCount === 0) {
+      this.pendingGenerationEnd = false;
+      this.handleGenerationEnded();
+    }
+  }
+
+  /**
+   * Cancels the ongoing speech generation without finalizing it.
+   * Used when a user barge-in interrupts the AI's response.
+   */
+  async cancel(): Promise<void> {
+    if (!this.socket) {
+      logger.info(`[Deepgram] No active session to cancel`);
+      return;
+    }
+
+    logger.info(`[Deepgram] Cancelling speech generation (barge-in), keeping connection alive`);
+
+    const wasActive = this.isActiveGeneration || this.pendingGenerationEnd;
+    this.isActiveGeneration = false;
+    this.pendingGenerationEnd = false;
+    this.pendingFlushCount = 0;
+
+    if (wasActive) {
+      this.handleGenerationEnded();
     }
   }
 
@@ -262,8 +265,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
    */
   async sendText(text: string): Promise<void> {
     if (this.sentenceSplitter) {
-      logger.info(`[Deepgram] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call sendTextToSocket for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       logger.debug(`[Deepgram] Buffering text: "${text}"`);
@@ -277,7 +278,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
    */
   private async handleWebSocketOpen(): Promise<void> {
     logger.info(`[Deepgram] Connection established`);
-    this.handleGenerationStarted();
   }
 
   /**
@@ -294,8 +294,16 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
         const jsonMessage = JSON.parse(dataStr);
         logger.info(`[Deepgram] Received JSON message: ${JSON.stringify(jsonMessage)}`);
 
+
         // Handle specific message types if needed
-        if (jsonMessage.type === 'Warning') {
+        if (jsonMessage.type === 'Flushed') {
+          logger.debug(`[Deepgram] Received Flushed acknowledgment`);
+          this.pendingFlushCount = Math.max(0, this.pendingFlushCount - 1);
+          if (this.pendingGenerationEnd && this.pendingFlushCount === 0) {
+            this.pendingGenerationEnd = false;
+            this.handleGenerationEnded();
+          }
+        } else if (jsonMessage.type === 'Warning') {
           logger.warn(`[Deepgram] Warning: ${jsonMessage.message || JSON.stringify(jsonMessage)}`);
         } else if (jsonMessage.type === 'Error') {
           logger.error(`[Deepgram] Error: ${jsonMessage.message || JSON.stringify(jsonMessage)}`);
@@ -322,7 +330,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
       durationMs: 0, // Deepgram doesn't provide duration in the stream
       isFinal: false,
       sampleRate: this.sampleRate,
-      bitRate: this.bitRate,
     };
 
     // Buffer the first chunk to avoid playback timing issues
@@ -361,9 +368,26 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
   private async handleWebSocketClose(code: number, reason: string): Promise<void> {
     logger.info(`[Deepgram] Connection closed with code ${code}: ${reason}`);
 
-    if (!this.generationEnded) {
-      this.generationEnded = true;
+    const wasGenerating = this.isActiveGeneration || this.pendingGenerationEnd;
+    this.isActiveGeneration = false;
+    this.pendingGenerationEnd = false;
+    this.pendingFlushCount = 0;
+
+    if (wasGenerating) {
       this.handleGenerationEnded();
+    }
+
+    // Deepgram's TTS API does not support KeepAlive and may close connections
+    // on network errors or server restarts. Reconnect immediately in the background
+    // so the socket is ready before start() is called.
+    if (!this.isCleaningUp) {
+      logger.info(`[Deepgram] Server closed the connection; reconnecting in the background`);
+      this.reconnectPromise = this.connect()
+        .then(() => { this.reconnectPromise = null; })
+        .catch((err: Error) => {
+          logger.warn(`[Deepgram] Background reconnect failed: ${err.message}`);
+          this.reconnectPromise = null;
+        });
     }
   }
 
@@ -424,8 +448,6 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
       throw new Error('WebSocket is not open');
     }
 
-    logger.info(`[Deepgram] Sending text: "${text}"`);
-
     const speakMessage: DeepgramSpeakMessage = {
       type: 'Speak',
       text: text,
@@ -468,6 +490,7 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
     const flushMessage: DeepgramFlushMessage = { type: 'Flush' };
     this.socket.send(JSON.stringify(flushMessage));
 
+    this.pendingFlushCount++;
     this.flushTimestamps.push(now);
   }
 
@@ -521,14 +544,10 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
   private resolveAudioFormatAndEncoding(): void {
     const requestedAudioFormat = this.settings.audioFormat;
     const requestedSampleRate = this.settings.sampleRate;
-    const requestedBitRate = this.settings.bitRate;
-    const requestedContainer = this.settings.container;
 
     // Default values for streaming WebSocket
     this.audioFormat = requestedAudioFormat ?? 'pcm_16000';
     this.sampleRate = requestedSampleRate || this.getDefaultSampleRate(this.audioFormat);
-    this.bitRate = requestedBitRate;
-    this.container = requestedContainer;
 
     // Validate audio format is supported
     const supportedFormats = this.getSupportedFormats();
@@ -625,10 +644,66 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
   }
 
   /**
+   * Opens a WebSocket connection to the Deepgram streaming TTS API.
+   * Resolves when the connection is established, rejects on error.
+   * Called from init() and as a fallback in start() if the socket was unexpectedly closed.
+   */
+  private connect(): Promise<void> {
+    const modelVersion = this.settings.model ?? 'aura-2';
+    const voiceId = this.settings.voiceId ?? 'thalia-en';
+    const effectiveModel = `${modelVersion}-${voiceId}`;
+
+    // Map pcm_* formats to Deepgram's API encoding name 'linear16' (sample rate is set separately)
+    const deepgramEncoding = this.audioFormat.startsWith('pcm_') ? 'linear16' : this.audioFormat;
+    let wsUrl = `wss://api.deepgram.com/v1/speak?model=${effectiveModel}&encoding=${deepgramEncoding}&mip_opt_out=true`;
+    if (this.sampleRate) wsUrl += `&sample_rate=${this.sampleRate}`;
+    if (this.settings.speed) wsUrl += `&speed=${this.settings.speed}`;
+
+    logger.info(`[Deepgram] Connecting with model: ${effectiveModel}, encoding: ${this.audioFormat}, sample_rate: ${this.sampleRate}, speed: ${this.settings.speed ?? 1}`);
+
+    // Close any existing non-open socket before creating a new one
+    if (this.socket) {
+      this.socket.close();
+      this.socket = null;
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      this.socket = new WebSocket(wsUrl, {
+        headers: { 'Authorization': `Token ${this.config.apiKey}` },
+      });
+
+      this.socket.on('open', async () => {
+        await this.handleWebSocketOpen();
+        resolve();
+      });
+
+      this.socket.on('message', async (data: Buffer | string) => {
+        await this.handleWebSocketMessage(data);
+      });
+
+      this.socket.on('error', async (error: Error) => {
+        await this.handleWebSocketError(error);
+        reject(error);
+      });
+
+      this.socket.on('close', async (code: number, reason: Buffer) => {
+        await this.handleWebSocketClose(code, reason.toString());
+      });
+    });
+  }
+
+  /**
    * Cleans up resources when the provider is no longer needed
    */
   async cleanup(): Promise<void> {
+    this.isCleaningUp = true;
+    this.reconnectPromise = null;
+
     if (this.socket) {
+      if (this.socket.readyState === WebSocket.OPEN) {
+        const closeMessage: DeepgramCloseMessage = { type: 'Close' };
+        this.socket.send(JSON.stringify(closeMessage));
+      }
       if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
         this.socket.close();
       }
@@ -642,9 +717,9 @@ export class DeepgramTtsProvider extends TtsProviderBase<DeepgramTtsProviderConf
 
     this.inNoSpeechSection = undefined;
     this.flushTimestamps = [];
-    this.generationEnded = false;
-    this.bitRate = undefined;
-    this.container = undefined;
+    this.isActiveGeneration = false;
+    this.pendingGenerationEnd = false;
+    this.pendingFlushCount = 0;
     this.textBuffer = '';
 
     await super.cleanup();

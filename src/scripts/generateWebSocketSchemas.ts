@@ -39,7 +39,8 @@ import {
   endUserVoiceInputResponseSchema,
   sendUserTextInputRequestSchema,
   sendUserTextInputResponseSchema,
-  userTranscribedChunkMessageSchema
+  userTranscribedChunkMessageSchema,
+  audioPlaybackEndedRequestSchema
 } from '../channels/websocket/contracts/userInput';
 
 import {
@@ -55,13 +56,16 @@ import {
   runActionResponseSchema,
   callToolRequestSchema,
   callToolResponseSchema,
+  abortAiGenerationRequestSchema,
 } from '../channels/websocket/contracts/command';
 
 import {
   startAiGenerationOutputMessageSchema,
   sendAiVoiceChunkMessageSchema,
+  abortAiGenerationOutputMessageSchema,
   endAiGenerationOutputMessageSchema,
   aiTranscribedChunkMessageSchema,
+  userSpeakingStartedMessageSchema,
   sendAiImageOutputMessageSchema,
   sendAiAudioOutputMessageSchema,
 } from '../channels/websocket/contracts/aiResponse';
@@ -72,6 +76,7 @@ import {
   userInputModifiedEventDataSchema,
   userBannedEventDataSchema,
   visibilityChangedEventDataSchema,
+  turnAbortedEventDataSchema,
 } from '../types/conversationEvents';
 
 /**
@@ -115,6 +120,7 @@ function generateWebSocketSchemas(): void {
   registry.register('send-user-text-input-request', sendUserTextInputRequestSchema);
   registry.register('send-user-text-input-response', sendUserTextInputResponseSchema);
   registry.register('user-transcribed-chunk', userTranscribedChunkMessageSchema);
+  registry.register('audio-playback-ended-request', audioPlaybackEndedRequestSchema);
   registry.register('go-to-stage-request', goToStageRequestSchema);
   registry.register('go-to-stage-response', goToStageResponseSchema);
   registry.register('set-var-request', setVarRequestSchema);
@@ -127,10 +133,13 @@ function generateWebSocketSchemas(): void {
   registry.register('run-action-response', runActionResponseSchema);
   registry.register('call-tool-request', callToolRequestSchema);
   registry.register('call-tool-response', callToolResponseSchema);
+  registry.register('abort-ai-generation-request', abortAiGenerationRequestSchema);
   registry.register('start-ai-generation-output', startAiGenerationOutputMessageSchema);
   registry.register('send-ai-voice-chunk', sendAiVoiceChunkMessageSchema);
+  registry.register('abort-ai-generation-output', abortAiGenerationOutputMessageSchema);
   registry.register('end-ai-generation-output', endAiGenerationOutputMessageSchema);
   registry.register('ai-transcribed-chunk', aiTranscribedChunkMessageSchema);
+  registry.register('user-speaking-started', userSpeakingStartedMessageSchema);
   registry.register('send-ai-image-output', sendAiImageOutputMessageSchema);
   registry.register('send-ai-audio-output', sendAiAudioOutputMessageSchema);
   registry.register('variables-updated-event', variablesUpdatedEventDataSchema);
@@ -138,6 +147,7 @@ function generateWebSocketSchemas(): void {
   registry.register('user-input-modified-event', userInputModifiedEventDataSchema);
   registry.register('user-banned-event', userBannedEventDataSchema);
   registry.register('visibility-changed-event', visibilityChangedEventDataSchema);
+  registry.register('turn-aborted-event', turnAbortedEventDataSchema);
 
   // Generate all schemas from the registry
   const generator = new OpenApiGeneratorV3(registry.definitions);

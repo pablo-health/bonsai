@@ -175,16 +175,31 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
   }
 
   /**
+   * Cancels the ongoing speech generation without finalizing it.
+   * Used when a user barge-in interrupts the AI's response.
+   */
+  async cancel(): Promise<void> {
+    if (!this.socket) {
+      logger.info(`[ElevenLabs] No active session to cancel`);
+      return;
+    }
+
+    logger.info(`[ElevenLabs] Cancelling speech generation (barge-in)`);
+
+    // Close the WebSocket immediately without sending EOS — abandons the TTS session
+    if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
+      this.socket.close();
+    }
+  }
+
+  /**
    * Sends text to the speech generation service
    * @param text The text content to be converted to speech
    */
   async sendText(text: string): Promise<void> {
     if (this.sentenceSplitter) {
-      logger.info(`[ElevenLabs] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call sendTextToSocket for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
-      logger.info(`[ElevenLabs] Streaming text without flush: "${text}"`);
       // Stream text to ElevenLabs without flushing - audio generation will be triggered on end()
       await this.sendTextToSocket(text, false);
     }
@@ -255,7 +270,7 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         this.audioDurationMs += chunkDuration;
         this.audioChunks = [];
 
-        logger.info(`[ElevenLabs] Chunk #${this.chunkOrdinal} duration: ${chunkDuration}ms`);
+        logger.debug(`[ElevenLabs] Chunk #${this.chunkOrdinal} duration: ${chunkDuration}ms`);
 
         const chunk: GeneratedAudioChunk = {
           chunkId: this.generateChunkId(),
@@ -350,8 +365,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     if (this.settings.removeExclamationMarks) {
       text = text.replace(/!/g, '.');
     }
-
-    logger.info(`[ElevenLabs] Sending${flush ? ' and flushing' : ''} text: "${text}"`);
 
     const textMessage = {
       text: text,

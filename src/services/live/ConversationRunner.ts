@@ -1,19 +1,21 @@
 import { z } from "zod";
 import { inject, injectable } from "tsyringe";
-import { NotFoundError } from "../../errors";
+import { NotFoundError, InvalidOperationError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
 import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS } from "../../types/actions";
 import type { LifecycleContext } from "../../types/actions";
 import { db } from "../../db";
 import { conversations, users, sampleCopies } from "../../db/schema";
-import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData } from "../../types/conversationEvents";
+import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData, TurnAbortedEventData } from "../../types/conversationEvents";
 import { ConversationService } from "../ConversationService";
+import { ConversationStorageService } from "../ConversationStorageService";
+import { ConversationRecorder } from "./ConversationRecorder";
 import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
-import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage } from '../../channels/messages';
-import { ILlmProvider, LlmChunk, LlmGenerationResult } from "../providers/llm/ILlmProvider";
+import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
+import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider } from "../providers/asr/IAsrProvider";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
@@ -43,7 +45,10 @@ import type { IAudioConverter } from '../audio/IAudioConverter';
 import type { AudioFormat } from '../../types/audio';
 import { AudioConverterFactory } from '../audio/AudioConverterFactory';
 import { VadProcessor } from '../audio/VadProcessor';
+import smartTurnDetector from '../audio/SmartTurnDetector';
+import type { ServerVadConfig } from '../../http/contracts/vad';
 import { SampleCopyDistributor } from "./SampleCopyDistributor";
+
 
 /** Buffer holding the last converted audio chunk, used by the last-chunk-buffer pattern. */
 type PendingOutboundChunk = { chunkId: string; ordinal: number; audio: Buffer };
@@ -114,6 +119,8 @@ export type TurnData = {
   prescriptedText: string | null;
   /** Truncation info from the completion context window preparation; null before first completion in the turn */
   completionTruncationInfo: TruncationInfo | null;
+  /** Accumulated LLM output text for the current turn; used to populate accumulatedText on barge-in abort */
+  accumulatedText: string | null;
 };
 
 export type StageRuntimeData = {
@@ -123,7 +130,7 @@ export type StageRuntimeData = {
   stage: Stage;
   completionLlmProvider?: ILlmProvider;
   completionLlmProviderInfo?: LlmProviderInfo;
-  lastCompletionResult?: LlmGenerationResult;
+  lastCompletionResult: LlmGenerationResult | null;
   lastCompletionPrompt?: string;
   classifiers: ClassifierRuntimeData[];
   transformers: TransformerRuntimeData[];
@@ -135,9 +142,10 @@ export type StageRuntimeData = {
   asrProvider?: IAsrProvider;
   ttsProvider?: ITtsProvider;
   shouldEndConversation: boolean;
-  agent: AgentResponse;
+  agent: AgentResponse | null;
   fillerLlmProvider?: ILlmProvider;
   fillerLlmProviderInfo?: LlmProviderInfo;
+  moderationProvider?: ILlmProvider;
   faq: FaqItem[];
   costManagementConfig: CostManagementConfig | null;
 }
@@ -161,6 +169,8 @@ export class ConversationRunner {
   private channel: IClientConnection;
   /** True when a filler sentence has already opened the response turn (outputTurnId assigned, start_ai_generation_output sent, TTS started) */
   private responseOutputTurnStarted: boolean = false;
+  /** True when TTS was actually used to speak audio during the current turn. */
+  private ttsUsedInTurn: boolean = false;
   /** Filler sentence generated for the current turn, passed as assistant prefix to the LLM so it continues naturally */
   private lastFillerSentence: string | null = null;
   /** Rendered filler prompt used to generate the filler sentence for the current turn; stored for debugging */
@@ -188,11 +198,35 @@ export class ConversationRunner {
   /** Server-side VAD processor; non-null when the project is configured with serverVad and the ASR format is PCM. */
   private vadProcessor: VadProcessor | null = null;
   /**
-   * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
-   * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
-   * is in progress or after it has been consumed by handleVadSpeechStart.
-   */
+      * Tracks an in-flight pre-warm of the ASR session. Set when transitioning to awaiting_user_input
+      * in VAD mode so the next turn does not pay the full ASR connection cost. Null when no pre-warm
+      * is in progress or after it has been consumed by handleVadSpeechStart.
+      */
   private asrPreWarmPromise: Promise<void> | null = null;
+  /** Buffered utterance audio for Smart Turn endpoint detection. Set on 'utterance_audio' VAD event. */
+  private smartTurnAudioBuffer: Float32Array | null = null;
+  /** Timer that stops ASR if Smart Turn indicates continuation but no new speech arrives. */
+  private smartTurnContinueTimer: NodeJS.Timeout | null = null;
+  /** Duration before Smart Turn continuation times out and ASR is stopped. */
+  private readonly SMART_TURN_CONTINUE_TIMEOUT_MS = 3000;
+
+  /** Partial ASR transcript accumulated during barge-in (silent barge-in captures partial text). Null when not in barge-in mode. */
+  private bargeInPartialText: string | null = null;
+  /** True when a user barge-in has been detected and we are accumulating continued speech. */
+  private isBargeIn = false;
+
+
+  /** Timer that fires when the user is silent in awaiting_user_input state. */
+  private silenceTimer: NodeJS.Timeout | null = null;
+  /** Counter of consecutive silence-triggered responses. Reset on real user input. */
+  private silenceCount: number = 0;
+  /** True when the runner is waiting for the client to signal that AI audio playback has completed. */
+  private waitingForPlaybackEnd: boolean = false;
+  /** Timer that fires when the user is silent in barge-in mode. */
+  private bargeInSilenceTimer: NodeJS.Timeout | null = null;
+
+  /** Handles audio recording for the conversation. */
+  private recorder: ConversationRecorder | null = null;
 
   /** True when server-side VAD is active for this session. VAD owns the turn lifecycle when active. */
   get isVadMode(): boolean {
@@ -200,7 +234,7 @@ export class ConversationRunner {
   }
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
-  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null };
+  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
   constructor(
     @inject(LlmProviderFactory) private llmProviderFactory: LlmProviderFactory,
@@ -216,6 +250,7 @@ export class ConversationRunner {
     @inject(TemplatingEngine) private templatingEngine: TemplatingEngine,
     @inject(KnowledgeService) private knowledgeService: KnowledgeService,
     @inject(ModerationService) private moderationService: ModerationService,
+    @inject(ConversationStorageService) private conversationStorageService: ConversationStorageService,
   ) { }
 
   public getRuntimeData(): StageRuntimeData {
@@ -236,7 +271,7 @@ export class ConversationRunner {
 
     // Check if conversation is active
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Conversation with ID ${conversationId} is not active`);
+      throw new InvalidOperationError(`Conversation with ID ${conversationId} is not active`);
     }
 
     // Load sample copy data
@@ -292,8 +327,9 @@ export class ConversationRunner {
       sampleCopyClassifier: undefined,
       asrProvider: undefined,
       ttsProvider: undefined,
+      moderationProvider: undefined,
       shouldEndConversation: false,
-      agent: null as any, // populated below after agentService.getAgentById
+      agent: null,
       faq: [],
       costManagementConfig: project?.costManagementConfig ?? null,
     };
@@ -339,6 +375,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Classifier with ID ${classifierId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, classifier.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${classifier.llmProviderId} not found for classifier ${classifierId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, classifier.llmSettings);
       stageData.classifiers.push({ classifier, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -352,6 +391,9 @@ export class ConversationRunner {
         throw new NotFoundError(`Transformer with ID ${transformerId} not found`);
       }
       const llmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, transformer.llmProviderId) });
+      if (!llmProviderEntity) {
+        throw new NotFoundError(`LLM Provider with ID ${transformer.llmProviderId} not found for transformer ${transformerId}`);
+      }
       const llmProvider = await this.llmProviderFactory.createProvider(llmProviderEntity, transformer.llmSettings);
       stageData.transformers.push({ transformer, llmProvider, llmProviderInfo: { id: llmProviderEntity.id, apiType: llmProviderEntity.apiType } });
     }
@@ -414,6 +456,9 @@ export class ConversationRunner {
       });
       if (guardrailClassifierEntity) {
         const guardrailLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, guardrailClassifierEntity.llmProviderId) });
+        if (!guardrailLlmProviderEntity) {
+          throw new NotFoundError(`LLM Provider with ID ${guardrailClassifierEntity.llmProviderId} not found for guardrail classifier ${guardrailClassifierEntity.id}`);
+        }
         stageData.guardrailClassifier = {
           classifier: guardrailClassifierEntity,
           llmProvider: await this.llmProviderFactory.createProvider(guardrailLlmProviderEntity, guardrailClassifierEntity.llmSettings),
@@ -443,6 +488,9 @@ export class ConversationRunner {
         });
         if (sampleCopyClassifierEntity) {
           const sampleCopyLlmProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, sampleCopyClassifierEntity.llmProviderId) });
+          if (!sampleCopyLlmProviderEntity) {
+            throw new NotFoundError(`LLM Provider with ID ${sampleCopyClassifierEntity.llmProviderId} not found for sample copy classifier ${sampleCopyClassifierEntity.id}`);
+          }
           stageData.sampleCopyClassifier = {
             classifier: sampleCopyClassifierEntity,
             llmProvider: await this.llmProviderFactory.createProvider(sampleCopyLlmProviderEntity, sampleCopyClassifierEntity.llmSettings),
@@ -496,6 +544,17 @@ export class ConversationRunner {
       logger.warn({ conversationId: conversation.id, projectId: project?.id, acceptVoice: project?.acceptVoice, asrProviderId: project?.asrConfig?.asrProviderId ?? null }, `Session requests voice input but ASR provider will not be initialised (acceptVoice=${project?.acceptVoice}, asrProviderId=${project?.asrConfig?.asrProviderId ?? 'unset'}). Both must be set. Voice input will be unavailable.`);
     }
 
+    // Initialize moderation provider if configured on the project
+    if (project.moderationConfig?.enabled && project.moderationConfig.llmProviderId) {
+      const moderationProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, project.moderationConfig.llmProviderId) });
+      if (moderationProviderEntity) {
+        stageData.moderationProvider = await this.llmProviderFactory.createProviderForEnumeration(moderationProviderEntity);
+        await stageData.moderationProvider.init();
+      } else {
+        logger.warn({ projectId: project.id, llmProviderId: project.moderationConfig.llmProviderId }, 'Moderation provider not found, moderation will be skipped');
+      }
+    }
+
     return stageData;
   }
 
@@ -529,6 +588,7 @@ export class ConversationRunner {
             isFinal: false,
           };
           await this.channel.sendMessage(message);
+          this.clearBargeInSilenceTimer();
         });
 
         asrProvider.setOnRecognized(async (chunkId, text) => {
@@ -544,35 +604,45 @@ export class ConversationRunner {
             isFinal: true,
           };
           await this.channel.sendMessage(message);
-
+          this.clearBargeInSilenceTimer();
           chunkOrdinal = 0;
         });
 
         asrProvider.setOnRecognitionStopped(async () => {
           const asrEndMs = Date.now();
+          this.clearBargeInSilenceTimer(); // just in case the silence timer was still running when recognition stopped
 
           // If recognition stopped while we are NOT in an active voice turn (e.g. a pre-warmed
           // session timed out during silence), discard the event and clear the pre-warm promise
           // so the next speech_start will do a fresh start().
-          if (this.conversation.status !== 'receiving_user_voice') {
-            this.asrPreWarmPromise = null;
-            logger.info({ conversationId }, `ASR session ended during pre-warm (no active turn) for conversation ${conversationId}`);
-            return;
-          }
+          // if (this.conversation.status !== 'receiving_user_voice') {
+          //   this.asrPreWarmPromise = null;
+          //   logger.info({ conversationId }, `ASR session ended during pre-warm (no active turn) for conversation ${conversationId}`);
+          //   return;
+          // }
 
           logger.info({ conversationId }, `ASR recognition stopped for conversation ${conversationId}`);
 
           isRecognizing = false;
-          // Get all recognized text chunks and combine them
           const allTextChunks = asrProvider.getAllTextChunks();
           const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
+
+          if (this.isBargeIn && fullText) {
+            this.bargeInPartialText = this.bargeInPartialText ? `${this.bargeInPartialText} ${fullText}`.trim() : fullText;
+            logger.info({ conversationId }, `Barge-in: processing accumulated text`);
+            await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
+            return;
+          }
 
           if (fullText) {
             logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
             await this.processUserInput(fullText, 'voice', asrEndMs);
+          } else if (this.isBargeIn && this.bargeInPartialText) {
+            logger.info({ conversationId }, `Barge-in: ASR timed out with silence, processing accumulated text`);
+            await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
             logger.warn({ conversationId }, `No text recognized in VAD mode for conversation ${conversationId}, ignoring unintelligible audio`);
-            await this.changeState('awaiting_user_input');
+            await this.triggerBargeInSilenceResponse();
           } else {
             logger.warn({ conversationId }, `No text recognized for conversation ${conversationId}`);
             await this.processUserInput(this.stageData.project.asrConfig.unintelligiblePlaceholder ?? '**inaudible**', 'voice', asrEndMs);
@@ -629,7 +699,7 @@ export class ConversationRunner {
           isGenerating = false;
 
           // Snapshot turn data before any awaits to avoid reading mutated values
-          const { startMs, assistantMessageEventId, outputTurnId, ttsStartMs, fillerSentence: snapshotFillerSentence, prescriptedText: snapshotPrescriptedText } = this.turnData;
+          const { startMs, assistantMessageEventId, outputTurnId, ttsStartMs, firstAudioMs, turnIndex, fillerSentence: snapshotFillerSentence, prescriptedText: snapshotPrescriptedText } = this.turnData;
           const ttsEndMs = Date.now();
 
           // Record total turn duration and TTS duration now that all audio has been sent
@@ -643,17 +713,24 @@ export class ConversationRunner {
             backfill.turnEndMs = ttsEndMs;
             if (ttsStartMs !== null) backfill.ttsStartMs = ttsStartMs;
             backfill.ttsEndMs = ttsEndMs;
+            if (firstAudioMs !== null) backfill.firstAudioMs = firstAudioMs;
+            if (firstAudioMs !== null && startMs !== null) backfill.timeToFirstAudioMs = firstAudioMs - startMs;
+            if (turnIndex !== null) backfill.turnIndex = turnIndex;
             if (Object.keys(backfill).length > 0) {
               const updated = await this.conversationService.updateConversationEventMetadata(this.conversation.projectId, assistantMessageEventId, backfill);
-              const eventUpdateMessage: CALConversationEventUpdateMessage = {
-                type: 'conversation_event_update',
-                conversationId: this.conversation.id,
-                eventType: 'message',
-                eventData: updated.eventData,
-                inputTurnId: this.turnData.inputTurnId,
-                outputTurnId: this.turnData.outputTurnId,
-              };
-              await this.channel.sendMessage(eventUpdateMessage);
+              if (!updated) {
+                logger.warn({ conversationId: this.conversation.id, eventId: assistantMessageEventId }, 'Failed to backfill TTS timing metadata');
+              } else {
+                const eventUpdateMessage: CALConversationEventUpdateMessage = {
+                  type: 'conversation_event_update',
+                  conversationId: this.conversation.id,
+                  eventType: 'message',
+                  eventData: updated.eventData,
+                  inputTurnId: this.turnData.inputTurnId,
+                  outputTurnId: this.turnData.outputTurnId,
+                };
+                await this.channel.sendMessage(eventUpdateMessage);
+              }
             }
           }
 
@@ -668,12 +745,20 @@ export class ConversationRunner {
             outputTurnId,
             fullText: `${ttsEndFillerPrefix}${baseText}`.trim(),
           };
-          await this.channel.sendMessage(endMessage);
+          try {
+            await this.channel.sendMessage(endMessage);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error({ conversationId, error: errorMessage }, `Failed to send AI response message: ${errorMessage}`);
+            await this.markAsFailed(`Failed to send AI response message: ${errorMessage}`);
+            return;
+          }
 
           await this.handlePostResponseAction();
         });
 
         ttsProvider.setOnSpeechGenerating(async (chunk) => {
+          this.recorder?.pushOutput(chunk.audio);
           if (!firstTtsChunkGenerated) {
             logger.info({ conversationId, chunkId: chunk.chunkId }, `First TTS chunk generated for conversation ${conversationId}`);
             firstTtsChunkGenerated = true;
@@ -741,8 +826,9 @@ export class ConversationRunner {
         if (this.turnData.firstTokenMs === null && this.turnData.llmStartMs !== null) {
           this.turnData.firstTokenMs = Date.now();
         }
+        this.turnData.accumulatedText = `${this.turnData.accumulatedText || ''}${chunk.content}`;
         if (ttsProvider) {
-          // Pass chunk text to TTS provider for speech synthesis
+          this.ttsUsedInTurn = true;
           await ttsProvider.sendText(chunk.content);
         }
 
@@ -825,7 +911,14 @@ export class ConversationRunner {
             outputTurnId: this.turnData.outputTurnId,
             fullText: fullResponseText,
           };
-          await this.channel.sendMessage(endGenerationMessage);
+          try {
+            await this.channel.sendMessage(endGenerationMessage);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.error({ conversationId, error: errorMessage }, `Failed to send AI response message: ${errorMessage}`);
+            await this.markAsFailed(`Failed to send AI response message: ${errorMessage}`);
+            return;
+          }
         } else {
           await ttsProvider.end(); // Signal TTS provider that generation is complete so it can finalize audio output and notify client
         }
@@ -869,13 +962,34 @@ export class ConversationRunner {
         logger.error({ conversationId, transformerId: transformerData.transformer.id, error: error instanceof Error ? error.message : String(error) }, `Failed to wire up transformer LLM provider for transformer ${transformerData.transformer.id}`);
       }
     }
+
+    // Initialize recording if enabled
+    if (this.stageData.project.recordingConfig?.enabled) {
+      try {
+        const inputFormat = this.session.sessionSettings.sendAudioFormat ?? 'pcm_16000';
+        const outputFormat = ttsProvider?.getOutputFormat() ?? 'pcm_16000';
+        this.recorder = new ConversationRecorder(
+          this.stageData.project.recordingConfig,
+          inputFormat,
+          outputFormat,
+          this.conversationStorageService,
+          this.stageData.project.storageConfig,
+          this.stageData.project.id,
+          conversationId,
+        );
+        await this.recorder.initialize();
+        logger.info({ conversationId, format: this.recorder.constructor.name }, `Recording initialized for conversation ${conversationId}`);
+      } catch (error) {
+        logger.error({ conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to initialize recording for conversation ${conversationId}`);
+      }
+    }
   }
 
   async startConversation() {
     this.responseGeneratedInTurn = false;
     this.resetTurnData();
     if (this.conversation.status !== 'initialized') {
-      throw new Error(`Cannot start conversation in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start conversation in current state: ${this.conversation.status}`);
     }
 
     const eventData: ConversationStartEventData = {
@@ -885,14 +999,20 @@ export class ConversationRunner {
     await this.saveAndSendEvent('conversation_start', eventData);
     logger.info({ conversationId: this.conversation.id, stageId: this.stageData.id }, 'Conversation started');
 
-    const context = await this.contextBuilder.buildContextForConversationStart(this.conversation);
+    const context = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
 
     // Execute __conversation_start global lifecycle action if defined
     const onConversationStartAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_START);
     if (onConversationStartAction) {
       logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_start lifecycle action');
-      const startOutcome = await this.actionsExecutor.executeActions([onConversationStartAction], context, this.stageData.id, 'conversation_start', this.saveAndSendEvent.bind(this));
+      const startingStageId = this.stageData.id;
+      const startOutcome = await this.actionsExecutor.executeActions([onConversationStartAction], context, startingStageId, 'conversation_start', this.saveAndSendEvent.bind(this));
       await this.applyActionOutcome(context, startOutcome);
+      // If ON_START navigated to a different stage, goToStage already ran on_enter and applied
+      // enterBehavior for the destination — nothing left to do here.
+      if (startOutcome.goToStageId && startOutcome.goToStageId !== startingStageId) {
+        return;
+      }
     }
 
     // Execute __on_enter lifecycle action if defined
@@ -930,7 +1050,7 @@ export class ConversationRunner {
   async resumeConversation() {
     // Validate conversation can be resumed (should already be checked in prepareConversation, but double-check)
     if (this.conversation.status === 'finished' || this.conversation.status === 'failed' || this.conversation.status === 'aborted') {
-      throw new Error(`Cannot resume conversation in state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot resume conversation in state: ${this.conversation.status}`);
     }
 
     const previousStatus = this.conversation.status;
@@ -945,7 +1065,7 @@ export class ConversationRunner {
     const onConversationResumeAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_RESUME);
     if (onConversationResumeAction) {
       logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_resume lifecycle action');
-      const resumeContext = await this.contextBuilder.buildContextForConversationStart(this.conversation);
+      const resumeContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
       const resumeOutcome = await this.actionsExecutor.executeActions([onConversationResumeAction], resumeContext, this.stageData.id, 'conversation_resume', this.saveAndSendEvent.bind(this));
       await this.applyActionOutcome(resumeContext, resumeOutcome);
     }
@@ -963,14 +1083,29 @@ export class ConversationRunner {
     const onConversationEndAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_END);
     if (!onConversationEndAction) return;
     logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_end lifecycle action (client command)');
-    const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation);
+    const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
     const endOutcome = await this.actionsExecutor.executeActions([onConversationEndAction], endContext, this.stageData.id, 'conversation_end', this.saveAndSendEvent.bind(this));
     await this.applyActionOutcome(endContext, endOutcome);
   }
 
   async receiveUserTextInput(userInput: string): Promise<string> {
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot receive user input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
+    }
+
+    // In VAD mode, stop the pre-warmed ASR session and clear it so the state machine is clean
+    // before processing text input. An active ASR session would still be listening and could
+    // fire recognition callbacks that interfere with the text turn.
+    if (this.isVadMode) {
+      this.asrPreWarmPromise = null;
+      if (this.stageData.asrProvider) {
+        try {
+          await this.stageData.asrProvider.stop();
+          logger.info({ conversationId: this.conversation.id }, 'Stopped pre-warmed ASR session for text input');
+        } catch (error) {
+          logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop pre-warmed ASR for text input (non-fatal)');
+        }
+      }
     }
 
     this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
@@ -985,13 +1120,13 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot start receiving user voice input in current state: ${this.conversation.status}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1020,6 +1155,8 @@ export class ConversationRunner {
       // handler — it only receives audio when state is receiving_user_voice.
       const terminalStates = ['finished', 'failed', 'aborted', 'initialized'];
       if (terminalStates.includes(this.conversation.status)) return;
+
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
       } else if (this.vadProcessor) {
@@ -1042,20 +1179,21 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot receive user voice data in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot receive user voice data in current state: ${this.conversation.status}`);
     }
 
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
+      this.recorder?.pushInput(voiceData);
       if (this.inboundConverter) {
         // Route through the inbound converter; the converter's 'data' handler forwards to ASR
         this.inboundConverter.push(voiceData);
@@ -1078,16 +1216,16 @@ export class ConversationRunner {
     }
 
     if (this.conversation.status !== 'receiving_user_voice') {
-      throw new Error(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot stop receiving user voice input in current state: ${this.conversation.status}`);
     }
     if (this.turnData.inputTurnId !== inputTurnId) {
-      throw new Error(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
+      throw new InvalidOperationError(`Input turn ID mismatch: expected ${this.turnData.inputTurnId}, got ${inputTurnId}`);
     }
 
     if (!this.stageData.asrProvider) {
       const errorMessage = `ASR provider not available for conversation ${this.stageData.conversation.id}. Ensure the project has acceptVoice=true and a valid asrConfig.asrProviderId configured.`;
       await this.markAsFailed(errorMessage);
-      throw new Error(errorMessage);
+      throw new InvalidOperationError(errorMessage);
     }
 
     try {
@@ -1108,10 +1246,6 @@ export class ConversationRunner {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop voice input for conversation ${this.stageData.conversation.id}`);
       throw error;
     }
-  }
-
-  async receiveCommand(command: string, data: any) {
-    throw new Error("Method not implemented.");
   }
 
   /**
@@ -1149,6 +1283,8 @@ export class ConversationRunner {
     this.outboundConverter = null;
     this.vadProcessor?.destroy();
     this.vadProcessor = null;
+    this.clearSmartTurnContinueTimer();
+    this.smartTurnAudioBuffer = null;
 
     if (this.stageData) {
       await cleanupProvider(this.stageData.asrProvider, 'ASR provider');
@@ -1165,6 +1301,9 @@ export class ConversationRunner {
         await cleanupProvider(transformerData.llmProvider, `transformer LLM provider (${transformerData.transformer.id})`);
       }
     }
+
+    this.recorder?.destroy();
+    this.recorder = null;
 
     logger.info({ conversationId }, 'ConversationRunner cleanup complete');
   }
@@ -1193,10 +1332,10 @@ export class ConversationRunner {
       logger.info({ conversationId: this.conversation.id, currentStageId: this.stageData.id, targetStageId: stageId }, `Navigating to stage ${stageId}`);
 
       const allowed = isProcessingUserInput
-        ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input'
+        ? this.conversation.status === 'awaiting_user_input' || this.conversation.status === 'processing_user_input' || this.conversation.status === 'initialized'
         : this.conversation.status === 'awaiting_user_input';
       if (!allowed) {
-        throw new Error(`Cannot navigate to stage in current state: ${this.conversation.status}`);
+        throw new InvalidOperationError(`Cannot navigate to stage in current state: ${this.conversation.status}`);
       }
 
       const fromStageId = this.stageData.id;
@@ -1206,7 +1345,7 @@ export class ConversationRunner {
       const onLeaveAction = oldStageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_LEAVE];
       if (onLeaveAction) {
         logger.debug({ conversationId: this.conversation.id, stageId: fromStageId }, 'Executing __on_leave lifecycle action');
-        const context = await this.contextBuilder.buildContextForUserInput(oldStageData.conversation, oldStageData.stage, [/** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq);
+        const context = await this.contextBuilder.buildContextForLifecycleAction(oldStageData.conversation, oldStageData.stage, this.channel?.connectionType);
         const leaveOutcome = await this.actionsExecutor.executeActions([onLeaveAction], context, oldStageData.id, 'on_leave', this.saveAndSendEvent.bind(this));
 
         await this.applyActionOutcome(context, leaveOutcome);
@@ -1222,7 +1361,7 @@ export class ConversationRunner {
       // We await full drain after wireUpProviders() to prevent filler audio and response audio
       // from interleaving at the client side.
       const priorTtsProvider = this.responseOutputTurnStarted ? (oldStageData.ttsProvider ?? null) : null;
-      let resolvePriorTtsDrained: () => void = () => {};
+      let resolvePriorTtsDrained: () => void = () => { };
       const priorTtsEndedPromise: Promise<void> = new Promise<void>(r => { resolvePriorTtsDrained = r; });
       if (priorTtsProvider) {
         priorTtsProvider.setOnGenerationEnded(async () => {
@@ -1284,7 +1423,7 @@ export class ConversationRunner {
       await this.saveAndSendEvent('jump_to_stage', eventData);
 
       // Execute __on_enter lifecycle action if defined on new stage
-      const enterContext = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [ /** TODO */], '-', '-', this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq);
+      const enterContext = await this.contextBuilder.buildContextForLifecycleAction(this.stageData.conversation, this.stageData.stage, this.channel?.connectionType);
       let enterOutcome: ActionsExecutionOutcome | null = null;
       const onEnterAction = this.stageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_ENTER];
       if (onEnterAction) {
@@ -1336,10 +1475,10 @@ export class ConversationRunner {
    */
   async setVariable(stageId: string, variableName: string, variableValue: any): Promise<void> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot set variable in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot set variable in current state: ${this.conversation.status}`);
     }
 
 
@@ -1377,7 +1516,7 @@ export class ConversationRunner {
    */
   async getVariable(stageId: string, variableName: string): Promise<any> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId, variableName }, `Getting variable ${variableName}`);
@@ -1396,7 +1535,7 @@ export class ConversationRunner {
    */
   async getAllVariables(stageId: string): Promise<Record<string, any>> {
     if (this.stageData.id !== stageId) {
-      throw new Error(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
     }
 
     logger.debug({ conversationId: this.conversation.id, stageId }, `Getting all variables`);
@@ -1474,7 +1613,7 @@ export class ConversationRunner {
     logger.info({ conversationId: this.conversation.id, actionName, parameterCount: parameters.length }, `Running action ${actionName}`);
 
     if (this.conversation.status !== 'awaiting_user_input') {
-      throw new Error(`Cannot run action in current state: ${this.conversation.status}`);
+      throw new InvalidOperationError(`Cannot run action in current state: ${this.conversation.status}`);
     }
 
     // Reset per-turn data so timing fields are clean for this client-initiated action turn,
@@ -1494,7 +1633,7 @@ export class ConversationRunner {
 
     const actionToExecute = stageAction || globalAction;
     logger.info({ conversationId: this.conversation.id, actionName }, `Executing action ${actionName}`);
-    const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters);
+    const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters, this.channel?.connectionType);
     logger.debug({ conversationId: this.conversation.id, actionName }, `Built context for action ${actionName}`);
     const outcome = await this.actionsExecutor.executeActions([actionToExecute], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
 
@@ -1561,7 +1700,7 @@ export class ConversationRunner {
 
     // Build conversation context for tool execution
     const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], '', '',
-      this.sampleCopyDistributor.getOriginalCopies(), '', '');
+      this.sampleCopyDistributor.getOriginalCopies(), '', '', undefined, this.channel?.connectionType);
 
     // Execute the tool
     const executeResult = await this.toolExecutor.executeTool(tool, context, parameters, this.stageData.costManagementConfig);
@@ -1710,7 +1849,10 @@ export class ConversationRunner {
       return;
     }
 
-    this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, serverVadConfig);
+    this.vadProcessor = new VadProcessor(sampleRate as 8000 | 16000 | 32000 | 48000, {
+      algorithm: serverVadConfig.algorithm ?? 'legacy',
+      ...serverVadConfig,
+    } as ServerVadConfig);
     await this.vadProcessor.init();
 
     // Serialize all VAD event handlers via a promise chain. This prevents the race where
@@ -1727,68 +1869,305 @@ export class ConversationRunner {
     this.vadProcessor.on('speech_start', () => enqueueVadEvent(() => this.handleVadSpeechStart()));
     // 'data' (batch utterance audio) is intentionally not wired: audio is streamed live to ASR
     // via the inbound converter / receiveUserVoiceData path while state === 'receiving_user_voice'.
+    this.vadProcessor.on('utterance_audio', (audio: Float32Array) => {
+      this.smartTurnAudioBuffer = audio;
+    });
     this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent(() => this.handleVadEndOfUtterance()));
 
-    logger.info({ conversationId, asrFormat, sampleRate, mode: serverVadConfig.mode ?? 2 }, `Server VAD processor initialized for conversation ${conversationId}`);
+    logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
+  }
+
+  private async sendUserSpeakingStarted(): Promise<void> {
+    // Send VAD signal that the user has started speaking
+    try {
+      const userSpeakingMsg: CALUserSpeakingStartedMessage = {
+        type: 'user_speaking_started',
+        conversationId: this.stageData.conversation.id,
+        inputTurnId: this.turnData.inputTurnId,
+      };
+      await this.channel.sendMessage(userSpeakingMsg);
+      logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, 'Sent user_speaking_started message during barge-in');
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send user_speaking_started during barge-in');
+    }
+  }
+
+  private async sendAbortAiGeneration(): Promise<void> {
+    // Send abort message to client so it stops playing audio.
+    try {
+      const abortMessage: CALAbortAiGenerationOutputMessage = {
+        type: 'abort_ai_generation_output',
+        conversationId: this.stageData.conversation.id,
+        outputTurnId: this.turnData.outputTurnId || '',
+        accumulatedText: this.turnData.accumulatedText || '',
+        abortTimestampMs: Date.now(),
+      };
+      await this.channel.sendMessage(abortMessage);
+      this.waitingForPlaybackEnd = false; // Clear the flag to allow new responses to play after this barge-in
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to send abort message during barge-in');
+    }
+  }
+
+  async startAsrSessionIfNeeded(): Promise<void> {
+    try {
+      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      await this.changeState('receiving_user_voice');
+      if (this.asrPreWarmPromise) {
+        await this.asrPreWarmPromise;
+        this.asrPreWarmPromise = null;
+        this.stageData.asrProvider?.resetForNewTurn();
+      } else {
+        await this.stageData.asrProvider?.start();
+      }
+
+      // If VAD buffered any audio before ASR was started, send it now to avoid cutting off the start of the user's speech.
+      if (this.vadProcessor) {
+        await this.forwardToAsr(this.vadProcessor.getBufferedAudio());
+        this.vadProcessor.clearBufferedAudio();
+      }
+    } catch (error) {
+      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
+    }
   }
 
   /**
-   * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
-   * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
-   * forwarded to ASR live (streaming mode). Only acts when in awaiting_user_input state.
-   */
+     * Handles VAD speech start: generates a server-side inputTurnId, starts the ASR session,
+     * and transitions to receiving_user_voice. From this point, every incoming audio chunk is
+     * forwarded to ASR live (streaming mode). Acts when in awaiting_user_input state or during barge-in.
+     */
   private async handleVadSpeechStart(): Promise<void> {
-    if (this.conversation.status !== 'awaiting_user_input') return;
+    // New speech detected — cancel any pending Smart Turn continuation timer.
+    this.clearSmartTurnContinueTimer();
 
-    if (!this.stageData.asrProvider) {
-      logger.warn({ conversationId: this.stageData.conversation.id }, 'VAD speech_start: no ASR provider available');
+    // Scenario 1: New VAD reacted when awaiting_user_input: normal speech start or barge-in after TTS stopped.
+    //          - a: Normal speech start: awaiting_user_input && !this.waitingForPlaybackEnd
+    //          - b: interrupted buffered AI voice: awaiting_user_input && this.waitingForPlaybackEnd (technically it is a barge-in, but we don't care at this point)
+    if (this.conversation.status === 'awaiting_user_input') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in awaiting_user_input state');
+      if (this.waitingForPlaybackEnd) { // 1a
+        // send abort_ai_generation_output && user_speaking_started
+        await this.sendAbortAiGeneration();
+        await this.sendUserSpeakingStarted();
+        // ASR is started here because of awaiting_user_input state
+        await this.startAsrSessionIfNeeded();
+        // real interruption so kick off barge-in silence timer to stop ASR if user stops speaking
+        this.setBargeInSilenceTimer();
+      } else { // 1b
+        // send user_speaking_started only (no need to abort AI generation since it already stopped when waitingForPlaybackEnd was set)
+        await this.sendUserSpeakingStarted();
+        // start ASR in response to VAD (if not started already)
+        await this.startAsrSessionIfNeeded();
+        // kick off barge-in silence timer to stop ASR if user stops speaking
+        this.setBargeInSilenceTimer();
+      }
       return;
     }
 
-    try {
-      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      // Transition to receiving_user_voice BEFORE awaiting asrProvider.start() so that audio
-      // chunks arriving during ASR session startup are forwarded to sendAudio() and buffered
-      // there (bufferArray), then flushed to the push stream once recognition is ready.
-      // If start() is awaited first, those chunks are silently dropped (state guard fails).
-      await this.changeState('receiving_user_voice');
-      if (this.asrPreWarmPromise) {
-        // A pre-warm is in flight or already completed: wait for it, then reuse the session.
-        await this.asrPreWarmPromise;
-        this.asrPreWarmPromise = null;
-        // Reset per-turn state (text chunks, chunk ID) accumulated during the idle period.
-        this.stageData.asrProvider.resetForNewTurn();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, reusing pre-warmed ASR session for conversation ${this.stageData.conversation.id}`);
-      } else {
-        await this.stageData.asrProvider.start();
-        logger.info({ conversationId: this.stageData.conversation.id, inputTurnId: this.turnData.inputTurnId }, `VAD speech detected, started ASR session for conversation ${this.stageData.conversation.id}`);
+    // Scenario 2: VAD reacted when receiving_user_voice
+    if (this.conversation.status === 'receiving_user_voice') {
+      // The question here is why this happened.
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in receiving_user_voice state');
+      await this.setBargeInSilenceTimer();
+      return;
+    }
+
+    // Scenario 3: VAD reacted when generating_response: barge-in interrupt during AI response generation.
+    if (this.conversation.status === 'generating_response') {
+      logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in generating_response state: barge-in interrupt');
+      // abort TTS completely
+      await this.abortCurrentResponse();
+      // send abort_ai_generation_output && user_speaking_started
+      await this.sendAbortAiGeneration();
+      await this.sendUserSpeakingStarted();
+      // start ASR in response to VAD (if not started already)
+      await this.startAsrSessionIfNeeded();
+      // kick off barge-in silence timer to stop ASR if user stops speaking
+      this.setBargeInSilenceTimer();
+      return;
+    }
+
+    // Scenario 4: VAD reacted when processing_user_input: we haven't even started generating a response yet
+    if (this.conversation.status === 'processing_user_input') {
+      logger.info({ status: this.conversation.status }, '**VAD** Ignoring VAD speech start in processing_user_input state');
+      // TODO: this is a very complex scenario as we have in-flight processing that can cause status transitions.
+      // We should consider whether we want to allow barge-in during processing_user_input, and if so, how to handle it.
+      // For now, we will ignore the VAD to prevent very weird issues caused by race conditions.
+      return;
+    }
+
+    logger.warn({ status: this.conversation.status }, `**VAD** Received speech_start in unexpected state ${this.conversation.status}`);
+  }
+
+  /**
+       * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
+       * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
+      * processUserInput onward. Only acts when in receiving_user_voice state.
+      * When Smart Turn is enabled, runs endpoint detection before stopping ASR.
+       */
+  private async handleVadEndOfUtterance(): Promise<void> {
+    if (this.conversation.status === 'receiving_user_voice') {
+      if (!this.stageData.asrProvider) return;
+
+      const smartTurnConfig = this.stageData.project.asrConfig?.serverVad?.smartTurn;
+      if (smartTurnConfig?.enabled && this.smartTurnAudioBuffer) {
+        const shouldStop = await this.handleSmartTurnDetection(smartTurnConfig.threshold ?? 0.5);
+        if (!shouldStop) {
+          return;
+        }
       }
+
+      try {
+        await this.stageData.asrProvider.stop();
+        logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
+      } catch (error) {
+        const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
+        await this.markAsFailed(errorMessage);
+        logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
+      }
+      return;
+    }
+
+    // During barge-in with VAD reset skipped, end_of_utterance can fire while status is
+    // awaiting_user_input (generation completed before the user finished speaking). Stop any
+    // pre-warmed ASR session so it doesn't hang and waste resources — the next speech_start
+    // will create a fresh session.
+    if (this.isBargeIn && this.conversation.status === 'awaiting_user_input') {
+      this.asrPreWarmPromise = null;
+      try {
+        await this.stageData.asrProvider?.stop();
+        logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance during barge-in awaiting, stopped pre-warmed ASR for conversation ${this.stageData.conversation.id}`);
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop pre-warmed ASR during barge-in end-of-utterance (non-fatal)`);
+      }
+    }
+  }
+
+  /** Sets a timer to stop ASR if no speech is detected after a barge-in interrupt. */
+  private setBargeInSilenceTimer(): void {
+    if (this.bargeInSilenceTimer) {
+      clearTimeout(this.bargeInSilenceTimer);
+    }
+
+    const timeout = this.stageData.project.asrConfig?.serverVad?.bargeInSilenceTimeout ?? 3000;
+    logger.info({ timeout, conversationId: this.stageData.conversation.id }, '**VAD** Starting barge-in silence timer');
+    this.bargeInSilenceTimer = setTimeout(async () => {
+      this.bargeInSilenceTimer = null;
+      logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in silence timeout reached, stopping ASR');
+      try {
+        await this.stageData.asrProvider?.stop();
+        await this.triggerBargeInSilenceResponse();
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop ASR after barge-in silence timeout (non-fatal)');
+      }
+    }, timeout);
+  }
+
+  /** Triggers the barge-in silence response */
+  private async triggerBargeInSilenceResponse(): Promise<void> {
+    const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
+      ?? '[unintelligible]';
+    await this.processUserInput(placeholder, 'voice');
+  }
+
+  /** Clears the barge-in silence timer if active. */
+  private clearBargeInSilenceTimer(): void {
+    if (this.bargeInSilenceTimer) {
+      logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Clearing barge-in silence timer');
+      clearTimeout(this.bargeInSilenceTimer);
+      this.bargeInSilenceTimer = null;
+    }
+  }
+
+
+  /**
+   * Runs Smart Turn endpoint detection on the buffered utterance audio.
+   * @param threshold Probability threshold for endpoint classification
+   * @returns true if ASR should be stopped (endpoint confirmed or inference failed), false if continuation detected
+   */
+  private async handleSmartTurnDetection(threshold: number): Promise<boolean> {
+    const audio = this.smartTurnAudioBuffer;
+    this.smartTurnAudioBuffer = null;
+
+    if (!audio || audio.length === 0) {
+      return true;
+    }
+
+    try {
+      const result = await smartTurnDetector.predict(audio);
+      const conversationId = this.stageData.conversation.id;
+
+      if (result.endpointProbability > threshold) {
+        logger.info(
+          { conversationId, endpointProbability: result.endpointProbability, threshold },
+          'Smart Turn: endpoint confirmed'
+        );
+        return true;
+      }
+
+      logger.info(
+        { conversationId, endpointProbability: result.endpointProbability, threshold },
+        'Smart Turn: continuation detected, keeping ASR active'
+      );
+
+      this.clearSmartTurnContinueTimer();
+      this.smartTurnContinueTimer = setTimeout(async () => {
+        this.smartTurnContinueTimer = null;
+        if (this.conversation.status === 'receiving_user_voice' && this.stageData.asrProvider) {
+          try {
+            await this.stageData.asrProvider.stop();
+            logger.info({ conversationId }, 'Smart Turn: continuation timeout, stopped ASR');
+          } catch (error) {
+            logger.warn(
+              { conversationId, error: error instanceof Error ? error.message : String(error) },
+              'Smart Turn: failed to stop ASR on timeout (non-fatal)'
+            );
+          }
+        }
+      }, this.SMART_TURN_CONTINUE_TIMEOUT_MS);
+
+      return false;
     } catch (error) {
-      const errorMessage = `VAD speech_start: failed to start ASR: ${error instanceof Error ? error.message : String(error)}`;
-      await this.markAsFailed(errorMessage);
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to start ASR session for conversation ${this.stageData.conversation.id}`);
+      logger.warn(
+        { conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) },
+        'Smart Turn inference failed, falling back to stopping ASR'
+      );
+      return true;
+    }
+  }
+
+  /** Clears the Smart Turn continuation timer if active. */
+  private clearSmartTurnContinueTimer(): void {
+    if (this.smartTurnContinueTimer) {
+      clearTimeout(this.smartTurnContinueTimer);
+      this.smartTurnContinueTimer = null;
     }
   }
 
   /**
-   * Handles VAD end-of-utterance: stops the ASR session (signals EOF to the push stream so the
-   * provider finalizes pending recognition). The setOnRecognitionStopped callback drives
-   * processUserInput onward. Only acts when in receiving_user_voice state.
+   * Handles barge-in interrupt: user speaks while AI is generating a response. Cancels TTS output,
+   * sends abort message to client, and marks the runner for barge-in mode so the accumulated ASR
+   * transcript (partial + new utterance) will be processed as a fresh turn when recognition stops.
    */
-  private async handleVadEndOfUtterance(): Promise<void> {
-    if (this.conversation.status !== 'receiving_user_voice') return;
+  public async abortCurrentResponse(): Promise<void> {
+    // Already in barge-in mode — do nothing.
+    if (this.isBargeIn) return;
 
-    if (!this.stageData.asrProvider) return;
+    logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in interrupt detected');
+    this.isBargeIn = true;
 
-    try {
-      await this.stageData.asrProvider.stop();
-      logger.info({ conversationId: this.stageData.conversation.id }, `VAD end-of-utterance, stopped ASR session for conversation ${this.stageData.conversation.id}`);
-    } catch (error) {
-      const errorMessage = `VAD end_of_utterance: failed to stop ASR: ${error instanceof Error ? error.message : String(error)}`;
-      await this.markAsFailed(errorMessage);
-      logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `VAD failed to stop ASR session for conversation ${this.stageData.conversation.id}`);
+    // Cancel TTS output — the provider may still be streaming audio chunks.
+    if (this.stageData.ttsProvider) {
+      try {
+        await this.stageData.ttsProvider.cancel();
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** TTS cancelled due to barge-in interrupt');
+      } catch (error) {
+        logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'TTS cancel failed during barge-in (non-fatal)');
+      }
     }
   }
+
+
 
   /**
    * Sets up the outbound audio converter from the TTS provider's native output format to the
@@ -1873,7 +2252,7 @@ export class ConversationRunner {
     if (onConversationFailedAction) {
       try {
         logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_failed lifecycle action');
-        const failedContext = await this.contextBuilder.buildContextForConversationStart(this.conversation);
+        const failedContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
         const failedOutcome = await this.actionsExecutor.executeActions([onConversationFailedAction], failedContext, this.stageData.id, 'conversation_failed', this.saveAndSendEvent.bind(this));
       } catch (lifecycleError) {
         logger.error({ conversationId: this.conversation.id, error: lifecycleError instanceof Error ? lifecycleError.message : String(lifecycleError) }, 'Failed to execute __conversation_failed lifecycle action');
@@ -1889,6 +2268,16 @@ export class ConversationRunner {
       await this.conversationService.failConversation(this.conversation.projectId, this.stageData.conversation.id, reason);
     } catch (error) {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to update conversation status in database via ConversationService`);
+    }
+
+    // Flush recorder before closing connection
+    await this.recorder?.flush();
+
+    // Close client connection on terminal state
+    try {
+      await this.session.clientConnection?.close();
+    } catch (error) {
+      logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on failure');
     }
   }
 
@@ -1930,11 +2319,39 @@ export class ConversationRunner {
       fillerSentence: null,
       prescriptedText: null,
       completionTruncationInfo: null,
+      accumulatedText: null,
     };
   }
 
   private async processUserInput(userInput: string, userInputSource: 'text' | 'voice', asrEndMs?: number) {
+    // Handle barge-in: prepend accumulated partial transcript from previous ASR sessions.
+    if (this.isBargeIn && this.bargeInPartialText) {
+      const abortedOutputTurnId = this.turnData.outputTurnId || null;
+      userInput = `${this.bargeInPartialText} ${userInput}`.trim();
+      logger.info({ conversationId: this.stageData.conversation.id, abortedOutputTurnId }, `Barge-in: processing accumulated transcript`);
+
+      // Save turn_aborted event for the interrupted response.
+      if (abortedOutputTurnId) {
+        const turnAbortedEventData: TurnAbortedEventData = {
+          inputTurnId: this.turnData.inputTurnId || '',
+          outputTurnId: abortedOutputTurnId,
+          accumulatedText: this.turnData.accumulatedText || '',
+          abortTimestampMs: Date.now(),
+        };
+        try {
+          await this.saveAndSendEvent('turn_aborted', turnAbortedEventData);
+        } catch (error) {
+          logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to save turn_aborted event during barge-in');
+        }
+      }
+    }
+
     this.responseGeneratedInTurn = false;
+    // Reset silence count on any real user input (not a silence placeholder).
+    const silencePlaceholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**';
+    if (userInput !== silencePlaceholder) {
+      this.silenceCount = 0;
+    }
     // Capture asrStartMs and asrEndMs before resetting turnData so we can compute asrDurationMs and persist raw timestamps
     const savedAsrStartMs = this.turnData.asrStartMs;
     const savedAsrEndMs = asrEndMs ?? null;
@@ -1962,9 +2379,12 @@ export class ConversationRunner {
     if (isStrictModerationMode) {
       // Strict mode (default): moderation fully resolves before any LLM call that receives user-derived content.
       // This prevents inappropriate content from reaching provider APIs and risking account bans.
-      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+      const moderationResult = await this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
-      if (newUserInput === null) return;
+      if (newUserInput === null) {
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
+        return;
+      }
       userInput = newUserInput;
     }
 
@@ -1979,42 +2399,110 @@ export class ConversationRunner {
     // Kick off filler delivery without awaiting — open the response turn and feed TTS as soon
     // as the filler LLM responds, while classification proceeds in parallel.
     let fillerEndMs: number | null = null;
-    const fillerDeliveryPromise: Promise<string | null> = this.generateFillerSentence(userInput).then(async (fillerSentence) => {
-      fillerEndMs = Date.now();
-      if (!fillerSentence) return null;
-      this.turnData.fillerDurationMs = fillerEndMs - fillerStartMs;
-      this.turnData.outputTurnId = generateId(ID_PREFIXES.OUTPUT);
-      const fillerStartMessage: CALStartAiGenerationOutputMessage = {
-        type: 'start_ai_generation_output',
-        conversationId: this.conversation.id,
-        outputTurnId: this.turnData.outputTurnId,
-        expectVoice: !!this.stageData.ttsProvider,
-      };
-      await this.channel.sendMessage(fillerStartMessage);
-      if (this.stageData.ttsProvider) {
-        this.turnData.ttsConnectStartMs = Date.now();
-        await this.stageData.ttsProvider.start();
-        this.turnData.ttsConnectEndMs = Date.now();
-        await this.stageData.ttsProvider.sendText(fillerSentence);
+    const fillerDeliveryPromise: Promise<string | null> = (async () => {
+      const fillerPrep = await this.prepareFillerMessages(userInput);
+      if (!fillerPrep) return null;
+
+      const { messages: fillerMessages, renderedPrompt, maxTokens, truncationInfo } = fillerPrep;
+      const fillerLlm = this.stageData.fillerLlmProvider;
+      const tts = this.stageData.ttsProvider;
+
+      let accumulatedText = '';
+      let firstChunk = true;
+      let generationResult: LlmGenerationResult | null = null;
+      let outputTurnId: string | null = null;
+
+      const onCompletePromise = new Promise<LlmGenerationResult>((resolve) => {
+        fillerLlm.setOnGenerationCompleted((result) => {
+          generationResult = result;
+          resolve(result);
+        });
+        fillerLlm.setOnError(async (_error: Error) => {
+          resolve({ id: '', content: [], role: 'assistant', finishReason: 'stop' });
+        });
+      });
+
+      const ttsPromise = tts
+        ? (async () => {
+          this.turnData.ttsConnectStartMs = Date.now();
+          await tts.start();
+          this.turnData.ttsConnectEndMs = Date.now();
+        })()
+        : Promise.resolve();
+      const streamPromise = fillerLlm.generateStream(fillerMessages, maxTokens !== undefined ? { maxTokens } : undefined);
+
+      fillerLlm.setOnChunk(async (chunk: LlmChunk) => {
+        accumulatedText += chunk.content;
+
+        if (firstChunk) {
+          firstChunk = false;
+          await ttsPromise;
+          outputTurnId = generateId(ID_PREFIXES.OUTPUT);
+          this.turnData.outputTurnId = outputTurnId;
+          const startMsg: CALStartAiGenerationOutputMessage = {
+            type: 'start_ai_generation_output',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            expectVoice: !!tts,
+          };
+          await this.channel.sendMessage(startMsg);
+          if (tts) {
+            this.ttsUsedInTurn = true;
+            await tts.sendText(chunk.content);
+          }
+          const chunkMsg: CALAiTranscribedChunkMessage = {
+            type: 'ai_transcribed_chunk',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            chunkId: generateId(ID_PREFIXES.CHUNK),
+            chunkText: chunk.content,
+            ordinal: 0,
+            isFinal: false,
+          };
+          await this.channel.sendMessage(chunkMsg);
+          this.responseOutputTurnStarted = true;
+        } else {
+          if (tts) {
+            this.ttsUsedInTurn = true;
+            await tts.sendText(chunk.content);
+          }
+          const chunkMsg: CALAiTranscribedChunkMessage = {
+            type: 'ai_transcribed_chunk',
+            conversationId: this.conversation.id,
+            outputTurnId: this.turnData.outputTurnId,
+            chunkId: generateId(ID_PREFIXES.CHUNK),
+            chunkText: chunk.content,
+            ordinal: 0,
+            isFinal: false,
+          };
+          await this.channel.sendMessage(chunkMsg);
+        }
+      });
+
+      await streamPromise;
+      const result = await onCompletePromise;
+
+      if (result) {
+        this.turnData.fillerLlmUsage = buildLlmUsage(result.usage, this.stageData.fillerLlmProviderInfo, this.stageData.agent?.fillerSettings?.llmSettings?.model, truncationInfo) ?? null;
       }
-      const fillerChunkMessage: CALAiTranscribedChunkMessage = {
-        type: 'ai_transcribed_chunk',
-        conversationId: this.conversation.id,
-        outputTurnId: this.turnData.outputTurnId,
-        chunkId: generateId(ID_PREFIXES.CHUNK),
-        chunkText: fillerSentence,
-        ordinal: 0,
-        isFinal: true,
-      };
-      await this.channel.sendMessage(fillerChunkMessage);
-      this.responseOutputTurnStarted = true;
-      this.lastFillerSentence = fillerSentence;
-      this.turnData.fillerSentence = fillerSentence;
-      return fillerSentence;
-    });
+
+      const finalText = accumulatedText.trim();
+      if (finalText.length > 0) {
+        this.lastFillerPrompt = renderedPrompt;
+        this.lastFillerSentence = finalText;
+        this.turnData.fillerSentence = finalText;
+      }
+
+      fillerEndMs = Date.now();
+      if (finalText.length > 0) {
+        this.turnData.fillerDurationMs = fillerEndMs - fillerStartMs;
+      }
+
+      return finalText.length > 0 ? finalText : null;
+    })();
 
     // Standard mode: fire moderation in parallel with both filler delivery and classification.
-    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.project.moderationConfig, this.conversation.projectId);
+    const parallelModerationPromise = isStrictModerationMode ? null : this.moderationService.moderate(userInput, this.stageData.moderationProvider, this.stageData.project.moderationConfig, this.conversation.projectId);
 
     // Kick off classification concurrently with filler delivery — neither depends on the other.
     const processingStartMs = Date.now();
@@ -2030,7 +2518,10 @@ export class ConversationRunner {
     if (parallelModerationPromise) {
       const moderationResult = await parallelModerationPromise;
       const newUserInput = await this.handleModerationResult(moderationResult, userInput, userInputSource);
-      if (newUserInput === null) return;
+      if (newUserInput === null) {
+        if (this.isBargeIn) { this.isBargeIn = false; this.bargeInPartialText = null; }
+        return;
+      }
       userInput = newUserInput;
     }
 
@@ -2044,7 +2535,7 @@ export class ConversationRunner {
     if (knowledgeResults.length > 0) {
       const categoryIds = knowledgeResults.map(r => r.name.slice('__knowledge_'.length));
       const itemArrays = await Promise.all(categoryIds.map(id => this.knowledgeService.getItemsByCategory(this.conversation.projectId, id)));
-      this.stageData.faq = itemArrays.flat().map(item => ({ question: item.question, answer: item.answer }));
+      this.stageData.faq = itemArrays.flat().flatMap(item => item.questions.map(q => ({ question: q, answer: item.answer })));
       logger.debug({ conversationId: this.conversation.id, categoryCount: categoryIds.length, itemCount: this.stageData.faq.length }, 'Updated FAQ from knowledge actions');
     }
 
@@ -2075,7 +2566,7 @@ export class ConversationRunner {
         if (decorator) {
           const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation,
             this.stageData.stage, nonKnowledgeResults, userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(),
-            copy, copyContent, this.stageData.faq);
+            copy, copyContent, this.stageData.faq, this.channel?.connectionType);
           copy = await this.templatingEngine.render(decorator.template, context);
         }
       }
@@ -2087,7 +2578,7 @@ export class ConversationRunner {
     // and response-related effects from actions are ignored.
     const forcedCopyResponse = sampleCopies.length > 0 && selectedSampleCopy?.mode === 'forced' ? copy : null;
     const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, nonKnowledgeResults, userInput, userInputSource,
-      this.sampleCopyDistributor.getOriginalCopies(), copy, copyContent, this.stageData.faq);
+      this.sampleCopyDistributor.getOriginalCopies(), copy, copyContent, this.stageData.faq, this.channel?.connectionType);
     const stageActionMap = new Map(Object.values(stageActions).map(sa => [sa.name, sa]));
 
     // Deduplicate actions by name - if multiple classifiers detect the same action, only include it once
@@ -2192,15 +2683,19 @@ export class ConversationRunner {
       stageTransitionEndMs: this.turnData.stageTransitionEndMs ?? undefined,
       stageTransitionDurationMs: this.turnData.stageTransitionStartMs !== null && this.turnData.stageTransitionEndMs !== null ? this.turnData.stageTransitionEndMs - this.turnData.stageTransitionStartMs : undefined,
     }, this.turnMessageVisibility);
-    const messageUpdateMessage: CALConversationEventUpdateMessage = {
-      type: 'conversation_event_update',
-      conversationId: this.conversation.id,
-      eventType: 'message',
-      eventData: updated.eventData,
-      inputTurnId: this.turnData.inputTurnId,
-      outputTurnId: this.turnData.outputTurnId,
-    };
-    await this.channel.sendMessage(messageUpdateMessage);
+    if (!updated) {
+      logger.warn({ conversationId: this.conversation.id, eventId: userMessageEventId }, 'Failed to update message event with processing metadata');
+    } else {
+      const messageUpdateMessage: CALConversationEventUpdateMessage = {
+        type: 'conversation_event_update',
+        conversationId: this.conversation.id,
+        eventType: 'message',
+        eventData: updated.eventData,
+        inputTurnId: this.turnData.inputTurnId,
+        outputTurnId: this.turnData.outputTurnId,
+      };
+      await this.channel.sendMessage(messageUpdateMessage);
+    }
 
     await this.generateResponse(context, executionOutcome);
   }
@@ -2229,6 +2724,7 @@ export class ConversationRunner {
           conversationId: this.conversation.id,
           outputTurnId: this.turnData.outputTurnId,
           expectVoice: this.stageData.ttsProvider !== undefined && this.stageData.ttsProvider !== null,
+          flushBuffer: true,
         };
         await this.channel.sendMessage(startGenerationMessage);
 
@@ -2290,15 +2786,22 @@ export class ConversationRunner {
       }
       await this.changeState('awaiting_user_input');
     }
+
+    // Reset barge-in state after turn completes (success, failure, or exception).
+    if (this.isBargeIn) {
+      logger.info({ conversationId: this.stageData.conversation.id }, 'Barge-in turn completed, resetting barge-in state');
+      this.isBargeIn = false;
+      this.bargeInPartialText = null;
+    }
   }
 
   /**
    * Executes any terminal action (end or abort) that was deferred until after the current
    * turn's response — including TTS audio — has been fully delivered to the client.
-   * If no action is pending, transitions the conversation back to awaiting user input.
-   * This method is idempotent: a second call after the action has already been consumed
-   * is safe and will not overwrite a terminal state.
-   */
+  * If no action is pending, transitions the conversation back to awaiting user input.
+  * This method is idempotent: a second call after the action has already been consumed
+  * is safe and will not overwrite a terminal state.
+  */
   private async handlePostResponseAction(): Promise<void> {
     const action = this.pendingPostResponseAction;
     this.pendingPostResponseAction = null;
@@ -2307,8 +2810,12 @@ export class ConversationRunner {
       // Guard against overwriting a terminal state (e.g. when onGenerationEnded fires
       // after a synchronous TTS provider already completed inline).
       if (this.conversation.status !== 'finished' && this.conversation.status !== 'failed') {
+        if (this.ttsUsedInTurn) {
+          this.waitingForPlaybackEnd = true;
+        }
         await this.changeState('awaiting_user_input');
       }
+      this.ttsUsedInTurn = false;
       return;
     }
 
@@ -2321,7 +2828,7 @@ export class ConversationRunner {
       }
       const eventData: ConversationEndEventData = { stageId: this.stageData.id, reason: action.endReason };
       await this.saveAndSendEvent('conversation_end', eventData);
-      await this.changeTerminalState('finished');
+      await this.changeState('finished');
     } else {
       const onConversationAbortAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_ABORT);
       if (onConversationAbortAction) {
@@ -2336,7 +2843,7 @@ export class ConversationRunner {
         sourceActionName: action.name,
       };
       await this.saveAndSendEvent('conversation_aborted', eventData);
-      await this.changeTerminalState('finished');
+      await this.changeState('finished');
     }
   }
 
@@ -2363,7 +2870,7 @@ export class ConversationRunner {
       logger.info({ globalActions: this.stageData.globalActions }, 'Checking for __moderation_blocked global action');
       const moderationBlockedAction = this.stageData.globalActions.find(ga => ga.id === '__moderation_blocked');
       if (moderationBlockedAction) {
-        const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq);
+        const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
         const executionOutcome = await this.actionsExecutor.executeActions([moderationBlockedAction], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
         await this.applyActionOutcome(context, executionOutcome);
         const messageEventData: MessageEventData = {
@@ -2384,6 +2891,48 @@ export class ConversationRunner {
   }
 
   /**
+   * Prepares the messages, rendered prompt, and token limits for a filler LLM call.
+   * Returns null if filler is not configured.
+   */
+  private async prepareFillerMessages(userInput: string): Promise<{
+    messages: LlmMessage[];
+    renderedPrompt: string;
+    maxTokens: number | undefined;
+    truncationInfo: TruncationInfo;
+  } | null> {
+    const fillerLlmProvider = this.stageData.fillerLlmProvider;
+    const fillerSettings = this.stageData.agent?.fillerSettings;
+    if (!fillerLlmProvider || !fillerSettings) {
+      return null;
+    }
+    const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, this.channel?.connectionType);
+    const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
+    const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
+    let recentHistory = [...context.history];
+    if (recentHistory.at(-1)?.role === 'user') {
+      recentHistory.pop();
+    }
+    const historyMessages = historyMessageCount === 0 ? [] : historyMessageCount === -1 ? recentHistory : recentHistory.slice(-historyMessageCount);
+    const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+      { role: 'system' as const, content: renderedPrompt },
+      ...historyMessages.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
+      { role: 'user' as const, content: userInput },
+    ];
+    const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
+    const fillerLimits = resolveProviderModelLimits(this.stageData.costManagementConfig, this.stageData.fillerLlmProviderInfo?.id ?? '', fillerModel);
+    const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
+    const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
+    const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
+
+    return {
+      messages: truncatedFillerMessages,
+      renderedPrompt,
+      maxTokens: fillerMaxTokens,
+      truncationInfo: fillerTruncation,
+    };
+  }
+
+  /**
    * Calls the filler LLM provider to generate a short neutral sentence for the current turn.
    * The filler prompt is processed through the templating engine before being sent to the LLM.
    * @returns A generated filler sentence, or null if filler is not configured or generation fails.
@@ -2395,10 +2944,19 @@ export class ConversationRunner {
       return null;
     }
     try {
-      const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput);
+      const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, this.channel?.connectionType);
       const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
-      const fillerMessages = [
+      const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
+      // The current user message is already in context.history (saved to DB before context is built),
+      // so remove it here to avoid sending it twice — it is appended explicitly below.
+      let recentHistory = [...context.history];
+      if (recentHistory.at(-1)?.role === 'user') {
+        recentHistory.pop();
+      }
+      const historyMessages = historyMessageCount === 0 ? [] : historyMessageCount === -1 ? recentHistory : recentHistory.slice(-historyMessageCount);
+      const fillerMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
         { role: 'system' as const, content: renderedPrompt },
+        ...historyMessages.map(msg => ({ role: msg.role as 'user' | 'assistant', content: msg.content })),
         { role: 'user' as const, content: userInput },
       ];
       const fillerModel = this.stageData.agent?.fillerSettings?.llmSettings?.model;
@@ -2406,6 +2964,7 @@ export class ConversationRunner {
       const fillerMaxTokens = resolveOutputCap((this.stageData.agent?.fillerSettings?.llmSettings as any)?.defaultMaxTokens, fillerLimits, 'filler');
       const fillerInputCap = fillerLimits?.inputTokensLimits?.filler;
       const { messages: truncatedFillerMessages, ...fillerTruncation } = truncateMessagesToTokenBudget(fillerMessages, fillerInputCap, fillerModel);
+      logger.info({ conversationId: this.conversation.id, model: fillerModel, maxTokens: fillerMaxTokens, messageCount: truncatedFillerMessages.length }, 'Filler LLM payload');
       const result = await fillerLlmProvider.generate(truncatedFillerMessages, fillerMaxTokens !== undefined ? { maxTokens: fillerMaxTokens } : undefined);
       const text = extractTextFromContent(result.content).trim();
       if (text.length > 0) {
@@ -2438,6 +2997,7 @@ export class ConversationRunner {
     const eventText = `${fillerPrefix}${text}`.trim();
 
     if (ttsProvider) {
+      this.ttsUsedInTurn = true;
       await ttsProvider.sendText(text);
     }
 
@@ -2491,11 +3051,95 @@ export class ConversationRunner {
     return this.conversation.statusDetails;
   }
 
+
+
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  public notifyAudioPlaybackEnded(): void {
+    if (!this.waitingForPlaybackEnd) return;
+    this.waitingForPlaybackEnd = false;
+    if (!this.isVadMode) return;
+    const timeoutMs = this.stageData.project.asrConfig?.silenceTimeoutMs;
+    if (timeoutMs && timeoutMs > 0) {
+      this.silenceTimer = setTimeout(async () => {
+        await this.handleUserSilence();
+      }, timeoutMs);
+    }
+  }
+
+  private async handleUserSilence(): Promise<void> {
+    if (this.conversation.status !== 'awaiting_user_input') {
+      return;
+    }
+
+    // Guard against session detachment: if the runner was detached, don't proceed.
+    if (this.session.runner !== this) {
+      logger.debug({ conversationId: this.conversation.id }, 'Silence timer fired but runner was detached, ignoring');
+      return;
+    }
+
+    this.silenceCount++;
+    const maxSilences = this.stageData.project.asrConfig?.maxSilences;
+
+    if (maxSilences && maxSilences > 0 && this.silenceCount >= maxSilences) {
+      logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'Max silences reached, ending conversation');
+      try {
+        const onConversationEndAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_END);
+        if (onConversationEndAction) {
+          const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+          await this.actionsExecutor.executeActions([onConversationEndAction], endContext, this.stageData.id, 'conversation_end', this.saveAndSendEvent.bind(this));
+        }
+        const eventData: ConversationEndEventData = { stageId: this.stageData.id, reason: 'Conversation ended due to prolonged user silence' };
+        await this.saveAndSendEvent('conversation_end', eventData);
+        await this.changeState('finished');
+      } catch (error) {
+        logger.error({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to end conversation after max silences');
+      }
+      return;
+    }
+
+    logger.info({ conversationId: this.conversation.id, silenceCount: this.silenceCount }, 'User silence detected, triggering response');
+    const placeholder = this.stageData.project.asrConfig?.silencePlaceholder ?? '[silence]';
+    await this.receiveUserTextInput(placeholder);
+  }
+
   private async changeState(newState: ConversationState) {
     this.conversation.status = newState;
     await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState);
+
+    const TERMINAL_STATES = ['finished', 'aborted', 'failed'] as const;
+    if (TERMINAL_STATES.includes(newState as (typeof TERMINAL_STATES)[number])) {
+      await this.recorder?.flush();
+      try {
+        await this.session.clientConnection?.close();
+      } catch (error) {
+        logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on terminal state');
+      }
+    }
+
+    if (newState === 'awaiting_user_input') {
+      this.clearSilenceTimer();
+    } else {
+      this.clearSilenceTimer();
+      // Reset silence count only when user provides real voice input (not silence-triggered placeholder)
+      if (newState === 'receiving_user_voice') {
+        this.silenceCount = 0;
+        this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      }
+    }
+
     if (newState === 'awaiting_user_input' && this.isVadMode && this.vadProcessor) {
-      this.vadProcessor.reset();
+      // During barge-in, skip VAD reset to keep speech tracking continuous through the
+      // generation→awaiting transition. A mid-utterance pause would otherwise force VAD to
+      // re-detect speech, losing audio that Azure never finalizes.
+      if (!this.isBargeIn) {
+        this.vadProcessor.reset();
+      }
       // Pre-warm the next ASR session immediately so it is ready before VAD fires speech_start.
       // Audio only flows once state transitions to receiving_user_voice, so silence never reaches
       // the provider. If the session times out before the user speaks, setOnRecognitionStopped
@@ -2511,16 +3155,7 @@ export class ConversationRunner {
   }
 
   /**
-   * Transitions the conversation to a terminal state and records the stage at which it ended.
-   * @param newState - The terminal state to transition to
-   */
-  private async changeTerminalState(newState: ConversationState): Promise<void> {
-    this.conversation.status = newState;
-    await this.conversationService.saveConversationState(this.conversation.projectId, this.conversation.id, newState, undefined, undefined, this.stageData.id);
-  }
-
-  /**
-   * Helper method to save a conversation event and send it to connected clients via WebSocket.
+    * Helper method to save a conversation event and send it to connected clients via WebSocket.
    * @returns The generated event ID
    */
   private async saveAndSendEvent(eventType: any, eventData: any): Promise<string> {

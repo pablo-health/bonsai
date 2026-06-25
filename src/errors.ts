@@ -100,6 +100,16 @@ export class ContentModerationError extends Error {
 }
 
 /**
+ * Error thrown when a benchmark runner iteration fails
+ */
+export class BenchmarkExecutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BenchmarkExecutionError';
+  }
+}
+
+/**
  * Error thrown when a rate limit has been exceeded
  */
 export class TooManyRequestsError extends Error {
@@ -140,6 +150,16 @@ export class ConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ConflictError';
+  }
+}
+
+/**
+ * Error thrown when an OAuth2 token refresh fails for an SMTP/IMAP provider
+ */
+export class OAuthTokenRefreshError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OAuthTokenRefreshError';
   }
 }
 

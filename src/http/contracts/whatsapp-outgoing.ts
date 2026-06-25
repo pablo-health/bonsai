@@ -21,6 +21,7 @@ export const whatsAppSendBodySchema = z.object({
   stageId: z.string().optional().describe('Stage ID to start the conversation at. When omitted, falls back to the project-level default starting stage.'),
   agentId: z.string().optional().describe('Optional agent ID override for this conversation'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Optional metadata to attach to the conversation record'),
+  userProfile: z.record(z.string(), z.unknown()).optional().describe('Optional user profile data to inject and deep-merge into the user\'s existing profile on the users table.'),
 });
 
 /**

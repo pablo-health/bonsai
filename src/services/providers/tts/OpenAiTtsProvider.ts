@@ -160,6 +160,23 @@ export class OpenAiTtsProvider extends TtsProviderBase<OpenAiTtsProviderConfig> 
   }
 
   /**
+   * Cancels the ongoing speech generation without finalizing it.
+   * Used when a user barge-in interrupts the AI's response.
+   */
+  async cancel(): Promise<void> {
+    logger.info(`[OpenAI TTS] Cancelling speech generation (barge-in)`);
+
+    // Abort all active HTTP requests
+    for (const controller of this.activeRequests) {
+      controller.abort();
+    }
+    this.activeRequests.clear();
+
+    // Discard pending chunk — no final chunk is sent on cancel
+    this.pendingChunk = null;
+  }
+
+  /**
    * Sends text to the speech generation service
    * @param text The text content to be converted to speech
    */
@@ -170,8 +187,6 @@ export class OpenAiTtsProvider extends TtsProviderBase<OpenAiTtsProviderConfig> 
     }
 
     if (this.sentenceSplitter) {
-      logger.debug(`[OpenAI TTS] Adding text to sentence splitter: "${text}"`);
-      // Add text to sentence splitter - it will automatically call synthesizeSentence for each complete sentence
       await this.sentenceSplitter.addText(text);
     } else {
       logger.debug(`[OpenAI TTS] Buffering text: "${text}"`);
@@ -210,8 +225,6 @@ export class OpenAiTtsProvider extends TtsProviderBase<OpenAiTtsProviderConfig> 
     if (!text.trim()) {
       return;
     }
-
-    logger.info(`[OpenAI TTS] Synthesizing sentence: "${text}"`);
 
     // Create abort controller for this request
     const abortController = new AbortController();

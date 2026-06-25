@@ -33,7 +33,8 @@ type RTCAudioSourceType = {
 export class WebRTCConnection implements IClientConnection {
   readonly connectionType = 'webrtc' as const;
 
-  private session: Session;
+  private session: Session | null = null;
+  private isClosed = false;
   private activeInputTurnId: string | null = null;
   /** Leftover PCM bytes that did not fill a complete 10ms frame on the last push. */
   private audioRemainder: Buffer = Buffer.alloc(0);
@@ -86,6 +87,8 @@ export class WebRTCConnection implements IClientConnection {
    * The audio media track lifecycle is managed by the RTCPeerConnection, not here.
    */
   async close(): Promise<void> {
+    if (this.isClosed) return;
+    this.isClosed = true;
     this.stopAudioScheduler();
     if (this.controlChannel.readyState === 'open') {
       this.controlChannel.close();
@@ -120,6 +123,7 @@ export class WebRTCConnection implements IClientConnection {
    * @param msg - The CAL output message to transmit.
    */
   async sendMessage(msg: CALOutputMessage): Promise<void> {
+    if (!this.session) return;
     const { id: sessionId, conversationId, sessionSettings } = this.session;
 
     switch (msg.type) {
@@ -169,6 +173,30 @@ export class WebRTCConnection implements IClientConnection {
 
       case 'send_ai_voice_chunk': {
         this.pushAudioToTrack(msg.audioData);
+        break;
+      }
+
+      case 'abort_ai_generation_output': {
+        this.sendControl({
+          type: 'abort_ai_generation_output',
+          sessionId,
+          conversationId,
+          requestId: msg.correlationId,
+          outputTurnId: msg.outputTurnId,
+          accumulatedText: msg.accumulatedText,
+          abortTimestampMs: msg.abortTimestampMs,
+        });
+        break;
+      }
+
+      case 'user_speaking_started': {
+        this.sendControl({
+          type: 'user_speaking_started',
+          sessionId,
+          conversationId,
+          requestId: msg.correlationId,
+          inputTurnId: msg.inputTurnId,
+        });
         break;
       }
 
@@ -267,9 +295,10 @@ export class WebRTCConnection implements IClientConnection {
    * Sub-frame leftover bytes are held in audioRemainder and prepended to the next chunk.
    */
   private pushAudioToTrack(audioData: Buffer): void {
+    if (!this.session) return;
     const { receiveAudioFormat } = this.session.sessionSettings;
     if (!receiveAudioFormat || !isPcmFormat(receiveAudioFormat)) {
-      logger.warn({ receiveAudioFormat, sessionId: this.session?.id }, 'WebRTCConnection: receiveAudioFormat is not PCM, skipping audio frame');
+      logger.warn({ receiveAudioFormat, sessionId: this.session.id }, 'WebRTCConnection: receiveAudioFormat is not PCM, skipping audio frame');
       return;
     }
     const sampleRate = pcmSampleRate(receiveAudioFormat);
@@ -314,9 +343,10 @@ export class WebRTCConnection implements IClientConnection {
    * The scheduler dequeues one 10ms frame per tick and delivers it to RTCAudioSource.
    */
   private ensureAudioScheduler(sampleRate: number): void {
-    if (this.schedulerInterval !== null) return;
+    if (this.schedulerInterval !== null || this.isClosed) return;
     this.schedulerSampleRate = sampleRate;
     this.schedulerInterval = setInterval(() => {
+      if (this.isClosed) return;
       const frame = this.frameQueue.shift();
       if (!frame) return;
       try {

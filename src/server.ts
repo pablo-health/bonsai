@@ -36,6 +36,8 @@ import { MigrationController } from './http/controllers/MigrationController';
 import { ProjectExchangeController } from './http/controllers/ProjectExchangeController';
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
 import { ScenarioRunExecutorService } from './services/testing/ScenarioRunExecutorService';
+import { ImapInboundService } from './services/ImapInboundService';
+import { OAuth2TokenRefreshService } from './services/OAuth2TokenRefreshService';
 import { errorHandler } from './http/middleware/errorHandler';
 import { optionalAuthMiddleware } from './http/middleware/auth';
 import { requestContextMiddleware } from './http/middleware/requestContext';
@@ -48,6 +50,10 @@ import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMe
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
 import { TelegramChannelHost } from './channels/telegram/TelegramChannelHost';
+// import { SendGridChannelHost } from './channels/email/sendgrid/SendGridChannelHost';
+// import { SesChannelHost } from './channels/email/ses/SesChannelHost';
+import { SmtpImapChannelHost } from './channels/email/smtp-imap/SmtpImapChannelHost';
+import { SmtpImapOAuth2Controller } from './http/controllers/SmtpImapOAuth2Controller';
 import logger from './utils/logger';
 import { fileURLToPath } from 'url';
 import { SecretsManagerRegistry } from './services/secrets/SecretsManagerRegistry';
@@ -57,6 +63,14 @@ import { TesterController } from './http/controllers/TesterController';
 import { ScenarioController } from './http/controllers/ScenarioController';
 import { ScenarioRunController } from './http/controllers/ScenarioRunController';
 import { ScenarioConversationController } from './http/controllers/ScenarioConversationController';
+import { BenchmarkSuiteController } from './http/controllers/BenchmarkSuiteController';
+import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkProviderConfigController';
+import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
+import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
+import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
+import SpeexResamplerClass from './services/audio/speexResampler';
+import smartTurnDetector from './services/audio/SmartTurnDetector';
+import { preloadFireRedVad } from './services/audio/FireRedVadWrapper';
 
 // Register the OpenAPI spec provider before the IoC container is used.
 // This breaks the circular module dependency that would arise from VersionService
@@ -66,7 +80,7 @@ setSpecProvider(getOpenAPISpec);
 /**
  * Creates and configures the Express application
  */
-export function createApp(): express.Application {
+export async function createApp(): Promise<express.Application> {
   const app = express();
 
   // Trust proxy headers when running behind a reverse proxy (nginx, load balancer, etc.)
@@ -130,6 +144,14 @@ export function createApp(): express.Application {
     const schemaUrl = new URL('../schemas/websocket-contracts.json', import.meta.url);
     const schemaPath = fileURLToPath(schemaUrl);
     res.sendFile(schemaPath);
+  });
+
+  // LLM-ingestible guide endpoint
+  app.get('/llms.txt', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    const llmsUrl = new URL('../llms.txt', import.meta.url);
+    const llmsPath = fileURLToPath(llmsUrl);
+    res.sendFile(llmsPath);
   });
 
   // Unauthenticated system endpoints — registered before auth middleware intentionally
@@ -250,14 +272,49 @@ export function createApp(): express.Application {
   const scenarioConversationController = container.resolve(ScenarioConversationController);
   scenarioConversationController.registerRoutes(app);
 
+  container.resolve(BenchmarkSuiteController).registerRoutes(app);
+  container.resolve(BenchmarkProviderConfigController).registerRoutes(app);
+  container.resolve(BenchmarkConfigController).registerRoutes(app);
+  container.resolve(BenchmarkRunController).registerRoutes(app);
+
   container.resolve(WebRTCChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
   container.resolve(WhatsAppChannelHost).registerRoutes(app);
   container.resolve(TelegramChannelHost).registerRoutes(app);
+  // container.resolve(SendGridChannelHost).registerRoutes(app);
+  // container.resolve(SesChannelHost).registerRoutes(app);
+  container.resolve(SmtpImapChannelHost).registerRoutes(app);
+
+  const smtpImapOAuth2Controller = container.resolve(SmtpImapOAuth2Controller);
+  smtpImapOAuth2Controller.registerRoutes(app);
+
+  try {
+    await SpeexResamplerClass.initPromise;
+    const warmup = new SpeexResamplerClass(1, 16000, 8000, 3);
+    warmup.processChunk(Buffer.alloc(320));
+    logger.info('Speex resampler WASM initialized');
+  } catch (err) {
+    logger.warn({ error: err.message }, 'Speex resampler failed to initialize (non-fatal, will load on first use)');
+  }
+
+  try {
+    await smartTurnDetector.load();
+  } catch (err) {
+    logger.warn({ error: err.message }, 'Smart Turn detector failed to load (non-fatal, endpoint detection disabled)');
+  }
+
+  try {
+    await preloadFireRedVad();
+  } catch (err) {
+    logger.warn({ error: err.message }, 'FireRedVAD failed to preload (non-fatal, will load on first use)');
+  }
 
   container.resolve(ConversationTimeoutService).start();
   container.resolve(ScenarioRunExecutorService).start();
+  container.resolve(BenchmarkExecutorService).start();
+  container.resolve(ImapInboundService).start();
+  container.resolve(OAuth2TokenRefreshService).start();
 
   app.use(errorHandler);
 
@@ -267,8 +324,8 @@ export function createApp(): express.Application {
 /**
  * Starts the HTTP server and initializes WebSocket host
  */
-export function startServer(port: number = 3000): void {
-  const app = createApp();
+export async function startServer(port: number = 3000): Promise<void> {
+  const app = await createApp();
   const server = createServer(app);
 
   // Initialize WebSocket host
