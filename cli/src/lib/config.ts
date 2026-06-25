@@ -5,6 +5,7 @@ import { BONSAI_CONFIG_PATH } from './constants.js';
 export interface CliConfig {
   baseUrl: string | null;
   token: string | null;
+  refreshToken: string | null;
   project: string | null;
   timeout: number;
 }
@@ -12,6 +13,7 @@ export interface CliConfig {
 const DEFAULTS: CliConfig = {
   baseUrl: null,
   token: null,
+  refreshToken: null,
   project: null,
   timeout: 30000,
 };
@@ -26,6 +28,7 @@ async function loadConfigFile(): Promise<CliConfig | null> {
     return {
       baseUrl: parsed.baseUrl || null,
       token: parsed.token || null,
+      refreshToken: parsed.refreshToken || null,
       project: parsed.project || null,
       timeout: parsed.timeout || DEFAULTS.timeout,
     };
@@ -43,6 +46,7 @@ export async function loadConfig(overrides: Partial<CliConfig> = {}): Promise<Cl
   return {
     baseUrl: overrides.baseUrl ?? envBaseUrl ?? fileConfig?.baseUrl ?? DEFAULTS.baseUrl,
     token: overrides.token ?? envToken ?? fileConfig?.token ?? DEFAULTS.token,
+    refreshToken: fileConfig?.refreshToken ?? DEFAULTS.refreshToken,
     project: overrides.project ?? envProject ?? fileConfig?.project ?? DEFAULTS.project,
     timeout: overrides.timeout ?? fileConfig?.timeout ?? DEFAULTS.timeout,
   };

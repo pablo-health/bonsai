@@ -39,7 +39,7 @@ interface ResourceDef {
 
 // ─── Path Parsing ────────────────────────────────────────────────────────────
 
-const SKIP_PATTERNS = ['/callback', '/webhook', '/signaling', '/verify', '/authorize'];
+const SKIP_PATTERNS = ['/callback', '/webhook', '/signaling', '/verify', '/authorize', '/auth/'];
 
 function shouldSkip(path: string): boolean {
   return SKIP_PATTERNS.some(p => path.includes(p));
@@ -523,7 +523,8 @@ function generateIndex(resources: Map<string, ResourceDef>): string {
   code += "import { Command } from 'commander';\n";
   code += "import { registerCommands } from './generated/commands.js';\n";
   code += "import { getResourceNames } from './generated/resources.js';\n";
-  code += "import { loadConfig } from './lib/config.js';\n\n";
+  code += "import { loadConfig } from './lib/config.js';\n";
+  code += "import { registerAuthCommands } from './lib/auth.js';\n\n";
 
   code += 'const program = new Command();\n\n';
   code += 'program\n';
@@ -541,7 +542,8 @@ function generateIndex(resources: Map<string, ResourceDef>): string {
   code += '    // Config is resolved per-command in handler\n';
   code += '  })\n';
 
-  code += '\nregisterCommands(program);\n\n';
+  code += '\nregisterCommands(program);\n';
+  code += 'registerAuthCommands(program);\n\n';
 
   code += '// Discovery commands\n';
   code += 'program.command(\'resources\')\n';
