@@ -465,3 +465,61 @@ Conversation creation and real-time interaction happen via WebSocket, not REST. 
 - This spec does not mandate a specific Node CLI framework.
 - This spec does not replace MCP for use cases requiring multi-client tool discovery. It is scoped to "a CLI that happens to be agent-friendly."
 - This spec does not cover the Bonsai Console (web UI) — only the REST API surface.
+
+---
+
+## 15. Implementation Progress (as of 2026-06-25)
+
+### Completed
+
+| Section | Feature |
+|---|---|
+| §2 | Command structure — `resource action [args] [flags]`, 62 resources, ~200 operations |
+| §2.1 | Project scope — `--project` on project-scoped resources, detected from `/projects/{projectId}/` paths |
+| §3 | Global flags — `--json`, `--verbose`, `--quiet`, `--base-url`, `--project`, `--token`, `--timeout`, `--version`, `--help` |
+| §4 | Output envelope — `status`/`data`/`error`/`meta` shape, success and error |
+| §4.2 | Pagination — `--paginate` flag auto-fetches all pages, extracts `items` into `data` |
+| §4.3 | Error mapping — HTTP status → `error.code` mapping, exit codes 0-10 |
+| §5 | Exit codes — 0-10 mapping implemented, consistent with `error.code` |
+| §7 | Input conventions — `--data <json>`, `--data-file <path>`, `--data -` (stdin) |
+| §8.1-8.3 | Config resolution — flags > env vars > `~/.bonsairc` > defaults |
+| §8.4 | Auth commands — `auth login`, `auth logout`, `auth status` |
+| §8.5 | Token caching — access + refresh tokens persisted, auto-refresh on 401 |
+| §9 | Discovery — `resources --json`, `--json-schema`, `openapi dump/paths/schemas/schema` |
+| §11 | Logging — stdout reserved for output only, stderr for logs/verbose |
+| §12 | Versioning — `--version` reports semver |
+| §13 | OpenAPI — bundled spec at build time, full codegen from OpenAPI |
+
+### Gaps
+
+| Section | Missing | Priority |
+|---|---|---|
+| §3 | `--config <path>` CLI flag (env `BONSAI_CONFIG_PATH` works, but no flag) | Low |
+| §3 | `--no-color` flag | Low |
+| §4.2 | `meta.pagination` — single-page responses lack `offset`/`limit`/`total` in `meta` | Medium |
+| §4.4 | Validation detail shape — `details` passed raw, not transformed to `fields[]` format | Medium |
+| §5 | Exit code 9 (timeout) — all network errors map to exit 8, no timeout distinction | Low |
+| **§6** | **Help text** — no examples, permission strings, or error codes in `--help` output | **High** |
+| §7 | Repeatable flags (`--tag foo --tag bar` → array) | Medium |
+| §7 | Boolean `--active`/`--no-active` pattern | Low |
+| §7 | Optimistic locking — `--version` not enforced for update/delete | Medium |
+| §8.4 | `auth refresh` — auto-refresh works, but no manual command | Low |
+| §9 | `openapi --save <path>` / `openapi --refresh` | Medium |
+| §10 | Filtering aliases — raw param names (`--textSearch`, `--orderBy`, `--filters`) instead of `--search`, `--order`, `--filter` | Medium |
+| §12 | `version get` command — `version` resource not generated | Low |
+
+### Biggest Gap: §6 Help Text
+
+Spec requires every command's `--help` to include examples, permission strings, and possible error codes. Generated commands currently only have the operation summary. Two approaches:
+
+1. **OpenAPI `x-` extensions** — add `x-example`, `x-permission`, `x-errors` to controller `getOpenAPIPaths()`, then codegen reads them into help text.
+2. **Permission mapping** — separate mapping file `resource:action → PERMISSIONS.XXX`, codegen injects into help.
+
+Approach 1 is preferred (single source of truth, no separate mapping to maintain).
+
+### Architecture Notes
+
+- Codegen: `src/scripts/generateCli.ts` → parses OpenAPI → generates `cli/src/generated/{resources.ts, commands.ts}` + `cli/src/index.ts`
+- CLI lib: `cli/src/lib/` — `config.ts`, `http.ts`, `handler.ts`, `output.ts`, `errors.ts`, `auth.ts`, `openapi.ts`, `schema.ts`, `constants.ts`
+- Build: `npm run build` at root triggers codegen + TypeScript compilation
+- Branch: `cli` branch, commits `3e2ece0` through `5901f93`
