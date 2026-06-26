@@ -13,6 +13,7 @@ export interface OperationConfig {
   action: string;
   pathParamNames: string[];
   queryParamNames: string[];
+  repeatableParams: string[];
   bodySchemaRef?: string | null;
   isPaginated?: boolean;
 }
@@ -104,11 +105,11 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
     pathParams[name] = String(value);
   }
 
-  const queryParams: Record<string, string | number | boolean> = {};
+  const queryParams: Record<string, string | number | boolean | string[]> = {};
   for (const name of op.queryParamNames) {
     const value = opts[name];
     if (value !== undefined && value !== null && value !== '') {
-      queryParams[name] = value as string | number | boolean;
+      queryParams[name] = value as string | number | boolean | string[];
     }
   }
 
@@ -132,6 +133,8 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
     const excludedKeys = new Set([
       'json', 'verbose', 'quiet', 'project', 'token', 'baseUrl', 'timeout',
       'data', 'dataFile', 'help', 'noHelp', 'paginate', 'jsonSchema',
+      'version',
+      'search', 'order', 'filter',
     ]);
     const fieldKeys = Object.keys(opts).filter(k =>
       !excludedKeys.has(k) &&
@@ -248,9 +251,22 @@ export async function runOperation(op: OperationConfig, options: RunOptions): Pr
       return 0;
     }
 
-    const envelope: Envelope = successEnvelope(resp.data ?? null, {
-      duration_ms: Date.now() - startTime,
-    });
+    let data = resp.data ?? null;
+    let meta: Record<string, unknown> = { duration_ms: Date.now() - startTime };
+
+    if (op.isPaginated && data && typeof data === 'object' && !Array.isArray(data)) {
+      const respData = data as Record<string, unknown>;
+      if ('items' in respData) {
+        data = respData.items as Record<string, unknown> | null;
+        meta.pagination = {
+          offset: respData.offset,
+          limit: respData.limit,
+          total: respData.total,
+        };
+      }
+    }
+
+    const envelope: Envelope = successEnvelope(data, meta);
     printEnvelope(envelope, opts.json);
     return 0;
   } catch (err) {

@@ -5,6 +5,12 @@ import { RESOURCES, getResourceNames, ResourceDef, PathParam } from './resources
 import { runOperation } from '../lib/handler.js';
 import { getOperationSchema } from '../lib/schema.js';
 
+const QUERY_PARAM_ALIASES: Record<string, string> = {
+  textSearch: 'search',
+  orderBy: 'order',
+  filters: 'filter',
+};
+
 export function registerCommands(program: Command): void {
   const resourceNames = Object.keys(RESOURCES);
 
@@ -33,7 +39,16 @@ export function registerCommands(program: Command): void {
           .option('--data-file <path>', 'Request body from JSON file');
       }
       for (const qp of op.queryParamNames) {
-        actionCmd.option(`--${qp} <value>`, qp);
+        const alias = QUERY_PARAM_ALIASES[qp];
+        const flagName = alias || qp;
+        if (op.repeatableParams.includes(qp)) {
+          actionCmd.option(`--${flagName} <value>`, qp, [], (v, p: string[]) => [...p, v]);
+        } else {
+          actionCmd.option(`--${flagName} <value>`, qp);
+        }
+      }
+      if (op.isUpdateOrDelete) {
+        actionCmd.option('--version <number>', 'Entity version for optimistic locking');
       }
       actionCmd.option('--json-schema', 'Output JSON schema for this operation', false);
       actionCmd.option('--paginate', 'Fetch all pages', false);
@@ -44,6 +59,24 @@ export function registerCommands(program: Command): void {
           const positionalArgs = allArgs.length > 1 ? allArgs.slice(0, -2) : [];
           const allOpts: any = { ...opts };
           op.pathParams.forEach((p: PathParam, i: number) => { allOpts[p.name] = positionalArgs[i]; });
+          for (const qp of op.queryParamNames) {
+            const alias = QUERY_PARAM_ALIASES[qp];
+            if (alias && allOpts[alias] !== undefined) {
+              allOpts[qp] = allOpts[alias];
+            }
+          }
+          if (op.isUpdateOrDelete && allOpts.version !== undefined) {
+            if (allOpts.data !== undefined && allOpts.data !== null && allOpts.data !== '') {
+              let body: any;
+              if (typeof allOpts.data === 'string') {
+                body = JSON.parse(allOpts.data);
+              } else {
+                body = allOpts.data;
+              }
+              body.version = Number(allOpts.version);
+              allOpts.data = JSON.stringify(body);
+            }
+          }
           if (allOpts.jsonSchema) {
             const schema = await getOperationSchema(
               { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, bodySchemaRef: op.bodySchemaRef }
@@ -52,7 +85,7 @@ export function registerCommands(program: Command): void {
             process.exit(0);
           }
           const exitCode = await runOperation(
-            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, isPaginated: op.isPaginated },
+            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, repeatableParams: op.repeatableParams, isPaginated: op.isPaginated },
             allOpts
           );
           process.exit(exitCode);

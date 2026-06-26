@@ -496,17 +496,22 @@ Conversation creation and real-time interaction happen via WebSocket, not REST. 
 |---|---|---|
 | §3 | `--config <path>` CLI flag (env `BONSAI_CONFIG_PATH` works, but no flag) | Low |
 | §3 | `--no-color` flag | Low |
-| §4.2 | `meta.pagination` — single-page responses lack `offset`/`limit`/`total` in `meta` | Medium |
-| §4.4 | Validation detail shape — `details` passed raw, not transformed to `fields[]` format | Medium |
 | §5 | Exit code 9 (timeout) — all network errors map to exit 8, no timeout distinction | Low |
 | **§6** | **Help text** — no examples, permission strings, or error codes in `--help` output | **High** |
-| §7 | Repeatable flags (`--tag foo --tag bar` → array) | Medium |
 | §7 | Boolean `--active`/`--no-active` pattern | Low |
-| §7 | Optimistic locking — `--version` not enforced for update/delete | Medium |
 | §8.4 | `auth refresh` — auto-refresh works, but no manual command | Low |
-| §9 | `openapi --save <path>` / `openapi --refresh` | Medium |
-| §10 | Filtering aliases — raw param names (`--textSearch`, `--orderBy`, `--filters`) instead of `--search`, `--order`, `--filter` | Medium |
 | §12 | `version get` command — `version` resource not generated | Low |
+
+### Completed (2026-06-26)
+
+| Section | Feature |
+|---|---|
+| §4.2 | `meta.pagination` — single-page list responses include `offset`/`limit`/`total` in `meta.pagination` |
+| §4.4 | Validation detail shape — Zod `details` transformed to `{ fields: [{ field, code, message }] }` |
+| §7 | Repeatable flags — array-type query params (e.g. `--groupBy`, `--metrics`) accept repeated values |
+| §7 | Optimistic locking — `--version <number>` flag on update/delete operations |
+| §9 | `openapi dump --save <path>` and `openapi refresh` subcommands |
+| §10 | Filtering aliases — `--search`, `--order`, `--filter` map to `textSearch`, `orderBy`, `filters` |
 
 ### Biggest Gap: §6 Help Text
 

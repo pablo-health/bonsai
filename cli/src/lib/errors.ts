@@ -34,9 +34,22 @@ export function getExitCode(errorCode: string): number {
   return EXIT_CODE_MAP[errorCode] || 1;
 }
 
+function transformValidationDetails(details: unknown): unknown {
+  if (Array.isArray(details)) {
+    const fields = details.map((issue: any) => ({
+      field: Array.isArray(issue.path) ? issue.path.join('.') : String(issue.path ?? ''),
+      code: issue.code,
+      message: issue.message,
+    }));
+    return { fields };
+  }
+  return details;
+}
+
 export function translateServerError(httpStatus: number, serverData: unknown): ErrorEnvelope {
   const body = serverData as { error?: string; details?: unknown } || {};
   const code = mapErrorCode(httpStatus, body.error);
+  const details = httpStatus === 400 ? transformValidationDetails(body.details) : (body.details || null);
 
   return {
     status: 'error',
@@ -45,7 +58,7 @@ export function translateServerError(httpStatus: number, serverData: unknown): E
       code,
       message: body.error || `HTTP ${httpStatus}`,
       http_status: httpStatus,
-      details: body.details || null,
+      details,
     },
     meta: {},
   };

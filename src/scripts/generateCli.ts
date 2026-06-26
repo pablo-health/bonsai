@@ -24,12 +24,14 @@ interface Operation {
   pathTemplate: string;
   pathParams: PathParam[];
   queryParamNames: string[];
+  repeatableParams: string[];
   hasBody: boolean;
   bodySchemaRef: string | null;
   action: string;
   summary: string;
   description: string;
   isPaginated: boolean;
+  isUpdateOrDelete: boolean;
 }
 
 interface ResourceDef {
@@ -281,10 +283,14 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
       if (!op) continue;
 
       const queryParamNames: string[] = [];
+      const repeatableParams: string[] = [];
       if (op.parameters && Array.isArray(op.parameters)) {
         for (const param of op.parameters) {
           if (param.in === 'query' && param.name) {
             queryParamNames.push(param.name);
+            if (param.schema && param.schema.type === 'array') {
+              repeatableParams.push(param.name);
+            }
           }
         }
       }
@@ -322,12 +328,14 @@ function parseOperations(spec: any): Map<string, ResourceDef> {
         pathTemplate: rawPath,
         pathParams,
         queryParamNames,
+        repeatableParams,
         hasBody,
         bodySchemaRef,
         action,
         summary,
         description,
         isPaginated: queryParamNames.includes('offset') && queryParamNames.includes('limit'),
+        isUpdateOrDelete: method === 'put' || method === 'delete',
       });
     }
   }
@@ -416,8 +424,10 @@ function generateResourcesManifest(resources: Map<string, ResourceDef>): string 
   code += 'export interface Operation {\n';
   code += '  method: string;\n  path: string;\n  pathTemplate: string;\n';
   code += '  pathParams: PathParam[];\n  queryParamNames: string[];\n';
+  code += '  repeatableParams: string[];\n';
   code += '  hasBody: boolean;\n  bodySchemaRef: string | null;\n';
   code += '  action: string;\n  summary: string;\n  description: string;\n  isPaginated: boolean;\n';
+  code += '  isUpdateOrDelete: boolean;\n';
   code += '}\nexport interface ResourceDef {\n';
   code += '  name: string;\n  scope: "global" | "project";\n  operations: Operation[];\n}\n\n';
 
@@ -434,12 +444,14 @@ function generateResourcesManifest(resources: Map<string, ResourceDef>): string 
       code += `        pathTemplate: "${op.pathTemplate}",\n`;
       code += `        pathParams: ${JSON.stringify(op.pathParams)},\n`;
       code += `        queryParamNames: ${JSON.stringify(op.queryParamNames)},\n`;
+      code += `        repeatableParams: ${JSON.stringify(op.repeatableParams)},\n`;
       code += `        hasBody: ${op.hasBody},\n`;
       code += `        bodySchemaRef: ${op.bodySchemaRef ? `"${op.bodySchemaRef}"` : 'null'},\n`;
       code += `        action: "${op.action}",\n`;
       code += `        summary: ${JSON.stringify(op.summary)},\n`;
       code += `        description: ${JSON.stringify(op.description)},\n`;
       code += `        isPaginated: ${op.isPaginated},\n`;
+      code += `        isUpdateOrDelete: ${op.isUpdateOrDelete},\n`;
       code += `      },\n`;
     }
     code += `    ],\n`;
@@ -460,6 +472,12 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += "import { RESOURCES, getResourceNames, ResourceDef, PathParam } from './resources.js';\n";
   code += "import { runOperation } from '../lib/handler.js';\n";
   code += "import { getOperationSchema } from '../lib/schema.js';\n\n";
+
+  code += 'const QUERY_PARAM_ALIASES: Record<string, string> = {\n';
+  code += '  textSearch: \'search\',\n';
+  code += '  orderBy: \'order\',\n';
+  code += '  filters: \'filter\',\n';
+  code += '};\n\n';
 
   code += 'export function registerCommands(program: Command): void {\n';
   code += '  const resourceNames = Object.keys(RESOURCES);\n\n';
@@ -493,8 +511,19 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '      }\n';
 
   code += '      for (const qp of op.queryParamNames) {\n';
-  code += '        actionCmd.option(`--${qp} <value>`, qp);\n';
+  code += '        const alias = QUERY_PARAM_ALIASES[qp];\n';
+  code += '        const flagName = alias || qp;\n';
+  code += '        if (op.repeatableParams.includes(qp)) {\n';
+  code += '          actionCmd.option(`--${flagName} <value>`, qp, [], (v, p: string[]) => [...p, v]);\n';
+  code += '        } else {\n';
+  code += '          actionCmd.option(`--${flagName} <value>`, qp);\n';
+  code += '        }\n';
   code += '      }\n';
+
+  code += '      if (op.isUpdateOrDelete) {\n';
+  code += '        actionCmd.option(\'--version <number>\', \'Entity version for optimistic locking\');\n';
+  code += '      }\n';
+
   code += '      actionCmd.option(\'--json-schema\', \'Output JSON schema for this operation\', false);\n';
   code += '      actionCmd.option(\'--paginate\', \'Fetch all pages\', false);\n\n';
 
@@ -504,6 +533,27 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
    code += '          const positionalArgs = allArgs.length > 1 ? allArgs.slice(0, -2) : [];\n';
    code += '          const allOpts: any = { ...opts };\n';
    code += '          op.pathParams.forEach((p: PathParam, i: number) => { allOpts[p.name] = positionalArgs[i]; });\n';
+
+   code += '          for (const qp of op.queryParamNames) {\n';
+   code += '            const alias = QUERY_PARAM_ALIASES[qp];\n';
+   code += '            if (alias && allOpts[alias] !== undefined) {\n';
+   code += '              allOpts[qp] = allOpts[alias];\n';
+   code += '            }\n';
+   code += '          }\n';
+
+   code += '          if (op.isUpdateOrDelete && allOpts.version !== undefined) {\n';
+   code += '            if (allOpts.data !== undefined && allOpts.data !== null && allOpts.data !== \'\') {\n';
+   code += '              let body: any;\n';
+   code += '              if (typeof allOpts.data === \'string\') {\n';
+   code += '                body = JSON.parse(allOpts.data);\n';
+   code += '              } else {\n';
+   code += '                body = allOpts.data;\n';
+   code += '              }\n';
+   code += '              body.version = Number(allOpts.version);\n';
+   code += '              allOpts.data = JSON.stringify(body);\n';
+   code += '            }\n';
+   code += '          }\n';
+
   code += '          if (allOpts.jsonSchema) {\n';
   code += '            const schema = await getOperationSchema(\n';
   code += '              { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, bodySchemaRef: op.bodySchemaRef }\n';
@@ -512,7 +562,7 @@ function generateCommandsFile(resources: Map<string, ResourceDef>): string {
   code += '            process.exit(0);\n';
   code += '          }\n';
   code += '          const exitCode = await runOperation(\n';
-  code += '            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, isPaginated: op.isPaginated },\n';
+  code += '            { method: op.method, pathTemplate: op.pathTemplate, scope: res.scope, action: op.action, pathParamNames: op.pathParams.map((p: PathParam) => p.name), queryParamNames: op.queryParamNames, repeatableParams: op.repeatableParams, isPaginated: op.isPaginated },\n';
   code += '            allOpts\n';
   code += '          );\n';
   code += '          process.exit(exitCode);\n';

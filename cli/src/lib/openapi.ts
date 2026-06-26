@@ -1,8 +1,10 @@
 import { Command } from 'commander';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printEnvelope, successEnvelope, errorEnvelope } from './output.js';
+import { loadConfig } from './config.js';
+import { request } from './http.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OPENAPI_PATH = resolve(__dirname, '../../bundled/openapi.json');
@@ -28,13 +30,20 @@ export function registerOpenApiCommands(program: Command): void {
     .command('dump')
     .description('Dump the full bundled OpenAPI spec')
     .option('--json', 'Emit JSON (default: true for this command)')
-    .action((opts: { json?: boolean }) => {
+    .option('--save <path>', 'Save spec to a file instead of stdout')
+    .action((opts: { json?: boolean; save?: string }) => {
       const spec = loadOpenApiSpec();
       if (!spec) {
         printEnvelope(errorEnvelope('SPEC_NOT_FOUND', 'OpenAPI spec not found', 500), true);
         process.exit(1);
       }
-      process.stdout.write(JSON.stringify(spec, null, 2) + '\n');
+      const json = JSON.stringify(spec, null, 2) + '\n';
+      if (opts.save) {
+        writeFileSync(opts.save, json, 'utf-8');
+        process.stderr.write(`Saved OpenAPI spec to ${opts.save}\n`);
+      } else {
+        process.stdout.write(json);
+      }
     });
 
   openapi
@@ -116,6 +125,53 @@ export function registerOpenApiCommands(program: Command): void {
       }
 
       process.stdout.write(JSON.stringify(schema, null, 2) + '\n');
+    });
+
+  openapi
+    .command('refresh')
+    .description('Fetch the latest OpenAPI spec from the server')
+    .option('--save <path>', 'Save fetched spec to a file')
+    .option('--base-url <url>', 'API base URL')
+    .option('--token <string>', 'Auth token')
+    .action(async (opts: { save?: string; baseUrl?: string; token?: string }) => {
+      const config = await loadConfig({
+        baseUrl: opts.baseUrl,
+        token: opts.token,
+      });
+
+      if (!config.baseUrl) {
+        printEnvelope(errorEnvelope('CONFIG_ERROR', 'No API base URL configured', 1), true);
+        process.exit(2);
+      }
+
+      try {
+        const resp = await request({
+          method: 'get',
+          baseUrl: config.baseUrl,
+          pathTemplate: '/openapi.json',
+          pathParams: {},
+          timeout: config.timeout,
+          token: config.token,
+        });
+
+        if (resp.status >= 400) {
+          printEnvelope(errorEnvelope('FETCH_ERROR', `Failed to fetch spec: HTTP ${resp.status}`, resp.status), true);
+          process.exit(1);
+        }
+
+        const json = JSON.stringify(resp.data, null, 2) + '\n';
+
+        if (opts.save) {
+          writeFileSync(opts.save, json, 'utf-8');
+          process.stderr.write(`Saved OpenAPI spec to ${opts.save}\n`);
+        } else {
+          process.stdout.write(json);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        printEnvelope(errorEnvelope('NETWORK_ERROR', message, 0), true);
+        process.exit(8);
+      }
     });
 
   program.addCommand(openapi);
