@@ -725,6 +725,7 @@ export const projectsRelations = relations(projects, ({ many }) => ({
   scenarios: many(scenarios),
   scenarioRuns: many(scenarioRuns),
   scenarioConversations: many(scenarioConversations),
+  quickPrompts: many(quickPrompts),
 }));
 
 export const agentsRelations = relations(agents, ({ one, many }) => ({
@@ -836,6 +837,7 @@ export const conversationArtifactsRelations = relations(conversationArtifacts, (
 export const operatorsRelations = relations(operators, ({ many }) => ({
   auditLogs: many(auditLogs),
   providers: many(providers),
+  quickPrompts: many(quickPrompts),
 }));
 
 export const providersRelations = relations(providers, ({ one }) => ({
@@ -913,6 +915,30 @@ export const scenarioConversationsRelations = relations(scenarioConversations, (
     references: [scenarioRuns.projectId, scenarioRuns.id],
   }),
 }));
+
+// QuickPrompt table — reusable prompt templates with "copy on select" behavior
+export type QuickPromptCategory = 'agent' | 'stage' | 'filler' | 'transformer' | 'classifier' | 'tool' | 'tester' | 'summarization';
+
+export const quickPrompts = pgTable('quick_prompts', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
+  categoryId: text('category_id').notNull().$type<QuickPromptCategory>(),
+  ownerId: text('owner_id').references(() => operators.id, { onDelete: 'set null' }),
+  name: text('name').notNull(),
+  description: text('description'),
+  content: text('content').notNull(),
+  tags: jsonb('tags').notNull().default([]).$type<string[]>(),
+  isPublic: boolean('is_public').notNull().default(true),
+  isSystem: boolean('is_system').notNull().default(false),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => [
+  index('idx_quick_prompts_project_id').on(table.projectId),
+  index('idx_quick_prompts_category_id').on(table.categoryId),
+  index('idx_quick_prompts_owner_id').on(table.ownerId),
+  index('idx_quick_prompts_is_public').on(table.isPublic),
+]);
 
 // ─── Benchmarking ────────────────────────────────────────────────────────────
 
@@ -1013,6 +1039,17 @@ export const benchmarkResults = pgTable('benchmark_results', {
 ]);
 
 // ─── Benchmarking Relations ───────────────────────────────────────────────────
+
+export const quickPromptsRelations = relations(quickPrompts, ({ one }) => ({
+  project: one(projects, {
+    fields: [quickPrompts.projectId],
+    references: [projects.id],
+  }),
+  owner: one(operators, {
+    fields: [quickPrompts.ownerId],
+    references: [operators.id],
+  }),
+}));
 
 export const benchmarkSuitesRelations = relations(benchmarkSuites, ({ one, many }) => ({
   creator: one(operators, {

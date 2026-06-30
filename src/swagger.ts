@@ -112,6 +112,8 @@ import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkP
 import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { timingStatsSchema, benchmarkStatsSchema, createBenchmarkSuiteSchema, updateBenchmarkSuiteSchema, benchmarkSuiteResponseSchema, benchmarkSuiteListResponseSchema, createBenchmarkProviderConfigSchema, updateBenchmarkProviderConfigSchema, benchmarkProviderConfigResponseSchema, benchmarkProviderConfigListResponseSchema, createBenchmarkConfigSchema, updateBenchmarkConfigSchema, benchmarkConfigResponseSchema, benchmarkConfigListResponseSchema, triggerBenchmarkRunSchema, benchmarkConfigExecutionResponseSchema, benchmarkRunResponseSchema, benchmarkRunListResponseSchema, llmIterationOutputSchema, ttsIterationOutputSchema, asrIterationOutputSchema, benchmarkIterationResultDataSchema, benchmarkResultResponseSchema } from './http/contracts/benchmark';
+import { QuickPromptController } from './http/controllers/QuickPromptController';
+import { createQuickPromptSchema, createProjectQuickPromptSchema, updateQuickPromptBodySchema, deleteQuickPromptBodySchema, cloneQuickPromptSchema, quickPromptResponseSchema, quickPromptListResponseSchema, quickPromptRouteParamsSchema, quickPromptProjectRouteParamsSchema } from './http/contracts/quickPrompt';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
@@ -712,6 +714,21 @@ export function getOpenAPISpec(): any {
   }
   const benchmarkRunPaths = BenchmarkRunController.getOpenAPIPaths();
   for (const path of benchmarkRunPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register QuickPrompt schemas and routes
+  registry.register('QuickPromptRouteParams', quickPromptRouteParamsSchema);
+  registry.register('QuickPromptProjectRouteParams', quickPromptProjectRouteParamsSchema);
+  registry.register('CreateQuickPromptRequest', createQuickPromptSchema);
+  registry.register('CreateProjectQuickPromptRequest', createProjectQuickPromptSchema);
+  registry.register('UpdateQuickPromptRequest', updateQuickPromptBodySchema);
+  registry.register('DeleteQuickPromptRequest', deleteQuickPromptBodySchema);
+  registry.register('CloneQuickPromptRequest', cloneQuickPromptSchema);
+  registry.register('QuickPromptResponse', quickPromptResponseSchema);
+  registry.register('QuickPromptListResponse', quickPromptListResponseSchema);
+  const quickPromptPaths = QuickPromptController.getOpenAPIPaths();
+  for (const path of quickPromptPaths) {
     registry.registerPath(path);
   }
 
