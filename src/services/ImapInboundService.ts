@@ -8,6 +8,7 @@ import { SmtpImapChannelHost } from '../channels/email/smtp-imap/SmtpImapChannel
 import { smtpImapChannelProviderConfigSchema } from './providers/channel/SmtpImapChannelProvider';
 import { SecretRefUtils } from './secrets/SecretRefUtils';
 import { logger } from '../utils/logger';
+import { extractRecipientEmails, resolveEmailRouting } from '../channels/email/shared/EmailRoutingUtils';
 
 type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
@@ -29,7 +30,7 @@ class ImapMailboxSession {
 
   constructor(
     public readonly providerId: string,
-    public readonly projectId: string,
+    public readonly defaultProjectId: string | undefined,
     public readonly imapHost: string,
     public readonly imapPort: number,
     public readonly imapSecure: boolean,
@@ -43,7 +44,7 @@ class ImapMailboxSession {
     public readonly smtpSecure: boolean,
     public readonly smtpAuthUser: string,
     public readonly smtpAuthPass: string,
-    public readonly keySettings: Record<string, unknown> | null,
+    public readonly emailToProject: Record<string, string> | undefined,
     public readonly oauth2AccessToken: string | undefined,
   ) {}
 
@@ -259,7 +260,9 @@ class ImapMailboxSession {
       const inReplyTo = parsed.inReplyTo || extractHeaderFromSource(source, 'In-Reply-To') || undefined;
       const references = parsed.references || extractHeaderFromSource(source, 'References') || undefined;
 
-      logger.info({ providerId: this.providerId, uid, from: senderEmail, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
+      const recipientEmails = extractRecipientEmails(parsed.to?.value?.map((v) => v.address) ?? parsed.to?.text);
+
+      logger.info({ providerId: this.providerId, uid, from: senderEmail, to: recipientEmails, subject, bodyLength: emailBody.length, messageId }, 'IMAP: parsed email');
 
       if (!emailBody) {
         logger.info({ uid, providerId: this.providerId }, 'Empty email body, skipping');
@@ -267,19 +270,36 @@ class ImapMailboxSession {
         return;
       }
 
+      if (!this.defaultProjectId) {
+        logger.error({ uid, providerId: this.providerId }, 'No default projectId configured for provider');
+        this.processedUids.add(uid);
+        return;
+      }
+
+      const routing = resolveEmailRouting(this.emailToProject, recipientEmails, this.defaultProjectId, this.fromAddress);
+
+      const apiKeyRecord = await findProjectApiKey(routing.projectId);
+      if (!apiKeyRecord) {
+        logger.warn({ uid, providerId: this.providerId, projectId: routing.projectId }, 'No API key found for routed project, skipping email');
+        this.processedUids.add(uid);
+        return;
+      }
+
       logger.info({
         uid,
         from: senderEmail,
-        subject,
+        to: recipientEmails,
+        targetEmail: routing.targetEmail,
+        projectId: routing.projectId,
         providerId: this.providerId,
-        projectId: this.projectId,
       }, 'Processing inbound email');
 
       const channelHost = container.resolve(SmtpImapChannelHost);
       await channelHost.handleInboundEmail(
-        this.projectId,
-        this.keySettings,
+        routing.projectId,
+        apiKeyRecord.keySettings,
         this.fromAddress,
+        routing.targetEmail,
         this.threadingStrategy,
         this.providerId,
         this.smtpHost,
@@ -367,6 +387,19 @@ async function resolveOAuth2RefreshService(): Promise<{ refreshProvider: (id: st
   return container.resolve(mod.OAuth2TokenRefreshService);
 }
 
+async function findProjectApiKey(projectId: string): Promise<{ key: string; keySettings: Record<string, unknown> | null } | null> {
+  const keys = await db.select().from(apiKeys).where(eq(apiKeys.projectId, projectId));
+
+  const activeKey = keys.find((k) => k.isActive);
+  if (activeKey) {
+    return {
+      key: activeKey.key,
+      keySettings: activeKey.keySettings ?? null,
+    };
+  }
+  return null;
+}
+
 @singleton()
 export class ImapInboundService {
   private sessions: Map<string, ImapMailboxSession> = new Map();
@@ -441,9 +474,8 @@ export class ImapInboundService {
       return;
     }
 
-    const apiKeyRecord = await this.findProjectApiKey(config.projectId);
-    if (!apiKeyRecord) {
-      logger.warn({ providerId, projectId: config.projectId }, 'No API key found for project, skipping IMAP reload');
+    if (!config.projectId && !config.emailToProject) {
+      logger.warn({ providerId }, 'SMTP/IMAP provider has neither projectId nor emailToProject, skipping reload');
       return;
     }
 
@@ -463,7 +495,7 @@ export class ImapInboundService {
       config.smtp.secure,
       config.smtp.auth.user,
       config.smtp.auth.pass,
-      apiKeyRecord.keySettings ?? null,
+      config.emailToProject,
       config.oauth2?.accessToken,
     );
 
@@ -504,9 +536,8 @@ export class ImapInboundService {
           continue;
         }
 
-        const apiKeyRecord = await this.findProjectApiKey(config.projectId);
-        if (!apiKeyRecord) {
-          logger.warn({ providerId: provider.id, projectId: config.projectId }, 'No API key found for project, skipping IMAP inbound');
+        if (!config.projectId && !config.emailToProject) {
+          logger.warn({ providerId: provider.id }, 'SMTP/IMAP provider has neither projectId nor emailToProject, skipping');
           continue;
         }
 
@@ -526,7 +557,7 @@ export class ImapInboundService {
           config.smtp.secure,
           config.smtp.auth.user,
           config.smtp.auth.pass,
-          apiKeyRecord.keySettings ?? null,
+          config.emailToProject,
           config.oauth2?.accessToken,
         );
 
@@ -541,18 +572,5 @@ export class ImapInboundService {
     } catch (error) {
       logger.error({ error }, 'Error during IMAP provider discovery');
     }
-  }
-
-  private async findProjectApiKey(projectId: string): Promise<{ key: string; keySettings: Record<string, unknown> | null } | null> {
-    const keys = await db.select().from(apiKeys).where(eq(apiKeys.projectId, projectId));
-
-    const activeKey = keys.find((k) => k.isActive);
-    if (activeKey) {
-      return {
-        key: activeKey.key,
-        keySettings: activeKey.keySettings ?? null,
-      };
-    }
-    return null;
   }
 }

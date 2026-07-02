@@ -39,11 +39,12 @@ const oauth2ConfigSchema = z.strictObject({
 }).openapi('SmtpImapOauth2Config');
 
 export const smtpImapChannelProviderConfigSchema = z.strictObject({
-  projectId: z.string().describe('Project ID that this email channel belongs to (required for IMAP inbound routing)'),
+  projectId: z.string().optional().describe('Default project ID for inbound email routing. Required when emailToProject is not set. When emailToProject is set, used as fallback for unmatched recipient addresses.'),
   fromAddress: z.string().email().describe('Sender email address'),
   smtp: smtpConfigSchema.describe('SMTP server configuration for sending emails'),
   imap: imapConfigSchema.describe('IMAP server configuration for receiving inbound email replies'),
   threadingStrategy: z.enum(['messageId', 'senderSubject']).default('messageId').describe('How to derive thread ID for conversation continuity'),
+  emailToProject: z.record(z.string().email(), z.string()).optional().describe('Maps recipient email addresses to project IDs for multi-project inbound routing. When an email arrives, its To: field is matched against this map to determine the target project. Replies use the matched To: address as the From: field.'),
   oauth2: oauth2ConfigSchema.optional().describe('Optional OAuth2/XOAUTH2 configuration. When present, supersedes password-based authentication for both SMTP and IMAP.'),
 }).openapi('SmtpImapChannelConfig');
 
