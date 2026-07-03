@@ -98,7 +98,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
 
     const newToken = configResult.data.oauth2?.accessToken;
 
-    if (newToken !== this.cachedOAuth2Token) {
+    if (!this.transporter || newToken !== this.cachedOAuth2Token) {
       this.cachedOAuth2Token = newToken;
       this.createTransporter(newToken);
     }
