@@ -396,7 +396,7 @@ export class TelegramChannelHost {
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
-    this.sessionManager.setSessionProjectAndSettings(sessionId, ctx.projectId, defaultSettings, ctx.keySettings ?? null);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, ctx.projectId, defaultSettings, ctx.keySettings ?? null, null);
     this.userSessionMap.set(userKey, sessionId);
     this.scheduleTimeout(sessionId, userKey);
 
