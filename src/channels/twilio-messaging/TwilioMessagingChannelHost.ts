@@ -224,7 +224,7 @@ export class TwilioMessagingChannelHost {
       const sessionId = this.sessionManager.registerSession(connection);
       const session = this.sessionManager.getSession(sessionId);
       connection.attachSession(session);
-      this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+      this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null, null);
       this.phoneSessionMap.set(phoneKey, sessionId);
       this.scheduleTimeout(sessionId, phoneKey);
 
@@ -335,7 +335,7 @@ export class TwilioMessagingChannelHost {
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
-    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null, null);
     this.phoneSessionMap.set(phoneKey, sessionId);
     this.scheduleTimeout(sessionId, phoneKey);
 

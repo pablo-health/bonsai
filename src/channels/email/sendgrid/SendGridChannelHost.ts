@@ -160,7 +160,7 @@ export class SendGridChannelHost {
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
-    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null, null);
     const emailKey = `${projectId}:${sessionId}`;
     this.emailSessionMap.set(emailKey, sessionId);
     this.scheduleTimeout(sessionId, emailKey);
@@ -258,7 +258,7 @@ export class SendGridChannelHost {
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     connection.attachSession(session);
-    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null);
+    this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null, null);
 
     const conversation = await this.conversationService.createConversation({
       projectId,

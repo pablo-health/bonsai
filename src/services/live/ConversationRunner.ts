@@ -13,6 +13,7 @@ import { ConversationRecorder } from "./ConversationRecorder";
 import { logger } from "../../utils/logger";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
+import { getEffectiveChannelType } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
 import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
 import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../providers/llm/ILlmProvider";
@@ -999,7 +1000,7 @@ export class ConversationRunner {
     await this.saveAndSendEvent('conversation_start', eventData);
     logger.info({ conversationId: this.conversation.id, stageId: this.stageData.id }, 'Conversation started');
 
-    const context = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+    const context = await this.contextBuilder.buildContextForConversationStart(this.conversation, getEffectiveChannelType(this.session));
 
     // Execute __conversation_start global lifecycle action if defined
     const onConversationStartAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_START);
@@ -1065,7 +1066,7 @@ export class ConversationRunner {
     const onConversationResumeAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_RESUME);
     if (onConversationResumeAction) {
       logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_resume lifecycle action');
-      const resumeContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+      const resumeContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, getEffectiveChannelType(this.session));
       const resumeOutcome = await this.actionsExecutor.executeActions([onConversationResumeAction], resumeContext, this.stageData.id, 'conversation_resume', this.saveAndSendEvent.bind(this));
       await this.applyActionOutcome(resumeContext, resumeOutcome);
     }
@@ -1083,7 +1084,7 @@ export class ConversationRunner {
     const onConversationEndAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_END);
     if (!onConversationEndAction) return;
     logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_end lifecycle action (client command)');
-    const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+    const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, getEffectiveChannelType(this.session));
     const endOutcome = await this.actionsExecutor.executeActions([onConversationEndAction], endContext, this.stageData.id, 'conversation_end', this.saveAndSendEvent.bind(this));
     await this.applyActionOutcome(endContext, endOutcome);
   }
@@ -1345,7 +1346,7 @@ export class ConversationRunner {
       const onLeaveAction = oldStageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_LEAVE];
       if (onLeaveAction) {
         logger.debug({ conversationId: this.conversation.id, stageId: fromStageId }, 'Executing __on_leave lifecycle action');
-        const context = await this.contextBuilder.buildContextForLifecycleAction(oldStageData.conversation, oldStageData.stage, this.channel?.connectionType);
+        const context = await this.contextBuilder.buildContextForLifecycleAction(oldStageData.conversation, oldStageData.stage, getEffectiveChannelType(this.session));
         const leaveOutcome = await this.actionsExecutor.executeActions([onLeaveAction], context, oldStageData.id, 'on_leave', this.saveAndSendEvent.bind(this));
 
         await this.applyActionOutcome(context, leaveOutcome);
@@ -1423,7 +1424,7 @@ export class ConversationRunner {
       await this.saveAndSendEvent('jump_to_stage', eventData);
 
       // Execute __on_enter lifecycle action if defined on new stage
-      const enterContext = await this.contextBuilder.buildContextForLifecycleAction(this.stageData.conversation, this.stageData.stage, this.channel?.connectionType);
+      const enterContext = await this.contextBuilder.buildContextForLifecycleAction(this.stageData.conversation, this.stageData.stage, getEffectiveChannelType(this.session));
       let enterOutcome: ActionsExecutionOutcome | null = null;
       const onEnterAction = this.stageData.stage.actions[LIFECYCLE_ACTION_NAMES.ON_ENTER];
       if (onEnterAction) {
@@ -1633,7 +1634,7 @@ export class ConversationRunner {
 
     const actionToExecute = stageAction || globalAction;
     logger.info({ conversationId: this.conversation.id, actionName }, `Executing action ${actionName}`);
-    const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters, this.channel?.connectionType);
+    const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters, getEffectiveChannelType(this.session));
     logger.debug({ conversationId: this.conversation.id, actionName }, `Built context for action ${actionName}`);
     const outcome = await this.actionsExecutor.executeActions([actionToExecute], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
 
@@ -1700,7 +1701,7 @@ export class ConversationRunner {
 
     // Build conversation context for tool execution
     const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], '', '',
-      this.sampleCopyDistributor.getOriginalCopies(), '', '', undefined, this.channel?.connectionType);
+      this.sampleCopyDistributor.getOriginalCopies(), '', '', undefined, getEffectiveChannelType(this.session));
 
     // Execute the tool
     const executeResult = await this.toolExecutor.executeTool(tool, context, parameters, this.stageData.costManagementConfig);
@@ -2252,7 +2253,7 @@ export class ConversationRunner {
     if (onConversationFailedAction) {
       try {
         logger.debug({ conversationId: this.conversation.id }, 'Executing __conversation_failed lifecycle action');
-        const failedContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+        const failedContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, getEffectiveChannelType(this.session));
         const failedOutcome = await this.actionsExecutor.executeActions([onConversationFailedAction], failedContext, this.stageData.id, 'conversation_failed', this.saveAndSendEvent.bind(this));
       } catch (lifecycleError) {
         logger.error({ conversationId: this.conversation.id, error: lifecycleError instanceof Error ? lifecycleError.message : String(lifecycleError) }, 'Failed to execute __conversation_failed lifecycle action');
@@ -2566,7 +2567,7 @@ export class ConversationRunner {
         if (decorator) {
           const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation,
             this.stageData.stage, nonKnowledgeResults, userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(),
-            copy, copyContent, this.stageData.faq, this.channel?.connectionType);
+            copy, copyContent, this.stageData.faq, getEffectiveChannelType(this.session));
           copy = await this.templatingEngine.render(decorator.template, context);
         }
       }
@@ -2578,7 +2579,7 @@ export class ConversationRunner {
     // and response-related effects from actions are ignored.
     const forcedCopyResponse = sampleCopies.length > 0 && selectedSampleCopy?.mode === 'forced' ? copy : null;
     const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, nonKnowledgeResults, userInput, userInputSource,
-      this.sampleCopyDistributor.getOriginalCopies(), copy, copyContent, this.stageData.faq, this.channel?.connectionType);
+      this.sampleCopyDistributor.getOriginalCopies(), copy, copyContent, this.stageData.faq, getEffectiveChannelType(this.session));
     const stageActionMap = new Map(Object.values(stageActions).map(sa => [sa.name, sa]));
 
     // Deduplicate actions by name - if multiple classifiers detect the same action, only include it once
@@ -2870,7 +2871,7 @@ export class ConversationRunner {
       logger.info({ globalActions: this.stageData.globalActions }, 'Checking for __moderation_blocked global action');
       const moderationBlockedAction = this.stageData.globalActions.find(ga => ga.id === '__moderation_blocked');
       if (moderationBlockedAction) {
-        const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, this.channel?.connectionType);
+        const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, [], userInput, userInputSource, this.sampleCopyDistributor.getOriginalCopies(), '', '', this.stageData.faq, getEffectiveChannelType(this.session));
         const executionOutcome = await this.actionsExecutor.executeActions([moderationBlockedAction], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
         await this.applyActionOutcome(context, executionOutcome);
         const messageEventData: MessageEventData = {
@@ -2905,7 +2906,7 @@ export class ConversationRunner {
     if (!fillerLlmProvider || !fillerSettings) {
       return null;
     }
-    const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, this.channel?.connectionType);
+    const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, getEffectiveChannelType(this.session));
     const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
     const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
     let recentHistory = [...context.history];
@@ -2944,7 +2945,7 @@ export class ConversationRunner {
       return null;
     }
     try {
-      const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, this.channel?.connectionType);
+      const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, getEffectiveChannelType(this.session));
       const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
       const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
       // The current user message is already in context.history (saved to DB before context is built),
@@ -3091,7 +3092,7 @@ export class ConversationRunner {
       try {
         const onConversationEndAction = this.conversationLifecycleActions.get(CONVERSATION_LIFECYCLE_ACTION_IDS.ON_END);
         if (onConversationEndAction) {
-          const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, this.channel?.connectionType);
+          const endContext = await this.contextBuilder.buildContextForConversationStart(this.conversation, getEffectiveChannelType(this.session));
           await this.actionsExecutor.executeActions([onConversationEndAction], endContext, this.stageData.id, 'conversation_end', this.saveAndSendEvent.bind(this));
         }
         const eventData: ConversationEndEventData = { stageId: this.stageData.id, reason: 'Conversation ended due to prolonged user silence' };
