@@ -40,6 +40,7 @@ const webhookQuerySchema = z.object({
 export class SmtpImapChannelHost {
   private readonly emailSessionMap = new Map<string, string>();
   private readonly sessionTimeoutMap = new Map<string, NodeJS.Timeout>();
+  private readonly conversationTargetEmailMap = new Map<string, string>();
 
   private readonly timeoutMs = parseInt(process.env.EMAIL_SESSION_TIMEOUT_MS ?? String(DEFAULT_SESSION_TIMEOUT_MS), 10);
 
@@ -161,9 +162,10 @@ export class SmtpImapChannelHost {
     }
 
     const subject = body.subject ?? 'New Conversation';
+    const resolvedFromAddress = body.fromAddress ?? fromAddress;
     const connection = new SmtpImapConnection(
       body.to,
-      body.fromAddress ?? fromAddress,
+      resolvedFromAddress,
       threadingStrategy ?? 'messageId',
       this.sessionManager,
       subject,
@@ -196,11 +198,12 @@ export class SmtpImapChannelHost {
       stageId: resolvedStageId,
       status: 'initialized',
       direction: 'outgoing',
-      metadata: body.metadata ?? null,
+      metadata: body.metadata ? { ...body.metadata, targetEmail: resolvedFromAddress } : { targetEmail: resolvedFromAddress },
     }, SYSTEM_CONTEXT);
 
     const emailKey = `${projectId}:${conversation.id}`;
     this.emailSessionMap.set(emailKey, sessionId);
+    this.conversationTargetEmailMap.set(conversation.id, resolvedFromAddress);
     this.scheduleTimeout(sessionId, emailKey);
     connection.setConversationId(conversation.id);
 
@@ -235,6 +238,7 @@ export class SmtpImapChannelHost {
     projectId: string,
     keySettings: Record<string, unknown> | null,
     fromAddress: string,
+    targetEmail: string,
     threadingStrategy: 'messageId' | 'senderSubject',
     providerId: string,
     smtpHost: string,
@@ -252,7 +256,7 @@ export class SmtpImapChannelHost {
     agentId: string | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
-    logger.info({ projectId, from: senderEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
+    logger.info({ projectId, from: senderEmail, to: targetEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
@@ -265,6 +269,10 @@ export class SmtpImapChannelHost {
           if (references) {
             existingSession.clientConnection.setReferencesChain(references);
           }
+          const storedTargetEmail = this.conversationTargetEmailMap.get(replyConversationId);
+          if (storedTargetEmail) {
+            existingSession.clientConnection.setReplyFromAddress(storedTargetEmail);
+          }
         }
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
@@ -275,7 +283,7 @@ export class SmtpImapChannelHost {
 
     const connection = new SmtpImapConnection(
       senderEmail,
-      fromAddress,
+      targetEmail,
       threadingStrategy ?? 'messageId',
       this.sessionManager,
       subject ?? 'Re: Conversation',
@@ -310,6 +318,7 @@ export class SmtpImapChannelHost {
 
     if (replyConversationId) {
       conversationId = replyConversationId;
+      this.conversationTargetEmailMap.set(conversationId, targetEmail);
       await this.sessionManager.attachConversationToSession(sessionId, conversationId);
       const resumedSession = this.sessionManager.getSession(sessionId);
       await resumedSession.runner?.resumeConversation();
@@ -345,7 +354,7 @@ export class SmtpImapChannelHost {
         sessionId,
         status: 'initialized',
         direction: 'incoming',
-        metadata: null,
+        metadata: { targetEmail },
       }, SYSTEM_CONTEXT);
       conversationId = conversation.id;
 
@@ -359,6 +368,7 @@ export class SmtpImapChannelHost {
     connection.setConversationId(conversationId);
     const emailKey = `${projectId}:${conversationId}`;
     this.emailSessionMap.set(emailKey, sessionId);
+    this.conversationTargetEmailMap.set(conversationId, targetEmail);
     this.scheduleTimeout(sessionId, emailKey);
 
     await this.dispatchTextInput(sessionId, emailBody);
@@ -387,6 +397,10 @@ export class SmtpImapChannelHost {
     const handle = setTimeout(async () => {
       logger.info({ sessionId }, 'SMTP/IMAP: session timed out due to inactivity');
       this.emailSessionMap.delete(emailKey);
+      const session = this.sessionManager.getSession(sessionId);
+      if (session?.conversationId) {
+        this.conversationTargetEmailMap.delete(session.conversationId);
+      }
       this.sessionTimeoutMap.delete(sessionId);
       try {
         await this.sessionManager.unregisterSession(sessionId);

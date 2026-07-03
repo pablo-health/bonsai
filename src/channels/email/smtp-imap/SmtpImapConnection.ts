@@ -23,6 +23,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private referencesChain: string[] = [];
   private skipNextEmail = false;
   private cachedOAuth2Token: string | undefined;
+  private replyFromAddress: string | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -135,6 +136,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.skipNextEmail = skip;
   }
 
+  setReplyFromAddress(address: string): void {
+    this.replyFromAddress = address;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -177,7 +182,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   protected async sendEmail(to: string, subject: string, body: string, headers?: EmailHeaders): Promise<void> {
     await this.ensureTransporter();
     const messageId = headers?.messageId ?? this.generateMessageId();
-    const from = headers?.from ?? this.fromAddress ?? this.smtpAuthUser;
+    const from = headers?.from ?? this.replyFromAddress ?? this.fromAddress ?? this.smtpAuthUser;
 
     const mailOptions: nodemailer.SendMailOptions = {
       from,
