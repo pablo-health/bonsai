@@ -8,6 +8,8 @@ import { logger } from '../../../utils/logger';
 export class SendGridConnection extends EmailConnectionBase {
   readonly connectionType = 'sendgrid' as const;
 
+  private cc: string | undefined;
+  private bcc: string | undefined;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
   private skipNextEmail = false;
@@ -19,8 +21,12 @@ export class SendGridConnection extends EmailConnectionBase {
     sessionManager: SessionManager,
     private readonly subject: string,
     private readonly apiKey: string,
+    cc: string | undefined,
+    bcc: string | undefined,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'sendgrid');
+    this.cc = cc;
+    this.bcc = bcc;
   }
 
   setConversationId(id: string): void {
@@ -28,7 +34,15 @@ export class SendGridConnection extends EmailConnectionBase {
   }
 
   setInboundMessageId(id: string): void {
-    this.inboundMessageId = id;
+    this.inboundMessageId = id || undefined;
+  }
+
+  setCc(cc: string | undefined): void {
+    this.cc = cc;
+  }
+
+  setBcc(bcc: string | undefined): void {
+    this.bcc = bcc;
   }
 
   setSkipNextEmail(skip: boolean): void {
@@ -82,12 +96,17 @@ export class SendGridConnection extends EmailConnectionBase {
     if (headers?.inReplyTo) customArgs['X-In-Reply-To'] = headers.inReplyTo;
     if (headers?.references) customArgs['X-References'] = headers.references;
 
+    const resolvedCc = headers?.cc ?? this.cc;
+    const resolvedBcc = headers?.bcc ?? this.bcc;
+
     await sg.send({
       to: [{ email: to }],
       from: { email: headers?.from ?? this.fromAddress },
       subject: headers?.subject ?? subject,
       text: body,
       customArgs,
+      cc: resolvedCc ? [resolvedCc] : undefined,
+      bcc: resolvedBcc ? [resolvedBcc] : undefined,
     });
     logger.info({ to, sessionId: this.session?.id }, 'SendGrid email sent');
   }

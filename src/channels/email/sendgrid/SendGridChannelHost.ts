@@ -25,6 +25,7 @@ import type { SendGridSendResponse } from '../../../http/contracts/sendgrid-outg
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
+import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -155,7 +156,7 @@ export class SendGridChannelHost {
       }
     }
 
-    const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey);
+    const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey, undefined, undefined);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
@@ -213,9 +214,13 @@ export class SendGridChannelHost {
       res.status(500).json({ error: 'Channel provider config is invalid' });
       return;
     }
-    const { apiKey, fromAddress } = configResult.data;
+    const { apiKey, fromAddress, emailToProject } = configResult.data;
 
-    let resolvedStageId = body.stageId ?? queryStageId;
+    const fromAddressLookup = body.fromAddress ?? fromAddress;
+    const routing = emailToProject ? resolveEmailRouting(emailToProject, extractRecipientEmails(fromAddressLookup), projectId, fromAddress) : null;
+    const resolvedFromAddress = body.fromAddress ?? routing?.fromAddress ?? fromAddress;
+
+    let resolvedStageId = body.stageId ?? queryStageId ?? routing?.stageId;
     if (!resolvedStageId) {
       const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
@@ -224,7 +229,10 @@ export class SendGridChannelHost {
         return;
       }
     }
-    const resolvedAgentId = body.agentId ?? queryAgentId;
+    const resolvedAgentId = body.agentId ?? queryAgentId ?? routing?.agentId;
+    const resolvedCc = body.cc ?? routing?.cc;
+    const resolvedBcc = body.bcc ?? routing?.bcc;
+    const resolvedSubject = body.subject ?? routing?.subject ?? 'New Conversation';
 
     try {
       await this.userService.getUserById(projectId, body.to);
@@ -245,14 +253,15 @@ export class SendGridChannelHost {
       await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
     }
 
-    const subject = body.subject ?? 'New Conversation';
     const connection = new SendGridConnection(
       body.to,
-      body.fromAddress ?? fromAddress,
+      resolvedFromAddress,
       'messageId',
       this.sessionManager,
-      subject,
+      resolvedSubject,
       apiKey,
+      resolvedCc,
+      resolvedBcc,
     );
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);

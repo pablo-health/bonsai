@@ -18,6 +18,8 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private readonly smtpHost: string;
   private readonly smtpPort: number;
   private readonly smtpSecure: boolean;
+  private cc: string | undefined;
+  private bcc: string | undefined;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
   private referencesChain: string[] = [];
@@ -37,12 +39,16 @@ export class SmtpImapConnection extends EmailConnectionBase {
     smtpSecure: boolean,
     smtpAuthUser: string,
     private readonly smtpAuthPass: string,
+    cc: string | undefined,
+    bcc: string | undefined,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'smtp_imap');
     this.smtpAuthUser = smtpAuthUser;
     this.smtpHost = smtpHost;
     this.smtpPort = smtpPort;
     this.smtpSecure = smtpSecure;
+    this.cc = cc;
+    this.bcc = bcc;
   }
 
   private createTransporter(oauth2Token?: string): void {
@@ -140,6 +146,14 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.replyFromAddress = address;
   }
 
+  setCc(cc: string | undefined): void {
+    this.cc = cc;
+  }
+
+  setBcc(bcc: string | undefined): void {
+    this.bcc = bcc;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -190,6 +204,8 @@ export class SmtpImapConnection extends EmailConnectionBase {
       subject: headers?.subject ?? subject,
       text: body,
       headers: {},
+      cc: headers?.cc ?? this.cc,
+      bcc: headers?.bcc ?? this.bcc,
     };
 
     (mailOptions.headers as Record<string, string>)['Message-ID'] = messageId;

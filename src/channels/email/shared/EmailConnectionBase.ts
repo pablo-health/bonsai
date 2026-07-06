@@ -11,6 +11,8 @@ export interface EmailHeaders {
   from?: string;
   to?: string;
   subject?: string;
+  cc?: string;
+  bcc?: string;
   messageId?: string;
   inReplyTo?: string;
   references?: string;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
+import { emailRoutingEntrySchema } from '../../../channels/email/shared/EmailRoutingTypes';
 
 extendZodWithOpenApi(z);
 
@@ -44,7 +45,7 @@ export const smtpImapChannelProviderConfigSchema = z.strictObject({
   smtp: smtpConfigSchema.describe('SMTP server configuration for sending emails'),
   imap: imapConfigSchema.describe('IMAP server configuration for receiving inbound email replies'),
   threadingStrategy: z.enum(['messageId', 'senderSubject']).default('messageId').describe('How to derive thread ID for conversation continuity'),
-  emailToProject: z.record(z.string().email(), z.string()).optional().describe('Maps recipient email addresses to project IDs for multi-project inbound routing. When an email arrives, its To: field is matched against this map to determine the target project. Replies use the matched To: address as the From: field.'),
+  emailToProject: z.record(z.string().email(), z.union([z.string(), emailRoutingEntrySchema])).optional().describe('Maps email addresses to routing entries for multi-project routing. Each entry can specify projectId, cc, bcc, fromAddress, subject, stageId, and agentId. Plain string values (projectId only) are supported for backward compatibility. Inbound: matched against To: field. Outbound: matched against fromAddress.'),
   oauth2: oauth2ConfigSchema.optional().describe('Optional OAuth2/XOAUTH2 configuration. When present, supersedes password-based authentication for both SMTP and IMAP.'),
 }).openapi('SmtpImapChannelConfig');
 

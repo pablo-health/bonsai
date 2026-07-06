@@ -9,6 +9,7 @@ import { smtpImapChannelProviderConfigSchema } from './providers/channel/SmtpIma
 import { SecretRefUtils } from './secrets/SecretRefUtils';
 import { logger } from '../utils/logger';
 import { extractRecipientEmails, resolveEmailRouting } from '../channels/email/shared/EmailRoutingUtils';
+import type { EmailRoutingEntry } from '../channels/email/shared/EmailRoutingTypes';
 
 type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
@@ -44,7 +45,7 @@ class ImapMailboxSession {
     public readonly smtpSecure: boolean,
     public readonly smtpAuthUser: string,
     public readonly smtpAuthPass: string,
-    public readonly emailToProject: Record<string, string> | undefined,
+    public readonly emailToProject: Record<string, string | EmailRoutingEntry> | undefined,
     public readonly oauth2AccessToken: string | undefined,
   ) {}
 
@@ -313,8 +314,11 @@ class ImapMailboxSession {
         messageId,
         inReplyTo,
         references,
-        undefined,
-        undefined,
+        routing.stageId,
+        routing.agentId,
+        routing.cc,
+        routing.bcc,
+        routing.fromAddress,
       );
 
       this.processedUids.add(uid);

@@ -9,6 +9,8 @@ export class SesConnection extends EmailConnectionBase {
   readonly connectionType = 'ses' as const;
 
   private sesClient: SESClient;
+  private cc: string | undefined;
+  private bcc: string | undefined;
   private conversationId: string | undefined;
   private inboundMessageId: string | undefined;
   private skipNextEmail = false;
@@ -22,12 +24,16 @@ export class SesConnection extends EmailConnectionBase {
     private readonly accessKeyId: string,
     private readonly secretAccessKey: string,
     private readonly region: string,
+    cc: string | undefined,
+    bcc: string | undefined,
   ) {
     super(fromAddress, threadingStrategy, sessionManager, 'ses');
     this.sesClient = new SESClient({
       region,
       credentials: { accessKeyId, secretAccessKey },
     });
+    this.cc = cc;
+    this.bcc = bcc;
   }
 
   setConversationId(id: string): void {
@@ -35,7 +41,15 @@ export class SesConnection extends EmailConnectionBase {
   }
 
   setInboundMessageId(id: string): void {
-    this.inboundMessageId = id;
+    this.inboundMessageId = id || undefined;
+  }
+
+  setCc(cc: string | undefined): void {
+    this.cc = cc;
+  }
+
+  setBcc(bcc: string | undefined): void {
+    this.bcc = bcc;
   }
 
   setSkipNextEmail(skip: boolean): void {
@@ -89,9 +103,12 @@ export class SesConnection extends EmailConnectionBase {
       messageId,
       headers?.inReplyTo,
       headers?.references,
+      headers?.cc ?? this.cc,
+      headers?.bcc ?? this.bcc,
     );
 
-    await this.sesClient.send(new SendRawEmailCommand({ RawMessage: { Data: rawEmail } }));
+    const destinations = this.collectDestinations(to, headers?.cc, headers?.bcc ?? this.bcc);
+    await this.sesClient.send(new SendRawEmailCommand({ RawMessage: { Data: rawEmail }, Destinations: destinations }));
     logger.info({ to, sessionId: this.session?.id }, 'SES email sent');
   }
 
@@ -103,6 +120,8 @@ export class SesConnection extends EmailConnectionBase {
     messageId: string,
     inReplyTo?: string,
     references?: string,
+    cc?: string,
+    bcc?: string,
   ): Buffer {
     let raw = `From: ${from}\r\n`;
     raw += `To: ${to}\r\n`;
@@ -110,10 +129,29 @@ export class SesConnection extends EmailConnectionBase {
     raw += `Message-ID: ${messageId}\r\n`;
     raw += `MIME-Version: 1.0\r\n`;
     raw += `Content-Type: text/plain; charset=UTF-8\r\n`;
+    if (cc) raw += `Cc: ${cc}\r\n`;
     if (inReplyTo) raw += `In-Reply-To: ${inReplyTo}\r\n`;
     if (references) raw += `References: ${references}\r\n`;
     raw += `\r\n${body}`;
 
     return Buffer.from(raw);
+  }
+
+  private collectDestinations(to: string, cc?: string, bcc?: string): string[] {
+    const destinations = new Set<string>();
+    destinations.add(to);
+    if (cc) {
+      for (const addr of cc.split(',')) {
+        const email = addr.includes('<') ? addr.match(/<([^>]+)>/)?.[1] : addr.trim();
+        if (email) destinations.add(email);
+      }
+    }
+    if (bcc) {
+      for (const addr of bcc.split(',')) {
+        const email = addr.includes('<') ? addr.match(/<([^>]+)>/)?.[1] : addr.trim();
+        if (email) destinations.add(email);
+      }
+    }
+    return Array.from(destinations);
   }
 }
