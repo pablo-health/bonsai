@@ -265,6 +265,7 @@ export class SmtpImapChannelHost {
     cc: string | undefined,
     bcc: string | undefined,
     routingFromAddress: string | undefined,
+    onEmailSent: (() => void) | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
     logger.info({ projectId, from: senderEmail, to: targetEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
@@ -274,6 +275,7 @@ export class SmtpImapChannelHost {
       if (existingSessionId) {
         const existingSession = this.sessionManager.getSession(existingSessionId);
         if (existingSession?.clientConnection instanceof SmtpImapConnection) {
+          existingSession.clientConnection.setOnEmailSent(onEmailSent);
           if (messageId) {
             existingSession.clientConnection.setInboundMessageId(messageId);
           }
@@ -331,6 +333,7 @@ export class SmtpImapChannelHost {
     if (references) {
       connection.setReferencesChain(references);
     }
+    connection.setOnEmailSent(onEmailSent);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, defaultSettings, keySettings ?? null, null);
 
     let conversationId: string;
