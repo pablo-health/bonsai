@@ -25,6 +25,7 @@ import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
+import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { simpleParser } from 'mailparser';
 
@@ -213,6 +214,8 @@ export class SesChannelHost {
       accessKeyId,
       secretAccessKey,
       region,
+      undefined,
+      undefined,
     );
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
@@ -271,9 +274,13 @@ export class SesChannelHost {
       res.status(500).json({ error: 'Channel provider config is invalid' });
       return;
     }
-    const { accessKeyId, secretAccessKey, region, fromAddress } = configResult.data;
+    const { accessKeyId, secretAccessKey, region, fromAddress, emailToProject } = configResult.data;
 
-    let resolvedStageId = body.stageId ?? queryStageId;
+    const fromAddressLookup = body.fromAddress ?? fromAddress;
+    const routing = emailToProject ? resolveEmailRouting(emailToProject, extractRecipientEmails(fromAddressLookup), projectId, fromAddress) : null;
+    const resolvedFromAddress = body.fromAddress ?? routing?.fromAddress ?? fromAddress;
+
+    let resolvedStageId = body.stageId ?? queryStageId ?? routing?.stageId;
     if (!resolvedStageId) {
       const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
@@ -282,7 +289,10 @@ export class SesChannelHost {
         return;
       }
     }
-    const resolvedAgentId = body.agentId ?? queryAgentId;
+    const resolvedAgentId = body.agentId ?? queryAgentId ?? routing?.agentId;
+    const resolvedCc = body.cc ?? routing?.cc;
+    const resolvedBcc = body.bcc ?? routing?.bcc;
+    const resolvedSubject = body.subject ?? routing?.subject ?? 'New Conversation';
 
     try {
       await this.userService.getUserById(projectId, body.to);
@@ -303,16 +313,17 @@ export class SesChannelHost {
       await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
     }
 
-    const subject = body.subject ?? 'New Conversation';
     const connection = new SesConnection(
       body.to,
-      body.fromAddress ?? fromAddress,
+      resolvedFromAddress,
       'messageId',
       this.sessionManager,
-      subject,
+      resolvedSubject,
       accessKeyId,
       secretAccessKey,
       region,
+      resolvedCc,
+      resolvedBcc,
     );
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);

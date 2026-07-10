@@ -1,9 +1,6 @@
 import { logger } from '../../../utils/logger';
-
-export interface EmailRoutingResult {
-  projectId: string;
-  targetEmail: string;
-}
+import type { EmailRoutingEntry, EmailRoutingResult } from './EmailRoutingTypes';
+import { normalizeRoutingEntry } from './EmailRoutingTypes';
 
 export function extractRecipientEmails(to: string | string[] | undefined): string[] {
   if (!to) return [];
@@ -23,7 +20,7 @@ export function extractRecipientEmails(to: string | string[] | undefined): strin
 }
 
 export function resolveEmailRouting(
-  emailToProject: Record<string, string> | undefined,
+  emailToProject: Record<string, string | EmailRoutingEntry> | undefined,
   recipientEmails: string[],
   fallbackProjectId: string,
   fallbackTargetEmail: string,
@@ -32,23 +29,36 @@ export function resolveEmailRouting(
     return {
       projectId: fallbackProjectId,
       targetEmail: recipientEmails[0] ?? fallbackTargetEmail,
+      cc: undefined,
+      bcc: undefined,
+      fromAddress: undefined,
+      subject: undefined,
+      stageId: undefined,
+      agentId: undefined,
     };
   }
 
-  const normalizedMap: Record<string, string> = {};
+  const normalizedMap: Record<string, EmailRoutingEntry> = {};
 
-  for (const [email, projectId] of Object.entries(emailToProject)) {
-    normalizedMap[email.trim().toLowerCase()] = projectId;
+  for (const [email, entry] of Object.entries(emailToProject)) {
+    normalizedMap[email.trim().toLowerCase()] = normalizeRoutingEntry(entry);
   }
 
   for (const recipientEmail of recipientEmails) {
     const normalized = recipientEmail.trim().toLowerCase();
 
-    if (normalizedMap[normalized]) {
-      logger.info({ recipientEmail, projectId: normalizedMap[normalized] }, 'Email routed via emailToProject mapping');
+    const entry = normalizedMap[normalized];
+    if (entry) {
+      logger.info({ recipientEmail, projectId: entry.projectId }, 'Email routed via emailToProject mapping');
       return {
-        projectId: normalizedMap[normalized],
+        projectId: entry.projectId,
         targetEmail: normalized,
+        cc: entry.cc,
+        bcc: entry.bcc,
+        fromAddress: entry.fromAddress,
+        subject: entry.subject,
+        stageId: entry.stageId,
+        agentId: entry.agentId,
       };
     }
   }
@@ -57,5 +67,11 @@ export function resolveEmailRouting(
   return {
     projectId: fallbackProjectId,
     targetEmail: recipientEmails[0] ?? fallbackTargetEmail,
+    cc: undefined,
+    bcc: undefined,
+    fromAddress: undefined,
+    subject: undefined,
+    stageId: undefined,
+    agentId: undefined,
   };
 }

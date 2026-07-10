@@ -26,6 +26,7 @@ import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { OAuth2TokenRefreshService } from '../../../services/OAuth2TokenRefreshService';
 import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
+import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -124,14 +125,18 @@ export class SmtpImapChannelHost {
       res.status(500).json({ error: 'Channel provider config is invalid' });
       return;
     }
-    const { fromAddress, smtp, threadingStrategy, oauth2 } = configResult.data;
+    const { fromAddress, smtp, threadingStrategy, oauth2, emailToProject } = configResult.data;
 
     if (oauth2?.accessToken && oauth2.accessTokenExpiry && Date.now() >= oauth2.accessTokenExpiry) {
       logger.info({ channelProviderId }, 'SMTP/IMAP outgoing: OAuth2 token expired, refreshing inline');
       await this.oauth2TokenRefreshService.refreshProvider(channelProviderId);
     }
 
-    let resolvedStageId = body.stageId ?? queryStageId;
+    const fromAddressLookup = body.fromAddress ?? fromAddress;
+    const routing = emailToProject ? resolveEmailRouting(emailToProject, extractRecipientEmails(fromAddressLookup), projectId, fromAddress) : null;
+    const resolvedFromAddress = body.fromAddress ?? routing?.fromAddress ?? fromAddress;
+
+    let resolvedStageId = body.stageId ?? queryStageId ?? routing?.stageId;
     if (!resolvedStageId) {
       const project = await this.projectService.getProjectById(projectId, SYSTEM_CONTEXT);
       resolvedStageId = project.startingStageId ?? undefined;
@@ -140,7 +145,10 @@ export class SmtpImapChannelHost {
         return;
       }
     }
-    const resolvedAgentId = body.agentId ?? queryAgentId;
+    const resolvedAgentId = body.agentId ?? queryAgentId ?? routing?.agentId;
+    const resolvedCc = body.cc ?? routing?.cc;
+    const resolvedBcc = body.bcc ?? routing?.bcc;
+    const resolvedSubject = body.subject ?? routing?.subject ?? 'New Conversation';
 
     try {
       await this.userService.getUserById(projectId, body.to);
@@ -161,20 +169,20 @@ export class SmtpImapChannelHost {
       await this.userService.updateUserProfile(projectId, body.to, body.userProfile);
     }
 
-    const subject = body.subject ?? 'New Conversation';
-    const resolvedFromAddress = body.fromAddress ?? fromAddress;
     const connection = new SmtpImapConnection(
       body.to,
       resolvedFromAddress,
       threadingStrategy ?? 'messageId',
       this.sessionManager,
-      subject,
+      resolvedSubject,
       channelProviderId,
       smtp.host,
       smtp.port,
       smtp.secure,
       smtp.auth.user,
       smtp.auth.pass,
+      resolvedCc,
+      resolvedBcc,
     );
 
     try {
@@ -254,6 +262,9 @@ export class SmtpImapChannelHost {
     references: string | string[] | undefined,
     stageId: string | undefined,
     agentId: string | undefined,
+    cc: string | undefined,
+    bcc: string | undefined,
+    routingFromAddress: string | undefined,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
     logger.info({ projectId, from: senderEmail, to: targetEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
@@ -273,6 +284,12 @@ export class SmtpImapChannelHost {
           if (storedTargetEmail) {
             existingSession.clientConnection.setReplyFromAddress(storedTargetEmail);
           }
+          if (cc !== undefined) {
+            existingSession.clientConnection.setCc(cc);
+          }
+          if (bcc !== undefined) {
+            existingSession.clientConnection.setBcc(bcc);
+          }
         }
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
@@ -283,7 +300,7 @@ export class SmtpImapChannelHost {
 
     const connection = new SmtpImapConnection(
       senderEmail,
-      targetEmail,
+      routingFromAddress ?? targetEmail,
       threadingStrategy ?? 'messageId',
       this.sessionManager,
       subject ?? 'Re: Conversation',
@@ -293,6 +310,8 @@ export class SmtpImapChannelHost {
       smtpSecure,
       smtpAuthUser,
       smtpAuthPass,
+      cc,
+      bcc,
     );
 
     try {
