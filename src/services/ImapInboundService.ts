@@ -379,8 +379,7 @@ class ImapMailboxSession {
           });
         });
         logger.info({ folder: current, providerId: this.providerId }, 'Created IMAP folder');
-      } catch (error) {
-        logger.warn({ error, folder: current, providerId: this.providerId }, 'Failed to create IMAP folder');
+      } catch {
         return;
       }
     }
