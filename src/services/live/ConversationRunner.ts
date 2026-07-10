@@ -1,4 +1,6 @@
 import { z } from "zod";
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { inject, injectable } from "tsyringe";
 import { NotFoundError, InvalidOperationError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
@@ -15,7 +17,7 @@ import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import { getEffectiveChannelType } from "../../channels/SessionManager";
 import type { IClientConnection } from '../../channels/IClientConnection';
-import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage, CALUserSpeakingStartedMessage } from '../../channels/messages';
+import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage,   CALUserSpeakingStartedMessage, CALAttachFileOutputMessage } from '../../channels/messages';
 import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider } from "../providers/asr/IAsrProvider";
@@ -186,6 +188,14 @@ export class ConversationRunner {
   private turnMessageVisibility: MessageVisibility | undefined = undefined;
   /** Terminal action (end or abort) deferred until after the current turn's response has been fully delivered to the client */
   private pendingPostResponseAction: PendingPostResponseAction | null = null;
+  /** Uploaded file attachments ready for delivery with the current turn's response. Cleared after delivery. */
+  private pendingFileAttachments: Array<{
+    artifactId: string;
+    fileName: string;
+    mimeType: string;
+    fileSize: number;
+    downloadUrl: string;
+  }> = [];
   /** Sample copy distributor */
   private sampleCopyDistributor: SampleCopyDistributor | null = null;
   /** Session-scoped inbound converter: client audio format → ASR input format. Null when no conversion is needed. */
@@ -735,6 +745,9 @@ export class ConversationRunner {
             }
           }
 
+          // Deliver pending file attachments before end_ai_generation_output
+          await this.deliverPendingFileAttachments();
+          this.pendingFileAttachments = [];
           // Send AI response end notification to client through channel
           // TODO: we need a dedicated message for sending full text after TTS generation is complete, as end_ai_voice_output is more about signaling the end of audio output, not necessarily tied to the text content
           const llmText = extractTextFromContent(this.stageData.lastCompletionResult?.content ?? []);
@@ -905,6 +918,9 @@ export class ConversationRunner {
         this.turnData.assistantMessageEventId = await this.saveAndSendEvent('message', messageEventData);
 
         if (!ttsProvider) {
+          // Deliver pending file attachments before end_ai_generation_output
+          await this.deliverPendingFileAttachments();
+          this.pendingFileAttachments = [];
           // send end generation message to client to signal that response is complete and change state to awaiting user input
           const endGenerationMessage: CALEndAiGenerationOutputMessage = {
             type: 'end_ai_generation_output',
@@ -1040,7 +1056,8 @@ export class ConversationRunner {
         success: true,
         shouldAbortConversation: false,
         shouldEndConversation: false,
-        shouldGenerateResponse: true
+        shouldGenerateResponse: true,
+        stagedAttachments: [],
       };
       await this.generateResponse(context, outcome);
     } else {
@@ -1455,7 +1472,8 @@ export class ConversationRunner {
           success: true,
           shouldAbortConversation: false,
           shouldEndConversation: false,
-          shouldGenerateResponse: true
+          shouldGenerateResponse: true,
+          stagedAttachments: [],
         };
         await this.generateResponse(enterContext, executionOutcome);
       } else {
@@ -2701,6 +2719,104 @@ export class ConversationRunner {
     await this.generateResponse(context, executionOutcome);
   }
 
+  /**
+   * Uploads staged file attachments as conversation artifacts.
+   * Files are read from disk, uploaded to storage, and recorded in pendingFileAttachments for delivery.
+   */
+  private async uploadStagedAttachments(stagedAttachments: Array<{ filePath: string; fileName: string; mimeType: string }>): Promise<void> {
+    const conversationId = this.conversation.id;
+    const storageConfig = this.stageData.project.storageConfig;
+
+    if (!storageConfig?.storageProviderId) {
+      logger.warn({ conversationId, attachmentCount: stagedAttachments.length }, 'Storage provider not configured — file attachments cannot be uploaded');
+      return;
+    }
+
+    for (const attachment of stagedAttachments) {
+      try {
+        const fileData = await fs.readFile(attachment.filePath);
+        const resolvedMimeType = attachment.mimeType || this.getMimeTypeFromExtension(attachment.filePath);
+        const { id: artifactId, url: downloadUrl } = await this.conversationStorageService.uploadArtifact(
+          storageConfig,
+          this.stageData.project.id,
+          conversationId,
+          'attachment',
+          fileData,
+          { contentType: resolvedMimeType, customMetadata: { fileName: attachment.fileName } },
+          undefined,
+          this.turnData.inputTurnId,
+          this.turnData.outputTurnId,
+        );
+        this.pendingFileAttachments.push({
+          artifactId,
+          fileName: attachment.fileName,
+          mimeType: resolvedMimeType,
+          fileSize: fileData.length,
+          downloadUrl,
+        });
+        logger.info({ conversationId, artifactId, fileName: attachment.fileName, fileSize: fileData.length }, 'File attachment uploaded successfully');
+      } catch (error) {
+        logger.error({ conversationId, filePath: attachment.filePath, error: error instanceof Error ? error.message : String(error) }, 'Failed to upload file attachment');
+      }
+    }
+  }
+
+  /**
+   * Infers MIME type from file extension.
+   */
+  private getMimeTypeFromExtension(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.webp': 'image/webp',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.mp4': 'video/mp4',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.html': 'text/html',
+      '.zip': 'application/zip',
+    };
+    return mimeTypes[ext] || 'application/octet-stream';
+  }
+
+  /**
+   * Delivers pending file attachments to the client as attach_file_output messages.
+   * Must be called after text/voice output but before end_ai_generation_output.
+   */
+  private async deliverPendingFileAttachments(): Promise<void> {
+    if (this.pendingFileAttachments.length === 0) return;
+
+    const outputTurnId = this.turnData.outputTurnId;
+    for (let i = 0; i < this.pendingFileAttachments.length; i++) {
+      const attachment = this.pendingFileAttachments[i];
+      const fileMessage: CALAttachFileOutputMessage = {
+        type: 'attach_file_output',
+        conversationId: this.conversation.id,
+        outputTurnId,
+        artifactId: attachment.artifactId,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        fileSize: attachment.fileSize,
+        downloadUrl: attachment.downloadUrl,
+        sequenceNumber: i,
+      };
+      await this.channel.sendMessage(fileMessage);
+    }
+
+    logger.info({ conversationId: this.conversation.id, count: this.pendingFileAttachments.length }, 'Delivered file attachments');
+  }
+
   private async generateResponse(context: ConversationContext, executionOutcome: ActionsExecutionOutcome) {
     // Generate a response when the action succeeded and a generate_response effect is set.
     // Note: shouldAbortConversation no longer suppresses generation — the abort is deferred
@@ -2736,11 +2852,24 @@ export class ConversationRunner {
         }
       }
       await this.changeState('generating_response');
+
+      // Upload staged file attachments before generation so they are available for delivery
+      this.pendingFileAttachments = [];
+      if (executionOutcome.stagedAttachments.length > 0) {
+        await this.uploadStagedAttachments(executionOutcome.stagedAttachments);
+      }
+
       if (executionOutcome.prescriptedResponse !== undefined) {
         await this.deliverPrescriptedResponse(executionOutcome.prescriptedResponse);
       } else {
         this.turnData.promptRenderStartMs = Date.now();
-        this.stageData.lastCompletionPrompt = await this.templatingEngine.render(this.stageData.stage.prompt, context);
+        let renderedPrompt = await this.templatingEngine.render(this.stageData.stage.prompt, context);
+        // Inject attachment info into prompt so the LLM can reference them
+        if (this.pendingFileAttachments.length > 0) {
+          const attachmentList = this.pendingFileAttachments.map(a => `- ${a.fileName} (${a.mimeType})`).join('\n');
+          renderedPrompt = `${renderedPrompt}\n\nYou have the following files attached to this response. Mention them naturally in your response:\n${attachmentList}`;
+        }
+        this.stageData.lastCompletionPrompt = renderedPrompt;
         this.turnData.promptRenderEndMs = Date.now();
         this.turnData.firstTokenMs = null;
         this.turnData.llmStartMs = Date.now();
@@ -3026,6 +3155,9 @@ export class ConversationRunner {
     this.turnData.assistantMessageEventId = await this.saveAndSendEvent('message', messageEventData);
 
     if (!ttsProvider) {
+      // Deliver pending file attachments before end_ai_generation_output
+      await this.deliverPendingFileAttachments();
+      this.pendingFileAttachments = [];
       const prescriptedEndMessage: CALEndAiGenerationOutputMessage = {
         type: 'end_ai_generation_output',
         conversationId,

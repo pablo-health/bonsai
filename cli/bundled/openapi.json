@@ -2920,6 +2920,9 @@
           },
           {
             "$ref": "#/components/schemas/BanUserEffect"
+          },
+          {
+            "$ref": "#/components/schemas/AttachFileEffect"
           }
         ],
         "discriminator": {
@@ -2934,9 +2937,41 @@
             "call_tool": "#/components/schemas/CallToolEffect",
             "generate_response": "#/components/schemas/GenerateResponseEffect",
             "change_visibility": "#/components/schemas/ChangeVisibilityEffect",
-            "ban_user": "#/components/schemas/BanUserEffect"
+            "ban_user": "#/components/schemas/BanUserEffect",
+            "attach_file": "#/components/schemas/AttachFileEffect"
           }
         }
+      },
+      "AttachFileEffect": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "attach_file"
+            ],
+            "description": "Effect type"
+          },
+          "filePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "File system path to the file to attach. Can be a template expression resolved from tool results or variables."
+          },
+          "fileName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name for the attachment. Defaults to the basename of filePath when omitted."
+          },
+          "mimeType": {
+            "type": "string",
+            "minLength": 1,
+            "description": "MIME type override. When omitted, inferred from file extension."
+          }
+        },
+        "required": [
+          "type",
+          "filePath"
+        ]
       },
       "StageActionParameter": {
         "type": "object",

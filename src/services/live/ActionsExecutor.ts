@@ -6,7 +6,7 @@ import { ToolExecutor } from './ToolExecutor';
 import { ModifyVariablesEffectExecutor } from './ModifyVariablesEffectExecutor';
 import { ModifyUserProfileEffectExecutor } from './ModifyUserProfileEffectExecutor';
 import { UserService } from '../UserService';
-import type { AbortConversationEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect } from '../../types/actions';
+import type { AbortConversationEffect, AttachFileEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect } from '../../types/actions';
 import type { MessageVisibility, ConversationEventType, ConversationEventData, ActionsExecutionPlanEventData } from '../../types/conversationEvents';
 import { LIFECYCLE_EFFECT_RESTRICTIONS } from '../../types/actions';
 import type { GlobalAction, Guardrail } from '../../types/models';
@@ -42,6 +42,12 @@ export type ActionsExecutionOutcome = {
   error?: string;
   /** Pending visibility override to apply to the current turn's messages, produced by change_visibility effects */
   turnVisibility?: MessageVisibility;
+  /** Resolved file paths from attach_file effects, to be uploaded and delivered with the AI response */
+  stagedAttachments: Array<{
+    filePath: string;
+    fileName: string;
+    mimeType: string;
+  }>;
 };
 
 /**
@@ -60,6 +66,12 @@ export type EffectOutcome = {
   newStageId?: string;
   /** Pending visibility override for the current turn's messages */
   turnVisibility?: MessageVisibility;
+  /** Resolved file paths from attach_file effects */
+  stagedAttachments?: Array<{
+    filePath: string;
+    fileName: string;
+    mimeType: string;
+  }>;
 };
 
 /**
@@ -122,6 +134,8 @@ export class ActionsExecutor {
       case 'modify_user_profile':
         return 4;
       case 'modify_user_input':
+        return 5;
+      case 'attach_file':
         return 5;
       case 'ban_user':
         return 7;
@@ -234,6 +248,7 @@ export class ActionsExecutor {
         hasModifiedVars: false,
         hasModifiedUserInput: false,
         hasModifiedUserProfile: false,
+        stagedAttachments: [],
       };
     }
 
@@ -306,6 +321,7 @@ export class ActionsExecutor {
       hasModifiedVars: false,
       hasModifiedUserInput: false,
       hasModifiedUserProfile: false,
+      stagedAttachments: [],
     };
 
     let currentContext = context;
@@ -347,6 +363,11 @@ export class ActionsExecutor {
         // Propagate visibility override from change_visibility effect
         if (effectResult.turnVisibility) {
           outcome.turnVisibility = effectResult.turnVisibility;
+        }
+
+        // Accumulate staged file attachments from attach_file effects
+        if (effectResult.stagedAttachments) {
+          outcome.stagedAttachments.push(...effectResult.stagedAttachments);
         }
 
         // Check if effect resulted in conversation termination
@@ -437,6 +458,9 @@ export class ActionsExecutor {
 
       case 'ban_user':
         return await this.executeBanUser(effect, context, actionName, emitEvent);
+
+      case 'attach_file':
+        return await this.executeAttachFile(effect, context, actionName, emitEvent);
 
       default:
         throw new InvalidOperationError(`Unknown effect type: ${(effect as any).type}`);
@@ -886,5 +910,38 @@ export class ActionsExecutor {
       shouldEndConversation: false,
       shouldAbortConversation: false,
     };
+  }
+
+  /**
+   * Executes attach_file effect.
+   * Resolves the file path template and stages the file for delivery with the AI response.
+   * The actual upload and delivery is handled by ConversationRunner.
+   */
+  private async executeAttachFile(
+    effect: AttachFileEffect,
+    context: ConversationContext,
+    actionName: string,
+    _emitEvent: EffectEventCallback,
+  ): Promise<EffectOutcome> {
+    try {
+      const resolvedPath = await this.templatingEngine.render(effect.filePath, context);
+      const fileName = effect.fileName ? await this.templatingEngine.render(effect.fileName, context) : resolvedPath.split('/').pop() || 'attachment';
+      const mimeType = effect.mimeType || '';
+
+      logger.info({ conversationId: context.conversationId, actionName, filePath: resolvedPath, fileName, mimeType }, `Staging file attachment`);
+
+      return {
+        shouldEndConversation: false,
+        shouldAbortConversation: false,
+        stagedAttachments: [{
+          filePath: resolvedPath,
+          fileName,
+          mimeType,
+        }],
+      };
+    } catch (error) {
+      logger.error({ conversationId: context.conversationId, actionName, error: error instanceof Error ? error.message : String(error) }, `Failed to resolve file path for attach_file effect`);
+      throw error;
+    }
   }
 }
