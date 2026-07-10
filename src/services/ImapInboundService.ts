@@ -191,13 +191,13 @@ class ImapMailboxSession {
 
       if (results.length === 0) return;
 
-      for (const seqno of results) {
+      for (const result of results) {
         if (this.shouldStop) break;
-        const seq = typeof seqno === 'number' ? seqno : seqno.attr;
-        if (!seq) continue;
-        logger.info({ providerId: this.providerId, seqno: seq }, 'IMAP: iterating result');
+        const uid = typeof result === 'number' ? result : result.attr;
+        if (!uid) continue;
+        logger.info({ providerId: this.providerId, uid }, 'IMAP: iterating result');
 
-        await this.fetchAndProcessMessage(seq);
+        await this.fetchAndProcessMessage(uid);
       }
     } catch (error) {
       logger.error({ error, providerId: this.providerId }, 'Failed to search for new messages');
@@ -208,34 +208,32 @@ class ImapMailboxSession {
     }
   }
 
-  private async fetchAndProcessMessage(seqno: number): Promise<void> {
+  private async fetchAndProcessMessage(uid: number): Promise<void> {
     if (!this.imap || this.shouldStop) return;
 
     try {
-      logger.info({ providerId: this.providerId, seqno }, 'IMAP: fetching message');
-      const fetch = this.imap.fetch([seqno], { bodies: '' });
+      logger.info({ providerId: this.providerId, uid }, 'IMAP: fetching message');
+      const fetch = this.imap.fetch([uid], { bodies: '' });
 
-      const result = await new Promise<{ source: string; uid: number }>((resolve, reject) => {
+      const result = await new Promise<string>((resolve, reject) => {
         let source = '';
-        let msgUid = 0;
-        fetch.on('message', (msg, seq) => {
-          msgUid = (msg as any).attr?.uid ?? seq;
+        fetch.on('message', (msg) => {
           msg.on('body', (stream) => {
             stream.on('data', (chunk) => {
               source += chunk.toString('utf8');
             });
             stream.on('end', () => {
-              logger.info({ providerId: this.providerId, uid: msgUid, sourceLength: source.length }, 'IMAP: message body received');
+              logger.info({ providerId: this.providerId, uid, sourceLength: source.length }, 'IMAP: message body received');
             });
           });
           msg.on('end', () => {
-            resolve({ source, uid: msgUid });
+            resolve(source);
           });
         });
         fetch.on('error', reject);
       });
 
-      const { source, uid } = result;
+      const source = result;
 
       if (!source) {
         logger.info({ providerId: this.providerId, uid }, 'IMAP: empty source, skipping');
@@ -311,7 +309,7 @@ class ImapMailboxSession {
       );
 
     } catch (error) {
-      logger.error({ error, seqno, providerId: this.providerId }, 'Failed to process email');
+      logger.error({ error, uid, providerId: this.providerId }, 'Failed to process email');
     }
   }
 
