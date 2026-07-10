@@ -47,6 +47,7 @@ export const smtpImapChannelProviderConfigSchema = z.strictObject({
   threadingStrategy: z.enum(['messageId', 'senderSubject']).default('messageId').describe('How to derive thread ID for conversation continuity'),
   emailToProject: z.record(z.string().email(), z.union([z.string(), emailRoutingEntrySchema])).optional().describe('Maps email addresses to routing entries for multi-project routing. Each entry can specify projectId, cc, bcc, fromAddress, subject, stageId, and agentId. Plain string values (projectId only) are supported for backward compatibility. Inbound: matched against To: field. Outbound: matched against fromAddress.'),
   oauth2: oauth2ConfigSchema.optional().describe('Optional OAuth2/XOAUTH2 configuration. When present, supersedes password-based authentication for both SMTP and IMAP.'),
+  processedFolder: z.string().default('Bonsai/Processed').describe('IMAP folder name to move processed inbound messages to after the AI response is sent. The folder and its parents will be auto-created if they do not exist.'),
 }).openapi('SmtpImapChannelConfig');
 
 export type SmtpImapChannelProviderConfig = z.infer<typeof smtpImapChannelProviderConfigSchema>;

@@ -26,6 +26,7 @@ export class SmtpImapConnection extends EmailConnectionBase {
   private skipNextEmail = false;
   private cachedOAuth2Token: string | undefined;
   private replyFromAddress: string | undefined;
+  private onEmailSent: (() => void) | undefined;
 
   constructor(
     private readonly toAddress: string,
@@ -154,6 +155,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.bcc = bcc;
   }
 
+  setOnEmailSent(callback: (() => void) | undefined): void {
+    this.onEmailSent = callback;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }
@@ -223,6 +228,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
     try {
       const info = await this.transporter.sendMail(mailOptions);
       logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId }, 'SMTP/IMAP email sent');
+      if (this.onEmailSent) {
+        this.onEmailSent();
+      }
     } catch (error) {
       logger.error({ error, to, messageId, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');
     }
