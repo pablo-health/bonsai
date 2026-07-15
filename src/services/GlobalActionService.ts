@@ -269,7 +269,7 @@ export class GlobalActionService extends BaseService {
         throw new NotFoundError(`Global action with id ${id} not found`);
       }
 
-      return await this.createGlobalAction(projectId, { id: input.id, name: input.name ?? `${existingAction.name} (Clone)`, condition: existingAction.condition, triggerOnUserInput: existingAction.triggerOnUserInput, triggerOnClientCommand: existingAction.triggerOnClientCommand, classificationTrigger: existingAction.classificationTrigger, overrideClassifierId: existingAction.overrideClassifierId, parameters: existingAction.parameters, effects: existingAction.effects, examples: existingAction.examples ?? undefined, tags: existingAction.tags, metadata: existingAction.metadata ?? undefined }, context);
+      return await this.createGlobalAction(projectId, { id: input.id, name: input.name ?? `${existingAction.name} (Clone)`, condition: existingAction.condition, triggerOnUserInput: existingAction.triggerOnUserInput, triggerOnClientCommand: existingAction.triggerOnClientCommand, triggerOnExternal: existingAction.triggerOnExternal, classificationTrigger: existingAction.classificationTrigger, overrideClassifierId: existingAction.overrideClassifierId, parameters: existingAction.parameters, effects: existingAction.effects, examples: existingAction.examples ?? undefined, tags: existingAction.tags, metadata: existingAction.metadata ?? undefined }, context);
     } catch (error) {
       logger.error({ error, id }, 'Failed to clone global action');
       throw error;
