@@ -64,12 +64,14 @@ export class ExternalTriggerController {
     const apiKey = await this.extractApiKey(req);
 
     if (!apiKey) {
+      logger.warn({ ip: req.ip, userAgent: req.headers['user-agent'], keyPrefix: req.headers.authorization?.slice(0, 20), conversationId: req.body.conversationId, sessionId: req.body.sessionId, actionName: req.body.actionName }, 'External trigger rejected: missing or invalid API key');
       throw new UnauthorizedError('Missing or invalid API key');
     }
 
     const { projectId, keySettings } = apiKey;
 
     if (keySettings?.allowedFeatures && !keySettings.allowedFeatures.includes('run_action')) {
+      logger.warn({ ip: req.ip, keyPrefix: req.headers.authorization?.slice(0, 20), projectId }, 'External trigger rejected: API key lacks run_action feature');
       throw new ForbiddenError('API key does not have run_action feature enabled');
     }
 
@@ -95,6 +97,7 @@ export class ExternalTriggerController {
     }
 
     if (session.projectId !== projectId) {
+      logger.warn({ ip: req.ip, keyPrefix: req.headers.authorization?.slice(0, 20), projectId, sessionProjectId: session.projectId, conversationId }, 'External trigger rejected: API key project mismatch');
       throw new ForbiddenError('API key does not have access to this conversation');
     }
 
