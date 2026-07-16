@@ -2492,25 +2492,25 @@
           ],
           "description": "Effect type"
         },
-        "filePath": {
+        "artifactId": {
           "type": "string",
           "minLength": 1,
-          "description": "File system path to the file to attach. Can be a template expression resolved from tool results or variables."
+          "description": "Artifact ID of the file in storage to attach. Typically from a tool result with storageConfig enabled."
         },
         "fileName": {
           "type": "string",
           "minLength": 1,
-          "description": "Display name for the attachment. Defaults to the basename of filePath when omitted."
+          "description": "Display name for the attachment. Defaults to the artifact's stored name when omitted."
         },
         "mimeType": {
           "type": "string",
           "minLength": 1,
-          "description": "MIME type override. When omitted, inferred from file extension."
+          "description": "MIME type override. When omitted, uses the artifact's stored MIME type."
         }
       },
       "required": [
         "type",
-        "filePath"
+        "artifactId"
       ]
     },
     "conversation-event-update": {
@@ -4930,7 +4930,7 @@
         "sessionId"
       ]
     },
-    "send-file-output": {
+    "attach-file-output": {
       "type": "object",
       "properties": {
         "conversationId": {
@@ -4940,7 +4940,7 @@
         "type": {
           "type": "string",
           "enum": [
-            "send_file_output"
+            "attach_file_output"
           ]
         },
         "outputTurnId": {

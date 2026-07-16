@@ -126,9 +126,9 @@ export const banUserEffectSchema = z.object({
  */
 export const attachFileEffectSchema = z.object({
   type: z.literal('attach_file').describe('Effect type'),
-  filePath: z.string().min(1).describe('File system path to the file to attach. Can be a template expression resolved from tool results or variables.'),
-  fileName: z.string().min(1).optional().describe('Display name for the attachment. Defaults to the basename of filePath when omitted.'),
-  mimeType: z.string().min(1).optional().describe('MIME type override. When omitted, inferred from file extension.'),
+  artifactId: z.string().min(1).describe('Artifact ID of the file in storage to attach. Typically from a tool result with storageConfig enabled.'),
+  fileName: z.string().min(1).optional().describe('Display name for the attachment. Defaults to the artifact\'s stored name when omitted.'),
+  mimeType: z.string().min(1).optional().describe('MIME type override. When omitted, uses the artifact\'s stored MIME type.'),
 }).openapi('AttachFileEffect');
 
 /**

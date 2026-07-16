@@ -1,13 +1,11 @@
 import { z } from "zod";
-import * as fs from 'fs/promises';
-import * as path from 'path';
 import { inject, injectable } from "tsyringe";
 import { NotFoundError, InvalidOperationError, TooManyRequestsError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
 import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS } from "../../types/actions";
 import type { LifecycleContext } from "../../types/actions";
 import { db } from "../../db";
-import { conversations, users, sampleCopies } from "../../db/schema";
+import { conversations, users, sampleCopies, conversationArtifacts } from "../../db/schema";
 import { MessageEventData, CommandEventData, CommandType, ConversationStartEventData, ConversationResumeEventData, ConversationEndEventData, ConversationAbortedEventData, ConversationFailedEventData, JumpToStageEventData, ToolCallEventData, ModerationEventData, conversationStateSchema, ConversationState, MessageVisibility, VariablesUpdatedEventData, TurnAbortedEventData } from "../../types/conversationEvents";
 import { ConversationService } from "../ConversationService";
 import { ConversationStorageService } from "../ConversationStorageService";
@@ -2776,75 +2774,44 @@ export class ConversationRunner {
   }
 
   /**
-   * Uploads staged file attachments as conversation artifacts.
-   * Files are read from disk, uploaded to storage, and recorded in pendingFileAttachments for delivery.
+   * Resolves staged file attachments from storage artifacts.
+   * Artifacts are already in storage (uploaded by tools with storageConfig).
+   * Looks up each artifact and records it in pendingFileAttachments for delivery.
    */
-  private async uploadStagedAttachments(stagedAttachments: Array<{ filePath: string; fileName: string; mimeType: string }>): Promise<void> {
+  private async uploadStagedAttachments(stagedAttachments: Array<{ artifactId: string; fileName: string; mimeType: string }>): Promise<void> {
     const conversationId = this.conversation.id;
-    const storageConfig = this.stageData.project.storageConfig;
-
-    if (!storageConfig?.storageProviderId) {
-      logger.warn({ conversationId, attachmentCount: stagedAttachments.length }, 'Storage provider not configured — file attachments cannot be uploaded');
-      return;
-    }
 
     for (const attachment of stagedAttachments) {
       try {
-        const fileData = await fs.readFile(attachment.filePath);
-        const resolvedMimeType = attachment.mimeType || this.getMimeTypeFromExtension(attachment.filePath);
-        const { id: artifactId, url: downloadUrl } = await this.conversationStorageService.uploadArtifact(
-          storageConfig,
-          this.stageData.project.id,
-          conversationId,
-          'attachment',
-          fileData,
-          { contentType: resolvedMimeType, customMetadata: { fileName: attachment.fileName } },
-          undefined,
-          this.turnData.inputTurnId,
-          this.turnData.outputTurnId,
-        );
-        this.pendingFileAttachments.push({
-          artifactId,
-          fileName: attachment.fileName,
-          mimeType: resolvedMimeType,
-          fileSize: fileData.length,
-          downloadUrl,
+        const artifact = await db.query.conversationArtifacts.findFirst({
+          where: and(
+            eq(conversationArtifacts.id, attachment.artifactId),
+            eq(conversationArtifacts.conversationId, conversationId),
+          ),
         });
-        logger.info({ conversationId, artifactId, fileName: attachment.fileName, fileSize: fileData.length }, 'File attachment uploaded successfully');
+
+        if (!artifact) {
+          logger.warn({ conversationId, artifactId: attachment.artifactId }, 'Artifact not found for file attachment');
+          continue;
+        }
+
+        const resolvedFileName = attachment.fileName || (artifact.metadata as { fileName?: string })?.fileName || attachment.artifactId;
+        const resolvedMimeType = attachment.mimeType || artifact.mimeType || 'application/octet-stream';
+
+        this.pendingFileAttachments.push({
+          artifactId: artifact.id,
+          fileName: resolvedFileName,
+          mimeType: resolvedMimeType,
+          fileSize: artifact.fileSize || 0,
+          downloadUrl: artifact.storageUrl || '',
+        });
+        logger.info({ conversationId, artifactId: artifact.id, fileName: resolvedFileName, fileSize: artifact.fileSize || 0 }, 'File attachment resolved from storage');
       } catch (error) {
-        logger.error({ conversationId, filePath: attachment.filePath, error: error instanceof Error ? error.message : String(error) }, 'Failed to upload file attachment');
+        logger.error({ conversationId, artifactId: attachment.artifactId, error: error instanceof Error ? error.message : String(error) }, 'Failed to resolve file attachment');
       }
     }
   }
 
-  /**
-   * Infers MIME type from file extension.
-   */
-  private getMimeTypeFromExtension(filePath: string): string {
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      '.pdf': 'application/pdf',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls': 'application/vnd.ms-excel',
-      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif',
-      '.svg': 'image/svg+xml',
-      '.webp': 'image/webp',
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.mp4': 'video/mp4',
-      '.txt': 'text/plain',
-      '.csv': 'text/csv',
-      '.json': 'application/json',
-      '.html': 'text/html',
-      '.zip': 'application/zip',
-    };
-    return mimeTypes[ext] || 'application/octet-stream';
-  }
 
   /**
    * Delivers pending file attachments to the client as attach_file_output messages.

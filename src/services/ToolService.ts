@@ -40,7 +40,7 @@ export class ToolService extends BaseService {
     logger.info({ toolId, projectId, name: input.name, operatorId: context?.operatorId }, 'Creating tool');
 
     try {
-      const toolValues: any = { id: toolId, projectId, name: input.name, description: input.description ?? null, type: input.type, parameters: input.parameters ?? [], tags: input.tags ?? [], metadata: input.metadata ?? null, version: 1 };
+      const toolValues: any = { id: toolId, projectId, name: input.name, description: input.description ?? null, type: input.type, parameters: input.parameters ?? [], tags: input.tags ?? [], metadata: input.metadata ?? null, storageConfig: input.storageConfig ?? null, version: 1 };
       if (input.type === 'smart_function') {
         toolValues.prompt = input.prompt;
         toolValues.llmProviderId = input.llmProviderId ?? null;
@@ -201,6 +201,7 @@ export class ToolService extends BaseService {
       if (updateData.parameters !== undefined) updatePayload.parameters = updateData.parameters;
       if (updateData.tags !== undefined) updatePayload.tags = updateData.tags;
       if (updateData.metadata !== undefined) updatePayload.metadata = updateData.metadata;
+      if (updateData.storageConfig !== undefined) updatePayload.storageConfig = updateData.storageConfig;
 
       if (updateData.type === 'smart_function') {
         updatePayload.llmProviderId = updateData.llmProviderId;

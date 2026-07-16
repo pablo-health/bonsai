@@ -42,9 +42,9 @@ export type ActionsExecutionOutcome = {
   error?: string;
   /** Pending visibility override to apply to the current turn's messages, produced by change_visibility effects */
   turnVisibility?: MessageVisibility;
-  /** Resolved file paths from attach_file effects, to be uploaded and delivered with the AI response */
+  /** Artifact references from attach_file effects, to be delivered with the AI response */
   stagedAttachments: Array<{
-    filePath: string;
+    artifactId: string;
     fileName: string;
     mimeType: string;
   }>;
@@ -66,9 +66,9 @@ export type EffectOutcome = {
   newStageId?: string;
   /** Pending visibility override for the current turn's messages */
   turnVisibility?: MessageVisibility;
-  /** Resolved file paths from attach_file effects */
+  /** Artifact references from attach_file effects */
   stagedAttachments?: Array<{
-    filePath: string;
+    artifactId: string;
     fileName: string;
     mimeType: string;
   }>;
@@ -914,8 +914,8 @@ export class ActionsExecutor {
 
   /**
    * Executes attach_file effect.
-   * Resolves the file path template and stages the file for delivery with the AI response.
-   * The actual upload and delivery is handled by ConversationRunner.
+   * Resolves the artifact ID template and stages the artifact for delivery with the AI response.
+   * The artifact is already in storage (uploaded by a tool with storageConfig).
    */
   private async executeAttachFile(
     effect: AttachFileEffect,
@@ -924,23 +924,23 @@ export class ActionsExecutor {
     _emitEvent: EffectEventCallback,
   ): Promise<EffectOutcome> {
     try {
-      const resolvedPath = await this.templatingEngine.render(effect.filePath, context);
-      const fileName = effect.fileName ? await this.templatingEngine.render(effect.fileName, context) : resolvedPath.split('/').pop() || 'attachment';
+      const resolvedArtifactId = await this.templatingEngine.render(effect.artifactId, context);
+      const fileName = effect.fileName ? await this.templatingEngine.render(effect.fileName, context) : '';
       const mimeType = effect.mimeType || '';
 
-      logger.info({ conversationId: context.conversationId, actionName, filePath: resolvedPath, fileName, mimeType }, `Staging file attachment`);
+      logger.info({ conversationId: context.conversationId, actionName, artifactId: resolvedArtifactId, fileName, mimeType }, `Staging file attachment`);
 
       return {
         shouldEndConversation: false,
         shouldAbortConversation: false,
         stagedAttachments: [{
-          filePath: resolvedPath,
+          artifactId: resolvedArtifactId,
           fileName,
           mimeType,
         }],
       };
     } catch (error) {
-      logger.error({ conversationId: context.conversationId, actionName, error: error instanceof Error ? error.message : String(error) }, `Failed to resolve file path for attach_file effect`);
+      logger.error({ conversationId: context.conversationId, actionName, error: error instanceof Error ? error.message : String(error) }, `Failed to resolve artifact ID for attach_file effect`);
       throw error;
     }
   }
