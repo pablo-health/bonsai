@@ -218,6 +218,7 @@ export const stageActionSchema = z.object({
   effects: z.preprocess(filterDeprecatedEffects, z.array(effectSchema).describe('Array of effects to execute when action is triggered')),
   examples: z.array(z.string()).nullable().optional().describe('Example phrases that trigger this action'),
   triggerOnTransformation: z.boolean().optional().default(false).describe('Whether this action should be triggered on variable transformations'),
+  triggerOnExternal: z.boolean().optional().default(false).describe('Whether this action can be triggered by external services via the external trigger endpoint'),
   watchedVariables: z.record(z.string(), fieldWatchTriggerSchema).optional().describe('Optional map of variable paths to watch for changes that trigger this action'),
   metadata: z.record(z.string(), z.unknown()).nullable().optional().describe('Additional action-specific metadata'),
 }).openapi('StageAction');

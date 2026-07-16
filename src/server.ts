@@ -32,6 +32,7 @@ import { SavedSliceQueryController } from './http/controllers/SavedSliceQueryCon
 import { FunnelController } from './http/controllers/FunnelController';
 import { ApiKeyController } from './http/controllers/ApiKeyController';
 import { VersionController } from './http/controllers/VersionController';
+import { ExternalTriggerController } from './http/controllers/ExternalTriggerController';
 import { MigrationController } from './http/controllers/MigrationController';
 import { ProjectExchangeController } from './http/controllers/ProjectExchangeController';
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
@@ -172,6 +173,10 @@ export async function createApp(): Promise<express.Application> {
 
   // General API rate limiter — keyed by authenticated operator ID, falls back to IP
   app.use(createApiRateLimiter());
+
+  // External trigger endpoint — uses API key auth, not operator JWT; registered after rate limiter for IP-based limiting
+  const externalTriggerController = container.resolve(ExternalTriggerController);
+  externalTriggerController.registerRoutes(app);
 
   // Register routes for all controllers
   const authController = container.resolve(AuthController);

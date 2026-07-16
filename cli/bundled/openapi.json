@@ -3117,6 +3117,11 @@
             "default": false,
             "description": "Whether this action should be triggered on variable transformations"
           },
+          "triggerOnExternal": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+          },
           "watchedVariables": {
             "type": "object",
             "additionalProperties": {
@@ -11381,6 +11386,11 @@
             "default": false,
             "description": "Whether this action should be triggered on client commands"
           },
+          "triggerOnExternal": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+          },
           "classificationTrigger": {
             "type": "string",
             "nullable": true,
@@ -11452,6 +11462,10 @@
           "triggerOnClientCommand": {
             "type": "boolean",
             "description": "Updated trigger on client command flag"
+          },
+          "triggerOnExternal": {
+            "type": "boolean",
+            "description": "Updated trigger on external flag"
           },
           "classificationTrigger": {
             "type": "string",
@@ -11549,6 +11563,10 @@
             "type": "boolean",
             "description": "Whether this action should be triggered on client commands"
           },
+          "triggerOnExternal": {
+            "type": "boolean",
+            "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+          },
           "classificationTrigger": {
             "type": "string",
             "nullable": true,
@@ -11624,6 +11642,7 @@
           "condition",
           "triggerOnUserInput",
           "triggerOnClientCommand",
+          "triggerOnExternal",
           "classificationTrigger",
           "overrideClassifierId",
           "parameters",
@@ -11668,6 +11687,10 @@
                 "triggerOnClientCommand": {
                   "type": "boolean",
                   "description": "Whether this action should be triggered on client commands"
+                },
+                "triggerOnExternal": {
+                  "type": "boolean",
+                  "description": "Whether this action can be triggered by external services via the external trigger endpoint"
                 },
                 "classificationTrigger": {
                   "type": "string",
@@ -11744,6 +11767,7 @@
                 "condition",
                 "triggerOnUserInput",
                 "triggerOnClientCommand",
+                "triggerOnExternal",
                 "classificationTrigger",
                 "overrideClassifierId",
                 "parameters",
@@ -16999,6 +17023,96 @@
           "restSchemaHash",
           "wsSchemaHash",
           "gitCommit"
+        ]
+      },
+      "ExternalTriggerRequest": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation ID to trigger the action in"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional session ID. Required when multiple sessions exist for the conversation. If omitted and only one session exists, it is used automatically."
+          },
+          "actionName": {
+            "type": "string",
+            "description": "The action ID or name to trigger. The action must have triggerOnExternal enabled."
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "nullable": true
+            },
+            "default": {},
+            "description": "Parameters to pass to the action"
+          }
+        },
+        "required": [
+          "conversationId",
+          "actionName"
+        ]
+      },
+      "ExternalTriggerResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the action was triggered successfully"
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation ID"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "The session ID where the action was triggered"
+          },
+          "actionName": {
+            "type": "string",
+            "description": "The action that was triggered"
+          },
+          "outcome": {
+            "type": "object",
+            "properties": {
+              "hasModifiedUserInput": {
+                "type": "boolean",
+                "description": "Whether the action modified user input"
+              },
+              "hasModifiedVars": {
+                "type": "boolean",
+                "description": "Whether the action modified variables"
+              },
+              "shouldGenerateResponse": {
+                "type": "boolean",
+                "description": "Whether the AI will generate a response after this action"
+              },
+              "shouldAbortConversation": {
+                "type": "boolean",
+                "description": "Whether the action aborted the conversation"
+              },
+              "shouldEndConversation": {
+                "type": "boolean",
+                "description": "Whether the action ended the conversation"
+              }
+            },
+            "required": [
+              "hasModifiedUserInput",
+              "hasModifiedVars",
+              "shouldGenerateResponse",
+              "shouldAbortConversation",
+              "shouldEndConversation"
+            ],
+            "description": "Outcome metadata from the action execution"
+          }
+        },
+        "required": [
+          "success",
+          "conversationId",
+          "sessionId",
+          "actionName",
+          "outcome"
         ]
       },
       "EntityStub": {
@@ -42778,6 +42892,11 @@
                     "default": false,
                     "description": "Whether this action should be triggered on client commands"
                   },
+                  "triggerOnExternal": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                  },
                   "classificationTrigger": {
                     "type": "string",
                     "nullable": true,
@@ -42865,6 +42984,10 @@
                       "type": "boolean",
                       "description": "Whether this action should be triggered on client commands"
                     },
+                    "triggerOnExternal": {
+                      "type": "boolean",
+                      "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                    },
                     "classificationTrigger": {
                       "type": "string",
                       "nullable": true,
@@ -42940,6 +43063,7 @@
                     "condition",
                     "triggerOnUserInput",
                     "triggerOnClientCommand",
+                    "triggerOnExternal",
                     "classificationTrigger",
                     "overrideClassifierId",
                     "parameters",
@@ -43138,6 +43262,10 @@
                             "type": "boolean",
                             "description": "Whether this action should be triggered on client commands"
                           },
+                          "triggerOnExternal": {
+                            "type": "boolean",
+                            "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                          },
                           "classificationTrigger": {
                             "type": "string",
                             "nullable": true,
@@ -43213,6 +43341,7 @@
                           "condition",
                           "triggerOnUserInput",
                           "triggerOnClientCommand",
+                          "triggerOnExternal",
                           "classificationTrigger",
                           "overrideClassifierId",
                           "parameters",
@@ -43325,6 +43454,10 @@
                       "type": "boolean",
                       "description": "Whether this action should be triggered on client commands"
                     },
+                    "triggerOnExternal": {
+                      "type": "boolean",
+                      "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                    },
                     "classificationTrigger": {
                       "type": "string",
                       "nullable": true,
@@ -43400,6 +43533,7 @@
                     "condition",
                     "triggerOnUserInput",
                     "triggerOnClientCommand",
+                    "triggerOnExternal",
                     "classificationTrigger",
                     "overrideClassifierId",
                     "parameters",
@@ -43472,6 +43606,10 @@
                   "triggerOnClientCommand": {
                     "type": "boolean",
                     "description": "Updated trigger on client command flag"
+                  },
+                  "triggerOnExternal": {
+                    "type": "boolean",
+                    "description": "Updated trigger on external flag"
                   },
                   "classificationTrigger": {
                     "type": "string",
@@ -43564,6 +43702,10 @@
                       "type": "boolean",
                       "description": "Whether this action should be triggered on client commands"
                     },
+                    "triggerOnExternal": {
+                      "type": "boolean",
+                      "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                    },
                     "classificationTrigger": {
                       "type": "string",
                       "nullable": true,
@@ -43639,6 +43781,7 @@
                     "condition",
                     "triggerOnUserInput",
                     "triggerOnClientCommand",
+                    "triggerOnExternal",
                     "classificationTrigger",
                     "overrideClassifierId",
                     "parameters",
@@ -43853,6 +43996,10 @@
                       "type": "boolean",
                       "description": "Whether this action should be triggered on client commands"
                     },
+                    "triggerOnExternal": {
+                      "type": "boolean",
+                      "description": "Whether this action can be triggered by external services via the external trigger endpoint"
+                    },
                     "classificationTrigger": {
                       "type": "string",
                       "nullable": true,
@@ -43928,6 +44075,7 @@
                     "condition",
                     "triggerOnUserInput",
                     "triggerOnClientCommand",
+                    "triggerOnExternal",
                     "classificationTrigger",
                     "overrideClassifierId",
                     "parameters",
@@ -52932,6 +53080,60 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/conversations/trigger": {
+      "post": {
+        "summary": "Trigger an external action in an active conversation",
+        "description": "Triggers an action with triggerOnExternal enabled in an active conversation. Requires API key authentication with run_action feature.",
+        "tags": [
+          "External Trigger"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalTriggerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Action triggered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalTriggerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key"
+          },
+          "403": {
+            "description": "API key lacks run_action feature or project mismatch"
+          },
+          "404": {
+            "description": "Conversation, session, or action not found"
+          },
+          "408": {
+            "description": "Request timed out waiting for runner"
+          },
+          "409": {
+            "description": "Conversation is not in awaiting_user_input state"
+          },
+          "429": {
+            "description": "Runner is busy, request timed out"
           }
         }
       }

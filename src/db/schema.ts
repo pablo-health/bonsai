@@ -375,6 +375,7 @@ export const globalActions = pgTable('global_actions', {
   condition: text('condition'),
   triggerOnUserInput: boolean('trigger_on_user_input').notNull().default(true),
   triggerOnClientCommand: boolean('trigger_on_client_command').notNull().default(false),
+  triggerOnExternal: boolean('trigger_on_external').notNull().default(false),
   classificationTrigger: text('classification_trigger'),
   overrideClassifierId: text('override_classifier_id'),
   parameters: jsonb('parameters').notNull().default([]).$type<StageActionParameter[]>(),

@@ -2,7 +2,7 @@ import { z } from "zod";
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { inject, injectable } from "tsyringe";
-import { NotFoundError, InvalidOperationError } from "../../errors";
+import { NotFoundError, InvalidOperationError, TooManyRequestsError } from "../../errors";
 import { Classifier, ContextTransformer, Conversation, GlobalAction, Guardrail, Project, SampleCopy, Stage, Tool } from "../../types/models";
 import { StageAction, LIFECYCLE_ACTION_NAMES, CONVERSATION_LIFECYCLE_ACTION_IDS } from "../../types/actions";
 import type { LifecycleContext } from "../../types/actions";
@@ -239,6 +239,18 @@ export class ConversationRunner {
   /** Handles audio recording for the conversation. */
   private recorder: ConversationRecorder | null = null;
 
+  /** Serializes all public runner operations to prevent concurrent state corruption. */
+  private mutex: Promise<void> = Promise.resolve();
+
+  /** Stores the outcome of the last runAction call for external trigger consumption. */
+  private lastActionOutcome: ActionsExecutionOutcome | null = null;
+
+  /** Returns true when the conversation is in a terminal state (finished, aborted, or failed). */
+  isConversationTerminal(): boolean {
+    const status = this.conversation.status;
+    return status === 'finished' || status === 'aborted' || status === 'failed';
+  }
+
   /** True when server-side VAD is active for this session. VAD owns the turn lifecycle when active. */
   get isVadMode(): boolean {
     return this.vadProcessor !== null;
@@ -246,6 +258,31 @@ export class ConversationRunner {
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
   private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
+
+  /**
+   * Executes a function under the runner mutex, serializing all operations.
+   * If timeoutMs is provided, waits at most that long to acquire the lock.
+   */
+  private async withMutex<T>(fn: () => Promise<T>, timeoutMs?: number): Promise<T> {
+    const release = this.mutex;
+    let resolve!: () => void;
+    this.mutex = new Promise(r => { resolve = r; });
+    try {
+      if (timeoutMs !== undefined) {
+        await Promise.race([
+          release,
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new TooManyRequestsError('Request timed out, runner is busy')), timeoutMs);
+          })
+        ]);
+      } else {
+        await release;
+      }
+      return await fn();
+    } finally {
+      resolve();
+    }
+  }
 
   constructor(
     @inject(LlmProviderFactory) private llmProviderFactory: LlmProviderFactory,
@@ -1107,28 +1144,30 @@ export class ConversationRunner {
   }
 
   async receiveUserTextInput(userInput: string): Promise<string> {
-    if (this.conversation.status !== 'awaiting_user_input') {
-      throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
-    }
+    return await this.withMutex(async () => {
+      if (this.conversation.status !== 'awaiting_user_input') {
+        throw new InvalidOperationError(`Cannot receive user input in current state: ${this.conversation.status}`);
+      }
 
-    // In VAD mode, stop the pre-warmed ASR session and clear it so the state machine is clean
-    // before processing text input. An active ASR session would still be listening and could
-    // fire recognition callbacks that interfere with the text turn.
-    if (this.isVadMode) {
-      this.asrPreWarmPromise = null;
-      if (this.stageData.asrProvider) {
-        try {
-          await this.stageData.asrProvider.stop();
-          logger.info({ conversationId: this.conversation.id }, 'Stopped pre-warmed ASR session for text input');
-        } catch (error) {
-          logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop pre-warmed ASR for text input (non-fatal)');
+      // In VAD mode, stop the pre-warmed ASR session and clear it so the state machine is clean
+      // before processing text input. An active ASR session would still be listening and could
+      // fire recognition callbacks that interfere with the text turn.
+      if (this.isVadMode) {
+        this.asrPreWarmPromise = null;
+        if (this.stageData.asrProvider) {
+          try {
+            await this.stageData.asrProvider.stop();
+            logger.info({ conversationId: this.conversation.id }, 'Stopped pre-warmed ASR session for text input');
+          } catch (error) {
+            logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to stop pre-warmed ASR for text input (non-fatal)');
+          }
         }
       }
-    }
 
-    this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-    await this.processUserInput(userInput, 'text');
-    return this.turnData.inputTurnId;
+      this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
+      await this.processUserInput(userInput, 'text');
+      return this.turnData.inputTurnId;
+    });
   }
 
   async startUserVoiceInput(): Promise<string> {
@@ -1629,61 +1668,71 @@ export class ConversationRunner {
    * @returns Result of the action execution
    */
   async runAction(actionName: string, parameters: Record<string, any>): Promise<any> {
-    logger.info({ conversationId: this.conversation.id, actionName, parameterCount: parameters.length }, `Running action ${actionName}`);
-
-    if (this.conversation.status !== 'awaiting_user_input') {
-      throw new InvalidOperationError(`Cannot run action in current state: ${this.conversation.status}`);
-    }
-
-    // Reset per-turn data so timing fields are clean for this client-initiated action turn,
-    // just like processUserInput does at the start of each user turn.
-    this.responseGeneratedInTurn = false;
-    this.resetTurnData();
-
-    // Find the action in the already-loaded stage global actions.
-    // Match by id first (clients send the action ID, e.g. "gact_..."), then fall back to name.
-    const globalAction = this.stageData.globalActions.find(a => a.id === actionName || a.name === actionName);
-
-    const stageAction = this.stageData.stage.actions[actionName];
-
-    if (!globalAction && !stageAction) {
-      throw new NotFoundError(`Action ${actionName} not found in project ${this.stageData.project.id}`);
-    }
-
-    const actionToExecute = stageAction || globalAction;
-    logger.info({ conversationId: this.conversation.id, actionName }, `Executing action ${actionName}`);
-    const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters, getEffectiveChannelType(this.session));
-    logger.debug({ conversationId: this.conversation.id, actionName }, `Built context for action ${actionName}`);
-    const outcome = await this.actionsExecutor.executeActions([actionToExecute], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
-
-    const shouldContinue = await this.applyActionOutcome(context, outcome);
-    const isTerminalWithoutResponse = !outcome.shouldGenerateResponse &&
-      (outcome.shouldAbortConversation || outcome.shouldEndConversation);
-    if (isTerminalWithoutResponse) {
-      // Defer the terminal event: set pendingPostResponseAction but do NOT execute it here.
-      // RunActionHandler will call executePendingTerminalAction() after sending the run_action
-      // response to guarantee conversation_aborted / conversation_end arrives after the acknowledgement.
-      if (outcome.shouldAbortConversation) {
-        this.pendingPostResponseAction = {
-          name: outcome.abortConversationSourceAction,
-          type: 'abort_conversation',
-          abortReason: outcome.abortReason || 'Conversation aborted by action',
-          context,
-        };
-      } else {
-        this.pendingPostResponseAction = {
-          name: outcome.endConversationSourceAction,
-          type: 'end_conversation',
-          endReason: outcome.endReason || 'Action execution completed conversation',
-          context,
-        };
+    return await this.withMutex(async () => {
+      // After acquiring the mutex, re-check: conversation may have become terminal while waiting in queue
+      if (this.isConversationTerminal()) {
+        logger.warn({ conversationId: this.conversation.id, actionName, status: this.conversation.status }, 'runAction ignored: conversation is in terminal state');
+        this.lastActionOutcome = null;
+        return { status: 'ignored', message: 'Conversation is in terminal state' };
       }
-    } else if (shouldContinue || outcome.shouldAbortConversation || outcome.shouldEndConversation) {
-      await this.generateResponse(context, outcome);
-    }
 
-    logger.info({ conversationId: this.conversation.id, actionName }, `Action ${actionName} executed`);
-    return { status: 'completed', message: 'Action execution not yet implemented' };
+      logger.info({ conversationId: this.conversation.id, actionName, parameterCount: parameters.length }, `Running action ${actionName}`);
+
+      if (this.conversation.status !== 'awaiting_user_input') {
+        throw new InvalidOperationError(`Cannot run action in current state: ${this.conversation.status}`);
+      }
+
+      // Reset per-turn data so timing fields are clean for this client-initiated action turn,
+      // just like processUserInput does at the start of each user turn.
+      this.responseGeneratedInTurn = false;
+      this.resetTurnData();
+
+      // Find the action in the already-loaded stage global actions.
+      // Match by id first (clients send the action ID, e.g. "gact_..."), then fall back to name.
+      const globalAction = this.stageData.globalActions.find(a => a.id === actionName || a.name === actionName);
+
+      const stageAction = this.stageData.stage.actions[actionName];
+
+      if (!globalAction && !stageAction) {
+        throw new NotFoundError(`Action ${actionName} not found in project ${this.stageData.project.id}`);
+      }
+
+      const actionToExecute = stageAction || globalAction;
+      logger.info({ conversationId: this.conversation.id, actionName }, `Executing action ${actionName}`);
+      const context = await this.contextBuilder.buildContextForAction(this.stageData.conversation, actionName, actionToExecute, parameters, getEffectiveChannelType(this.session));
+      logger.debug({ conversationId: this.conversation.id, actionName }, `Built context for action ${actionName}`);
+      const outcome = await this.actionsExecutor.executeActions([actionToExecute], context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
+
+      const shouldContinue = await this.applyActionOutcome(context, outcome);
+      const isTerminalWithoutResponse = !outcome.shouldGenerateResponse &&
+        (outcome.shouldAbortConversation || outcome.shouldEndConversation);
+      if (isTerminalWithoutResponse) {
+        // Defer the terminal event: set pendingPostResponseAction but do NOT execute it here.
+        // RunActionHandler will call executePendingTerminalAction() after sending the run_action
+        // response to guarantee conversation_aborted / conversation_end arrives after the acknowledgement.
+        if (outcome.shouldAbortConversation) {
+          this.pendingPostResponseAction = {
+            name: outcome.abortConversationSourceAction,
+            type: 'abort_conversation',
+            abortReason: outcome.abortReason || 'Conversation aborted by action',
+            context,
+          };
+        } else {
+          this.pendingPostResponseAction = {
+            name: outcome.endConversationSourceAction,
+            type: 'end_conversation',
+            endReason: outcome.endReason || 'Action execution completed conversation',
+            context,
+          };
+        }
+      } else if (shouldContinue || outcome.shouldAbortConversation || outcome.shouldEndConversation) {
+        await this.generateResponse(context, outcome);
+      }
+
+      logger.info({ conversationId: this.conversation.id, actionName }, `Action ${actionName} executed`);
+      this.lastActionOutcome = outcome;
+      return { status: 'completed', message: 'Action execution not yet implemented' };
+    });
   }
 
   /**
@@ -1695,6 +1744,13 @@ export class ConversationRunner {
     if (this.pendingPostResponseAction) {
       await this.handlePostResponseAction();
     }
+  }
+
+  /**
+   * Returns the outcome of the last runAction call for external trigger consumption.
+   */
+  getLastActionOutcome(): ActionsExecutionOutcome | null {
+    return this.lastActionOutcome;
   }
 
   /**

@@ -94,6 +94,8 @@ import { funnelStepSchema, funnelQuerySchema, funnelStepResultSchema, funnelQuer
 import { ApiKeyController } from './http/controllers/ApiKeyController';
 import { VersionController } from './http/controllers/VersionController';
 import { versionResponseSchema } from './http/contracts/version';
+import { ExternalTriggerController } from './http/controllers/ExternalTriggerController';
+import { externalTriggerRequestSchema, externalTriggerResponseSchema } from './http/contracts/externalTrigger';
 import { MigrationController } from './http/controllers/MigrationController';
 import { exportBundleSchema, migrationResultSchema, migrationJobSchema, migrationEntityCountSchema, migrationPreviewSchema, entityStubSchema } from './http/contracts/migration';
 import { ProjectExchangeController } from './http/controllers/ProjectExchangeController';
@@ -533,6 +535,14 @@ export function getOpenAPISpec(): any {
   registry.register('VersionResponse', versionResponseSchema);
   const versionPaths = VersionController.getOpenAPIPaths();
   for (const path of versionPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register External Trigger routes
+  registry.register('ExternalTriggerRequest', externalTriggerRequestSchema);
+  registry.register('ExternalTriggerResponse', externalTriggerResponseSchema);
+  const externalTriggerPaths = ExternalTriggerController.getOpenAPIPaths();
+  for (const path of externalTriggerPaths) {
     registry.registerPath(path);
   }
 
