@@ -2723,6 +2723,27 @@ export const RESOURCES: Record<string, ResourceDef> = {
       },
     ],
   },
+  "conversations_trigger": {
+    name: "conversations_trigger",
+    scope: "global",
+    operations: [
+      {
+        method: "post",
+        path: "/api/conversations/trigger",
+        pathTemplate: "/api/conversations/trigger",
+        pathParams: [],
+        queryParamNames: [],
+        repeatableParams: [],
+        hasBody: true,
+        bodySchemaRef: "ExternalTriggerRequest",
+        action: "create",
+        summary: "Trigger an external action in an active conversation",
+        description: "Triggers an action with triggerOnExternal enabled in an active conversation. Requires API key authentication with run_action feature.",
+        isPaginated: false,
+        isUpdateOrDelete: false,
+      },
+    ],
+  },
   "migration": {
     name: "migration",
     scope: "global",
