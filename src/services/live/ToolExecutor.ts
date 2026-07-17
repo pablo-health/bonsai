@@ -3,7 +3,6 @@ import { z } from "zod";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { Tool } from "../../types/models";
 import { db } from "../../db";
-import { projects } from "../../db/schema";
 import { NotFoundError, InvalidOperationError } from "../../errors";
 import { llmContentSchema, LlmGenerationOptions, LlmMessage, MessageContent } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, llmUsageMetadataSchema } from '../../utils/llmUsage';
@@ -12,11 +11,9 @@ import { ConversationContext, ConversationContextBuilder } from "./ConversationC
 import logger from "../../utils/logger";
 import { ImageParameterValue, ParameterValue, parameterValueSchema } from "../../types/parameters";
 import { IsolatedScriptExecutor, ScriptFlowControl } from "./IsolatedScriptExecutor";
-import { ConversationStorageService } from "../ConversationStorageService";
 import type { CostManagementConfig } from '../../http/contracts/costManagement';
 import { resolveProviderModelLimits, resolveOutputCap } from '../../utils/costManagement';
 import { truncateMessagesToTokenBudget } from '../../utils/contextTruncation';
-import { eq } from "drizzle-orm";
 
 export const toolExecutionResultSchema = z.object({
   success: z.boolean(),
@@ -52,7 +49,6 @@ export class ToolExecutor {
     @inject(TemplatingEngine) private readonly templatingEngine: TemplatingEngine,
     @inject(ConversationContextBuilder) private readonly conversationContextBuilder: ConversationContextBuilder,
     @inject(IsolatedScriptExecutor) private readonly scriptExecutor: IsolatedScriptExecutor,
-    @inject(ConversationStorageService) private readonly storageService: ConversationStorageService,
   ) { }
 
   /**
@@ -70,10 +66,6 @@ export class ToolExecutor {
       result = await this.executeScriptTool(tool, context, parameters);
     } else {
       result = await this.executeSmartFunctionTool(tool, context, parameters, costManagementConfig);
-    }
-
-    if (result.success && tool.storageConfig) {
-      result = await this.uploadToolResultToStorage(tool, context, result);
     }
 
     return result;
@@ -230,66 +222,6 @@ export class ToolExecutor {
       logger.error({ toolId: tool.id, error }, `Error executing script tool "${tool.name}"`);
       const endMs = Date.now();
       return { success: false, toolId: tool.id, parameters, failureReason: error.message ?? 'Unknown error during script execution', durationMs: endMs - toolStartMs, startMs: toolStartMs, endMs };
-    }
-  }
-
-  /**
-   * Uploads the tool result to storage when storageConfig is set.
-   * Renders the fileName template, converts the result to a Buffer, uploads via ConversationStorageService,
-   * and augments the result with artifactId and storageUrl.
-   */
-  private async uploadToolResultToStorage(tool: Tool, context: ConversationContext, executionResult: ToolExecutionResult): Promise<ToolExecutionResult> {
-    const storageConfig = tool.storageConfig!;
-    try {
-      const renderedFileName = await this.templatingEngine.render(storageConfig.fileName, context);
-      const renderedMimeType = await this.templatingEngine.render(storageConfig.mimeType, context);
-
-      let data: Buffer;
-      if (typeof executionResult.result === 'string') {
-        data = Buffer.from(executionResult.result);
-      } else {
-        data = Buffer.from(JSON.stringify(executionResult.result));
-      }
-
-      const project = await db.query.projects.findFirst({ where: eq(projects.id, context.projectId) });
-      if (!project?.storageConfig?.storageProviderId) {
-        logger.warn({ toolId: tool.id, conversationId: context.conversationId }, 'Storage provider not configured for project — skipping tool result upload');
-        return executionResult;
-      }
-
-      const { id: artifactId, url: storageUrl } = await this.storageService.uploadArtifact(
-        project.storageConfig,
-        context.projectId,
-        context.conversationId,
-        'tool_output',
-        data,
-        { contentType: renderedMimeType, customMetadata: { fileName: renderedFileName } },
-        undefined,
-        undefined,
-        undefined,
-      );
-
-      logger.info({ toolId: tool.id, conversationId: context.conversationId, artifactId, fileName: renderedFileName }, 'Tool result uploaded to storage');
-
-      const augmentedResult = { ...executionResult };
-      if (typeof executionResult.result === 'object' && executionResult.result !== null && !Array.isArray(executionResult.result)) {
-        augmentedResult.result = {
-          ...executionResult.result,
-          artifactId,
-          storageUrl,
-        };
-      } else {
-        augmentedResult.result = {
-          originalResult: executionResult.result,
-          artifactId,
-          storageUrl,
-        };
-      }
-
-      return augmentedResult;
-    } catch (error) {
-      logger.error({ toolId: tool.id, conversationId: context.conversationId, error: error instanceof Error ? error.message : String(error) }, 'Failed to upload tool result to storage');
-      return executionResult;
     }
   }
 

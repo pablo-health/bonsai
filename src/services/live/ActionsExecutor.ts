@@ -6,7 +6,10 @@ import { ToolExecutor } from './ToolExecutor';
 import { ModifyVariablesEffectExecutor } from './ModifyVariablesEffectExecutor';
 import { ModifyUserProfileEffectExecutor } from './ModifyUserProfileEffectExecutor';
 import { UserService } from '../UserService';
-import type { AbortConversationEffect, AttachFileEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect } from '../../types/actions';
+import { ConversationStorageService } from '../ConversationStorageService';
+import { db } from '../../db';
+import { eq } from 'drizzle-orm';
+import type { AbortConversationEffect, AttachFileEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect, SaveArtifactEffect } from '../../types/actions';
 import type { MessageVisibility, ConversationEventType, ConversationEventData, ActionsExecutionPlanEventData } from '../../types/conversationEvents';
 import { LIFECYCLE_EFFECT_RESTRICTIONS } from '../../types/actions';
 import type { GlobalAction, Guardrail } from '../../types/models';
@@ -98,6 +101,7 @@ export class ActionsExecutor {
     @inject(ModifyVariablesEffectExecutor) private readonly modifyVariablesExecutor: ModifyVariablesEffectExecutor,
     @inject(ModifyUserProfileEffectExecutor) private readonly modifyUserProfileExecutor: ModifyUserProfileEffectExecutor,
     @inject(UserService) private readonly userService: UserService,
+    @inject(ConversationStorageService) private readonly storageService: ConversationStorageService,
   ) { }
 
   /**
@@ -132,6 +136,8 @@ export class ActionsExecutor {
       case 'modify_variables':
         return 3;
       case 'modify_user_profile':
+        return 4;
+      case 'save_artifact':
         return 4;
       case 'modify_user_input':
         return 5;
@@ -449,6 +455,9 @@ export class ActionsExecutor {
 
       case 'call_tool':
         return await this.executeCallTool(effect, context, actionName, emitEvent);
+
+      case 'save_artifact':
+        return await this.executeSaveArtifact(effect, context, actionName, emitEvent);
 
       case 'generate_response':
         return await this.executeGenerateResponse(effect, context, actionName);
@@ -913,9 +922,77 @@ export class ActionsExecutor {
   }
 
   /**
+   * Executes save_artifact effect.
+   * Resolves the data value (inline or from a variable reference), converts to a Buffer,
+   * uploads to project storage via ConversationStorageService, and stores the artifactId
+   * in the specified stage variable for downstream effects.
+   */
+  private async executeSaveArtifact(
+    effect: SaveArtifactEffect,
+    context: ConversationContext,
+    actionName: string,
+    emitEvent: EffectEventCallback,
+  ): Promise<EffectOutcome> {
+    try {
+      const renderedFileName = await this.templatingEngine.render(effect.fileName, context);
+      const renderedMimeType = effect.mimeType ? await this.templatingEngine.render(effect.mimeType, context) : 'application/octet-stream';
+
+      let dataValue: unknown;
+      if (typeof effect.data === 'string') {
+        const varPath = this.parseVarsReference(effect.data);
+        if (varPath !== null) {
+          dataValue = this.resolveVarPath(context.vars, varPath);
+        } else {
+          dataValue = await this.templatingEngine.render(effect.data, context);
+        }
+      } else {
+        dataValue = effect.data;
+      }
+
+      let data: Buffer;
+      if (typeof dataValue === 'string') {
+        data = Buffer.from(dataValue);
+      } else {
+        data = Buffer.from(JSON.stringify(dataValue));
+      }
+
+      const project = await db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, context.projectId) });
+      if (!project?.storageConfig?.storageProviderId) {
+        throw new Error('Storage provider not configured for this project');
+      }
+
+      const { id: artifactId } = await this.storageService.uploadArtifact(
+        project.storageConfig,
+        context.projectId,
+        context.conversationId,
+        'other',
+        data,
+        { contentType: renderedMimeType, customMetadata: { fileName: renderedFileName } },
+        undefined,
+        undefined,
+        undefined,
+      );
+
+      logger.info({ conversationId: context.conversationId, actionName, artifactId, fileName: renderedFileName }, `Artifact saved to storage`);
+
+      context.vars[effect.variableName] = artifactId;
+
+      await emitEvent('variables_updated', { sourceActionName: actionName, changedVariableNames: [effect.variableName], variables: context.vars as any });
+
+      return {
+        shouldEndConversation: false,
+        shouldAbortConversation: false,
+        hasModifiedVars: true,
+      };
+    } catch (error) {
+      logger.error({ conversationId: context.conversationId, actionName, error: error instanceof Error ? error.message : String(error) }, `Failed to save artifact`);
+      throw error;
+    }
+  }
+
+  /**
    * Executes attach_file effect.
    * Resolves the artifact ID template and stages the artifact for delivery with the AI response.
-   * The artifact is already in storage (uploaded by a tool with storageConfig).
    */
   private async executeAttachFile(
     effect: AttachFileEffect,

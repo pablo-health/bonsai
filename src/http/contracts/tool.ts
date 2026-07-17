@@ -38,15 +38,6 @@ export const toolRouteParamsSchema = z.object({
 
 export type ToolRouteParams = z.infer<typeof toolRouteParamsSchema>;
 
-/**
- * Schema for tool storage configuration
- * When set, the tool's result is uploaded to storage and artifactId is injected into the result
- */
-export const toolStorageConfigSchema = z.object({
-  fileName: z.string().min(1).describe('Display name for the stored file; supports Handlebars templating'),
-  mimeType: z.string().min(1).describe('MIME type for the stored file'),
-}).openapi('ToolStorageConfig');
-
 /** Shared create fields present on every tool type */
 const createToolBaseSchema = z.object({
   id: z.string().min(1).optional().describe('Unique identifier for the tool (auto-generated if not provided)'),
@@ -55,7 +46,6 @@ const createToolBaseSchema = z.object({
   parameters: z.array(toolParameterSchema).optional().default([]).describe('Parameters that this tool expects to receive'),
   tags: z.array(z.string()).optional().default([]).describe('Tags for categorizing and filtering this tool'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Additional tool-specific metadata'),
-  storageConfig: toolStorageConfigSchema.optional().describe('When set, the tool result is uploaded to storage and artifactId is injected into the result'),
 });
 
 /**
@@ -109,7 +99,6 @@ const updateToolBaseSchema = z.object({
   parameters: z.array(toolParameterSchema).optional().describe('Updated parameters for the tool (smart_function)'),
   tags: z.array(z.string()).optional().describe('Updated tags (smart_function)'),
   metadata: z.record(z.string(), z.unknown()).optional().describe('Updated metadata (smart_function)'),
-  storageConfig: toolStorageConfigSchema.optional().describe('Updated storage configuration'),
   version: z.number().int().min(1).describe('Current version number for optimistic locking (smart_function)'),
 });
 
@@ -186,9 +175,7 @@ export const toolResponseSchema = z.object({
   webhookHeaders: z.record(z.string(), z.string()).nullable().describe('HTTP headers (webhook only)'),
   webhookBody: z.string().nullable().describe('Request body template (webhook only)'),
   // script fields
-  code: z.string().nullable().describe('JavaScript code (script only)'),
-  // storage config
-  storageConfig: toolStorageConfigSchema.nullable().describe('Storage configuration for the tool result'),
+  code: z.string().nullable().describe('JavaScript code (script)'),
   // shared fields
   parameters: z.array(toolParameterSchema).describe('Parameters that this tool expects to receive'),
   tags: z.array(z.string()).describe('Tags for categorizing and filtering this tool'),

@@ -120,13 +120,27 @@ export const banUserEffectSchema = z.object({
 }).openapi('BanUserEffect');
 
 /**
+ * Effect type: Save Artifact
+ * Saves data from the conversation context to project storage and stores the artifactId in a variable.
+ * Accepts either inline data (base64-encoded string or any JSON-serializable value) or a variable reference.
+ * The artifactId is stored in the specified variable for downstream effects (e.g. attach_file).
+ */
+export const saveArtifactEffectSchema = z.object({
+  type: z.literal('save_artifact').describe('Effect type'),
+  data: z.unknown().describe('Data to save: inline value (string, base64, object) or a variable reference template such as {{vars.myFile}}'),
+  fileName: z.string().min(1).describe('Display name for the stored file; supports Handlebars templating'),
+  mimeType: z.string().min(1).optional().describe('MIME type for the stored file'),
+  variableName: z.string().min(1).describe('Variable name to store the artifactId in (e.g. "myArtifactId")'),
+}).openapi('SaveArtifactEffect');
+
+/**
  * Effect type: Attach File
  * Stages a file for delivery alongside the AI response. Must be paired with generate_response
  * in the same action — standalone attach_file is silently skipped.
  */
 export const attachFileEffectSchema = z.object({
   type: z.literal('attach_file').describe('Effect type'),
-  artifactId: z.string().min(1).describe('Artifact ID of the file in storage to attach. Typically from a tool result with storageConfig enabled.'),
+  artifactId: z.string().min(1).describe('Artifact ID of the file in storage to attach. Typically from a save_artifact effect or a tool result.'),
   fileName: z.string().min(1).optional().describe('Display name for the attachment. Defaults to the artifact\'s stored name when omitted.'),
   mimeType: z.string().min(1).optional().describe('MIME type override. When omitted, uses the artifact\'s stored MIME type.'),
 }).openapi('AttachFileEffect');
@@ -143,6 +157,7 @@ export const effectSchema = z.discriminatedUnion('type', [
   modifyVariablesEffectSchema,
   modifyUserProfileEffectSchema,
   callToolEffectSchema,
+  saveArtifactEffectSchema,
   generateResponseEffectSchema,
   changeVisibilityEffectSchema,
   banUserEffectSchema,
@@ -159,6 +174,7 @@ export type UserProfileOperation = z.infer<typeof userProfileOperationSchema>;
 export type ModifyVariablesEffect = z.infer<typeof modifyVariablesEffectSchema>;
 export type ModifyUserProfileEffect = z.infer<typeof modifyUserProfileEffectSchema>;
 export type CallToolEffect = z.infer<typeof callToolEffectSchema>;
+export type SaveArtifactEffect = z.infer<typeof saveArtifactEffectSchema>;
 export type GenerateResponseEffect = z.infer<typeof generateResponseEffectSchema>;
 export type ChangeVisibilityEffect = z.infer<typeof changeVisibilityEffectSchema>;
 export type BanUserEffect = z.infer<typeof banUserEffectSchema>;

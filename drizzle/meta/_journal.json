@@ -456,6 +456,13 @@
       "when": 1784205249525,
       "tag": "0064_busy_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1784296427503,
+      "tag": "0065_tearful_vengeance",
+      "breakpoints": true
     }
   ]
 }

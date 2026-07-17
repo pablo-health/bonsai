@@ -254,8 +254,6 @@ export const tools = pgTable('tools', {
   webhookBody: text('webhook_body'),
   // script fields
   code: text('code'),
-  // storage config — when set, the tool's result is uploaded to storage and artifactId is injected into the result
-  storageConfig: jsonb('storage_config').$type<{ fileName: string; mimeType: string }>(),
   parameters: jsonb('parameters').notNull().default([]).$type<ToolParameter[]>(),
   tags: jsonb('tags').notNull().default([]).$type<string[]>(),
   metadata: jsonb('metadata').$type<Record<string, any>>(),
