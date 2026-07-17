@@ -128,6 +128,7 @@ export const banUserEffectSchema = z.object({
 export const saveArtifactEffectSchema = z.object({
   type: z.literal('save_artifact').describe('Effect type'),
   data: z.unknown().describe('Data to save: inline value (string, base64, object) or a variable reference template such as {{vars.myFile}}'),
+  dataEncoding: z.enum(['raw', 'base64']).optional().default('raw').describe('Encoding of the data: raw (store as-is), base64 (decode before storing)'),
   fileName: z.string().min(1).describe('Display name for the stored file; supports Handlebars templating'),
   mimeType: z.string().min(1).optional().describe('MIME type for the stored file'),
   variableName: z.string().min(1).describe('Variable name to store the artifactId in (e.g. "myArtifactId")'),

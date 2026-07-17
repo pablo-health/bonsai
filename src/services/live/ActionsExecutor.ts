@@ -950,7 +950,10 @@ export class ActionsExecutor {
       }
 
       let data: Buffer;
-      if (typeof dataValue === 'string') {
+      if (effect.dataEncoding === 'base64') {
+        const stringValue = typeof dataValue === 'string' ? dataValue : JSON.stringify(dataValue);
+        data = Buffer.from(stringValue, 'base64');
+      } else if (typeof dataValue === 'string') {
         data = Buffer.from(dataValue);
       } else {
         data = Buffer.from(JSON.stringify(dataValue));
