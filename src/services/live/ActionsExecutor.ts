@@ -942,11 +942,19 @@ export class ActionsExecutor {
         const varPath = this.parseVarsReference(effect.data);
         if (varPath !== null) {
           dataValue = this.resolveVarPath(context.vars, varPath);
+          // If the variable doesn't exist, fall through to templating which may resolve it or produce an empty string
+          if (dataValue === undefined) {
+            dataValue = await this.templatingEngine.render(effect.data, context);
+          }
         } else {
           dataValue = await this.templatingEngine.render(effect.data, context);
         }
       } else {
         dataValue = effect.data;
+      }
+
+      if (dataValue === undefined || dataValue === null) {
+        throw new Error(`save_artifact: resolved data is null/undefined for variable "${effect.variableName}". Check that the referenced variable or template resolves to a value.`);
       }
 
       let data: Buffer;
