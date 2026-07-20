@@ -108,6 +108,10 @@ Connection failures trigger exponential backoff reconnection (max 5 minutes).
 
 Outbound emails include `Message-ID` (generated from conversation ID), `In-Reply-To`, and `References` headers. The `skipNextEmail` flag suppresses the first response on new inbound conversations.
 
+### Outbound Attachments
+
+When an action uses the [`attach_file`](./actions-and-effects#attach_file) effect alongside `generate_response`, the resulting file is downloaded from storage and included as an attachment on the outbound email. Multiple attachments are supported and delivered in the order they were staged. The email is sent with all attachments buffered after the AI response completes.
+
 ## Environment Variables
 
 | Variable | Default | Description |

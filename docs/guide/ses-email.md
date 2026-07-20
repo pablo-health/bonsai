@@ -229,9 +229,12 @@ EMAIL_SESSION_TIMEOUT_MS=86400000   # 24 hours (default)
 | Transcription updates | ❌ |
 | Session authentication (per-message API key) | ✅ (via webhook URL query param) |
 | MIME body parsing | ✅ (plain text, HTML-to-text fallback) |
-| Attachment handling | ❌ (attachments are not parsed or forwarded) |
+| Inbound attachment parsing | ❌ (inbound email attachments are not parsed or forwarded) |
+| Outbound file attachments | ✅ (via `attach_file` effect) |
 
-Only `end_ai_generation_output` messages are delivered as email replies. Streaming voice chunks, image outputs, and event push messages are silently discarded. The MIME parser extracts plain text first, then falls back to HTML-to-text conversion, then raw HTML. Attachments are silently ignored.
+Only `end_ai_generation_output` messages are delivered as email replies. Streaming voice chunks, image outputs, and event push messages are silently discarded. The MIME parser extracts plain text first, then falls back to HTML-to-text conversion, then raw HTML. Inbound attachments are silently ignored.
+
+Outbound file attachments are supported via the [`attach_file`](./actions-and-effects#attach_file) effect. When paired with `generate_response`, files are downloaded from storage and included as email attachments. Multiple attachments are delivered in the order they were staged.
 
 ---
 

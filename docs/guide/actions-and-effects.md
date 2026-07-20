@@ -243,6 +243,58 @@ Sets the visibility of the current turn's messages (both the user input and the 
 
 The visibility is recorded on the message event and evaluated when building history on subsequent turns. See [Message Visibility](#message-visibility) for how each value is interpreted.
 
+### `save_artifact`
+
+Saves data from the conversation context to project storage and stores the resulting `artifactId` in a stage variable. The data can be an inline value (string, base64-encoded data, or any JSON-serializable object) or a reference to a variable via Handlebars template syntax.
+
+Typically used in combination with `attach_file` to deliver files to the client.
+
+```json
+{
+  "type": "save_artifact",
+  "data": "{{vars.generatedPdf}}",
+  "dataEncoding": "base64",
+  "fileName": "invoice.pdf",
+  "mimeType": "application/pdf",
+  "variableName": "invoiceArtifactId"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `data` | Yes | Data to save: inline value (string, base64, object) or a variable reference template such as `{{vars.myFile}}` |
+| `dataEncoding` | No | Encoding of the data: `"raw"` (store as-is, default) or `"base64"` (decode base64 before storing) |
+| `fileName` | Yes | Display name for the stored file; supports Handlebars templating |
+| `mimeType` | No | MIME type for the stored file. Defaults to `"application/octet-stream"` when omitted |
+| `variableName` | Yes | Variable name to store the `artifactId` in (e.g. `"myArtifactId"`) |
+
+The `artifactId` is stored in the specified variable for downstream effects. Requires a storage provider configured on the project.
+
+### `attach_file`
+
+Stages a file for delivery alongside the AI response. Must be paired with `generate_response` in the same action — a standalone `attach_file` with no response generation is silently skipped.
+
+The `artifactId` reference typically comes from a preceding `save_artifact` effect or a tool result.
+
+```json
+{
+  "type": "attach_file",
+  "artifactId": "{{vars.invoiceArtifactId}}",
+  "fileName": "invoice.pdf",
+  "mimeType": "application/pdf"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `artifactId` | Yes | Artifact ID of the file in storage to attach. Supports Handlebars templating (e.g. `{{vars.myArtifactId}}`) |
+| `fileName` | No | Display name for the attachment. Defaults to the artifact's stored name when omitted |
+| `mimeType` | No | MIME type override. When omitted, uses the artifact's stored MIME type |
+
+File attachments are delivered to the client as `attach_file_output` messages after text/voice output but before `end_ai_generation_output`. Supported channels: WebSocket, WebRTC, SMTP-IMAP, SendGrid, SES.
+
+`attach_file` is restricted in `__on_leave`, `__conversation_end`, `__conversation_abort`, and `__conversation_failed` lifecycle hooks.
+
 ## Effect Execution Priority
 
 Effects from **all** triggered actions are gathered into a single global list, sorted by priority, and then conflict-resolved before execution. Effects within the same priority tier run in the order they appeared across all actions.
@@ -253,8 +305,11 @@ Effects from **all** triggered actions are gathered into a single global list, s
 | 2 | `call_tool` _(smart\_function tools)_ |
 | 3 | `modify_variables` |
 | 4 | `modify_user_profile` |
+| 4 | `save_artifact` |
 | 5 | `modify_user_input` |
+| 5 | `attach_file` |
 | 6 | `call_tool` _(script tools)_ |
+| 7 | `ban_user` |
 | 50 | `change_visibility` |
 | 100 | `generate_response` |
 | 200 | `end_conversation` |
