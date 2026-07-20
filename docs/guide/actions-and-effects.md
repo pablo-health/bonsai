@@ -268,7 +268,7 @@ Typically used in combination with `attach_file` to deliver files to the client.
 | `mimeType` | No | MIME type for the stored file. Defaults to `"application/octet-stream"` when omitted |
 | `variableName` | Yes | Variable name to store the `artifactId` in (e.g. `"myArtifactId"`) |
 
-The `artifactId` is stored in the specified variable for downstream effects. Requires a storage provider configured on the project.
+The `artifactId` is stored in the specified variable for downstream effects. Requires a storage provider configured on the project. Runs at **priority 8**, after all tool invocations (including scripts), so tool-generated data is available to save.
 
 ### `attach_file`
 
@@ -291,7 +291,7 @@ The `artifactId` reference typically comes from a preceding `save_artifact` effe
 | `fileName` | No | Display name for the attachment. Defaults to the artifact's stored name when omitted |
 | `mimeType` | No | MIME type override. When omitted, uses the artifact's stored MIME type |
 
-File attachments are delivered to the client as `attach_file_output` messages after text/voice output but before `end_ai_generation_output`. Supported channels: WebSocket, WebRTC, SMTP-IMAP, SendGrid, SES.
+File attachments are delivered to the client as `attach_file_output` messages after text/voice output but before `end_ai_generation_output`. Supported channels: WebSocket, WebRTC, SMTP-IMAP, SendGrid, SES. Runs at **priority 9**, after `save_artifact` (8), so the artifact ID is guaranteed to be available.
 
 `attach_file` is restricted in `__on_leave`, `__conversation_end`, `__conversation_abort`, and `__conversation_failed` lifecycle hooks.
 
@@ -305,18 +305,18 @@ Effects from **all** triggered actions are gathered into a single global list, s
 | 2 | `call_tool` _(smart\_function tools)_ |
 | 3 | `modify_variables` |
 | 4 | `modify_user_profile` |
-| 4 | `save_artifact` |
 | 5 | `modify_user_input` |
-| 5 | `attach_file` |
 | 6 | `call_tool` _(script tools)_ |
 | 7 | `ban_user` |
+| 8 | `save_artifact` |
+| 9 | `attach_file` |
 | 50 | `change_visibility` |
 | 100 | `generate_response` |
 | 200 | `end_conversation` |
 | 201 | `abort_conversation` |
 | 202 | `go_to_stage` |
 
-`call_tool` effects are assigned a priority at runtime based on the referenced tool's `type`: `webhook` tools run at priority 1, `script` tools at priority 6, and `smart_function` tools at priority 2.
+`call_tool` effects are assigned a priority at runtime based on the referenced tool's `type`: `webhook` tools run at priority 1, `script` tools at priority 6, and `smart_function` tools at priority 2. `save_artifact` (8) and `attach_file` (9) run after all tool types so that tool-generated data is available to save and attach.
 
 ### Conflict Resolution
 

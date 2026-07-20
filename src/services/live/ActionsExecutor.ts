@@ -137,14 +137,14 @@ export class ActionsExecutor {
         return 3;
       case 'modify_user_profile':
         return 4;
-      case 'save_artifact':
-        return 4;
       case 'modify_user_input':
-        return 5;
-      case 'attach_file':
         return 5;
       case 'ban_user':
         return 7;
+      case 'save_artifact':
+        return 8;
+      case 'attach_file':
+        return 9;
       case 'change_visibility':
         return 50;
       case 'generate_response':
