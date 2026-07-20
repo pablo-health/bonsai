@@ -15389,6 +15389,7 @@
           },
           "metadata": {
             "type": "object",
+            "nullable": true,
             "additionalProperties": {
               "nullable": true
             },
@@ -15507,6 +15508,7 @@
                 },
                 "metadata": {
                   "type": "object",
+                  "nullable": true,
                   "additionalProperties": {
                     "nullable": true
                   },
@@ -52005,6 +52007,7 @@
                     },
                     "metadata": {
                       "type": "object",
+                      "nullable": true,
                       "additionalProperties": {
                         "nullable": true
                       },
@@ -52276,6 +52279,7 @@
                           },
                           "metadata": {
                             "type": "object",
+                            "nullable": true,
                             "additionalProperties": {
                               "nullable": true
                             },
@@ -52442,6 +52446,7 @@
                     },
                     "metadata": {
                       "type": "object",
+                      "nullable": true,
                       "additionalProperties": {
                         "nullable": true
                       },
@@ -52642,6 +52647,7 @@
                     },
                     "metadata": {
                       "type": "object",
+                      "nullable": true,
                       "additionalProperties": {
                         "nullable": true
                       },
@@ -52974,6 +52980,7 @@
                           },
                           "metadata": {
                             "type": "object",
+                            "nullable": true,
                             "additionalProperties": {
                               "nullable": true
                             },
