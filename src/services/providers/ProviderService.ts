@@ -176,7 +176,10 @@ export class ProviderService extends BaseService {
       description: updateData.description,
       providerType: updateData.providerType,
       apiType: updateData.apiType,
-      config: updateData.config ? await this.secretRefUtils.secretizeObject(updateData.config as Record<string, unknown>, SENSITIVE_PROVIDER_CONFIG_FIELDS) : updateData.config,
+      config: updateData.config ? await this.secretRefUtils.secretizeObject(
+        { ...(updateData.config as Record<string, unknown>), oauth2: (updateData.config as Record<string, unknown>).oauth2 ?? (existingProvider.config as Record<string, unknown>).oauth2 },
+        SENSITIVE_PROVIDER_CONFIG_FIELDS,
+      ) : updateData.config,
       tags: updateData.tags,
       version: existingProvider.version + 1,
       updatedAt: new Date(),
