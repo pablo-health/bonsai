@@ -526,7 +526,7 @@ export const savedFunnelQueries = pgTable('saved_funnel_queries', {
   index('idx_saved_funnel_queries_operator_id').on(table.operatorId),
 ]);
 
-export type ArtifactType = 'user_voice' | 'user_transcript' | 'ai_voice' | 'ai_transcript' | 'tool_input' | 'tool_output' | 'other';
+export type ArtifactType = 'user_voice' | 'user_transcript' | 'ai_voice' | 'ai_transcript' | 'tool_input' | 'tool_output' | 'attachment' | 'other';
 
 // Secrets table — stores AES-256-GCM encrypted secret values
 // Each row holds a single encrypted value; the ID is embedded in `@sec:name:id` references

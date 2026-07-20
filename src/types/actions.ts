@@ -120,6 +120,33 @@ export const banUserEffectSchema = z.object({
 }).openapi('BanUserEffect');
 
 /**
+ * Effect type: Save Artifact
+ * Saves data from the conversation context to project storage and stores the artifactId in a variable.
+ * Accepts either inline data (base64-encoded string or any JSON-serializable value) or a variable reference.
+ * The artifactId is stored in the specified variable for downstream effects (e.g. attach_file).
+ */
+export const saveArtifactEffectSchema = z.object({
+  type: z.literal('save_artifact').describe('Effect type'),
+  data: z.unknown().describe('Data to save: inline value (string, base64, object) or a variable reference template such as {{vars.myFile}}'),
+  dataEncoding: z.enum(['raw', 'base64']).optional().default('raw').describe('Encoding of the data: raw (store as-is), base64 (decode before storing)'),
+  fileName: z.string().min(1).describe('Display name for the stored file; supports Handlebars templating'),
+  mimeType: z.string().min(1).optional().describe('MIME type for the stored file'),
+  variableName: z.string().min(1).describe('Variable name to store the artifactId in (e.g. "myArtifactId")'),
+}).openapi('SaveArtifactEffect');
+
+/**
+ * Effect type: Attach File
+ * Stages a file for delivery alongside the AI response. Must be paired with generate_response
+ * in the same action — standalone attach_file is silently skipped.
+ */
+export const attachFileEffectSchema = z.object({
+  type: z.literal('attach_file').describe('Effect type'),
+  artifactId: z.string().min(1).describe('Artifact ID of the file in storage to attach. Typically from a save_artifact effect or a tool result.'),
+  fileName: z.string().min(1).optional().describe('Display name for the attachment. Defaults to the artifact\'s stored name when omitted.'),
+  mimeType: z.string().min(1).optional().describe('MIME type override. When omitted, uses the artifact\'s stored MIME type.'),
+}).openapi('AttachFileEffect');
+
+/**
  * Discriminated union of all effect types
  * Defines the possible effects that can be executed in stage actions or global actions
  */
@@ -131,9 +158,11 @@ export const effectSchema = z.discriminatedUnion('type', [
   modifyVariablesEffectSchema,
   modifyUserProfileEffectSchema,
   callToolEffectSchema,
+  saveArtifactEffectSchema,
   generateResponseEffectSchema,
   changeVisibilityEffectSchema,
   banUserEffectSchema,
+  attachFileEffectSchema,
 ]).openapi('Effect');
 
 // Infer types from schemas
@@ -146,9 +175,11 @@ export type UserProfileOperation = z.infer<typeof userProfileOperationSchema>;
 export type ModifyVariablesEffect = z.infer<typeof modifyVariablesEffectSchema>;
 export type ModifyUserProfileEffect = z.infer<typeof modifyUserProfileEffectSchema>;
 export type CallToolEffect = z.infer<typeof callToolEffectSchema>;
+export type SaveArtifactEffect = z.infer<typeof saveArtifactEffectSchema>;
 export type GenerateResponseEffect = z.infer<typeof generateResponseEffectSchema>;
 export type ChangeVisibilityEffect = z.infer<typeof changeVisibilityEffectSchema>;
 export type BanUserEffect = z.infer<typeof banUserEffectSchema>;
+export type AttachFileEffect = z.infer<typeof attachFileEffectSchema>;
 export type Effect = z.infer<typeof effectSchema>;
 
 
@@ -278,7 +309,7 @@ export const LIFECYCLE_EFFECT_RESTRICTIONS: Record<string, Set<Effect['type']>> 
    * __on_leave: Cannot change stage or generate response during exit
    * go_to_stage would create infinite loops, generate_response is handled by destination stage
    */
-  on_leave: new Set<Effect['type']>(['go_to_stage', 'generate_response']),
+  on_leave: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'attach_file']),
 
   /**
    * __on_fallback: No restrictions - fallback can do anything
@@ -300,15 +331,15 @@ export const LIFECYCLE_EFFECT_RESTRICTIONS: Record<string, Set<Effect['type']>> 
   /**
    * __conversation_end: Conversation is already ending — no stage navigation, response generation, or abort
    */
-  conversation_end: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'abort_conversation']),
+  conversation_end: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'abort_conversation', 'attach_file']),
 
   /**
    * __conversation_abort: Conversation is already aborting — no stage navigation, response generation, or end
    */
-  conversation_abort: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'end_conversation']),
+  conversation_abort: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'end_conversation', 'attach_file']),
 
   /**
    * __conversation_failed: Conversation is in an error state — no navigation, response, or termination effects
    */
-  conversation_failed: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'end_conversation', 'abort_conversation']),
+  conversation_failed: new Set<Effect['type']>(['go_to_stage', 'generate_response', 'end_conversation', 'abort_conversation', 'attach_file']),
 };

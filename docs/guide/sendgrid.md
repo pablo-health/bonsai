@@ -74,6 +74,10 @@ Content-Type: application/json
 
 AI responses are sent back via SendGrid's SDK. Only `end_ai_generation_output` messages produce an email.
 
+### Outbound Attachments
+
+When an action uses the [`attach_file`](./actions-and-effects#attach_file) effect alongside `generate_response`, the resulting file is downloaded from storage and included as an attachment on the outbound email. Multiple attachments are supported and delivered in the order they were staged.
+
 ### Threading
 
 Outbound emails include `Message-ID` (generated from conversation ID), `In-Reply-To`, and `References` headers to maintain email thread continuity.
