@@ -48,6 +48,7 @@ class ImapMailboxSession {
     public readonly emailToProject: Record<string, string | EmailRoutingEntry> | undefined,
     public readonly oauth2AccessToken: string | undefined,
     public readonly processedFolder: string,
+    public readonly ccBccReplyAsHandOff: boolean,
   ) {}
 
   public async connect(): Promise<void> {
@@ -308,6 +309,7 @@ class ImapMailboxSession {
         routing.bcc,
         routing.fromAddress,
         () => this.moveMessage(uid, this.processedFolder),
+        this.ccBccReplyAsHandOff,
       );
 
     } catch (error) {
@@ -536,6 +538,7 @@ export class ImapInboundService {
       config.emailToProject,
       config.oauth2?.accessToken,
       config.processedFolder,
+      config.ccBccReplyAsHandOff,
     );
 
     this.sessions.set(provider.id, session);
@@ -599,6 +602,7 @@ export class ImapInboundService {
           config.emailToProject,
           config.oauth2?.accessToken,
           config.processedFolder,
+          config.ccBccReplyAsHandOff,
         );
 
         this.sessions.set(provider.id, session);

@@ -24,7 +24,7 @@ import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contract
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
-import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
+import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
 import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 import { stripEmailQuotes } from '../shared/EmailBodyCleaner';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -160,7 +160,7 @@ export class SesChannelHost {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'SES webhook: channel provider config is invalid');
       return;
     }
-    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName } = configResult.data;
+    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName, ccBccReplyAsHandOff } = configResult.data;
 
     const snsNotification = req.body as SnsNotification;
 
@@ -194,15 +194,55 @@ export class SesChannelHost {
     const rawMime = await this.getRawMime(sesMessage, inboundMode, s3BucketName, accessKeyId, secretAccessKey, region, projectId);
     const emailBody = await this.extractEmailBody(rawMime, senderEmail);
 
-    const replyConversationId = extractConversationIdFromMessageId(commonHeaders['in-reply-to']);
+    const replyConversationId = extractConversationIdFromMessageId(commonHeaders['in-reply-to']) ?? extractConversationIdFromReferences(commonHeaders.references);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
       if (existingSessionId) {
+        const existingSession = this.sessionManager.getSession(existingSessionId);
+        const conversationUserEmail = existingSession?.clientConnection instanceof SesConnection
+          ? existingSession.clientConnection.getUserEmail()
+          : undefined;
+
+        if (ccBccReplyAsHandOff && conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+          logger.info({
+            projectId,
+            conversationId: replyConversationId,
+            from: senderEmail,
+            conversationUserEmail,
+          }, 'SES: reply from non-conversation user (CC/BCC hand-off), closing conversation');
+          await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+          const emailKey = `${projectId}:${replyConversationId}`;
+          this.emailSessionMap.delete(emailKey);
+          await this.sessionManager.unregisterSession(existingSessionId);
+          return;
+        }
+
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
         await this.dispatchTextInput(existingSessionId, emailBody);
         return;
+      }
+
+      // Session not found (may have timed out) — check if this is a hand-off reply
+      if (ccBccReplyAsHandOff) {
+        try {
+        if (senderEmail) {
+          const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
+          if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
+            logger.info({
+              projectId,
+              conversationId: replyConversationId,
+              from: senderEmail,
+              conversationUserId: conversation.userId,
+            }, 'SES: reply from non-conversation user (CC/BCC hand-off), session timed out, closing conversation');
+            await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+            return;
+          }
+        }
+      } catch (error) {
+        logger.warn({ error, projectId, conversationId: replyConversationId }, 'SES: conversation not found for hand-off check, falling through to new conversation');
+      }
       }
     }
 
@@ -218,6 +258,7 @@ export class SesChannelHost {
       undefined,
       undefined,
     );
+    connection.setUserEmail(senderEmail);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
@@ -326,6 +367,7 @@ export class SesChannelHost {
       resolvedCc,
       resolvedBcc,
     );
+    connection.setUserEmail(body.to);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
