@@ -266,6 +266,7 @@ export class SmtpImapChannelHost {
     bcc: string | undefined,
     routingFromAddress: string | undefined,
     onEmailSent: (() => void) | undefined,
+    ccBccReplyAsHandOff: boolean,
   ): Promise<void> {
     const replyConversationId = extractConversationIdFromMessageId(inReplyTo) ?? extractConversationIdFromReferences(references);
     logger.info({ projectId, from: senderEmail, to: targetEmail, inReplyTo, references, replyConversationId }, 'SMTP/IMAP: inbound email threading headers');
@@ -278,7 +279,7 @@ export class SmtpImapChannelHost {
           ? existingSession.clientConnection.getUserEmail()
           : undefined;
 
-        if (conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+        if (ccBccReplyAsHandOff && conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
           logger.info({
             projectId,
             conversationId: replyConversationId,
@@ -321,8 +322,9 @@ export class SmtpImapChannelHost {
       }
 
       // Session not found (may have timed out) — check if this is a hand-off reply
-      try {
-        if (senderEmail) {
+      if (ccBccReplyAsHandOff) {
+        try {
+          if (senderEmail) {
           const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
           if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
             logger.info({
@@ -337,6 +339,7 @@ export class SmtpImapChannelHost {
         }
       } catch (error) {
         logger.warn({ error, projectId, conversationId: replyConversationId }, 'SMTP/IMAP: conversation not found for hand-off check, falling through to new conversation');
+      }
       }
     }
 

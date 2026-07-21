@@ -133,7 +133,7 @@ export class SendGridChannelHost {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'SendGrid webhook: channel provider config is invalid');
       return;
     }
-    const { apiKey, fromAddress, threadingStrategy } = configResult.data;
+    const { apiKey, fromAddress, threadingStrategy, ccBccReplyAsHandOff } = configResult.data;
 
     const payload = req.body as SendGridInboundPayload;
     const senderEmail = payload.from;
@@ -156,7 +156,7 @@ export class SendGridChannelHost {
           ? existingSession.clientConnection.getUserEmail()
           : undefined;
 
-        if (conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+        if (ccBccReplyAsHandOff && conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
           logger.info({
             projectId,
             conversationId: replyConversationId,
@@ -177,7 +177,8 @@ export class SendGridChannelHost {
       }
 
       // Session not found (may have timed out) — check if this is a hand-off reply
-      try {
+      if (ccBccReplyAsHandOff) {
+        try {
         if (senderEmail) {
           const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
           if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
@@ -193,6 +194,7 @@ export class SendGridChannelHost {
         }
       } catch (error) {
         logger.warn({ error, projectId, conversationId: replyConversationId }, 'SendGrid: conversation not found for hand-off check, falling through to new conversation');
+      }
       }
     }
 

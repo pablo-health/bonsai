@@ -160,7 +160,7 @@ export class SesChannelHost {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'SES webhook: channel provider config is invalid');
       return;
     }
-    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName } = configResult.data;
+    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName, ccBccReplyAsHandOff } = configResult.data;
 
     const snsNotification = req.body as SnsNotification;
 
@@ -204,7 +204,7 @@ export class SesChannelHost {
           ? existingSession.clientConnection.getUserEmail()
           : undefined;
 
-        if (conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+        if (ccBccReplyAsHandOff && conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
           logger.info({
             projectId,
             conversationId: replyConversationId,
@@ -225,7 +225,8 @@ export class SesChannelHost {
       }
 
       // Session not found (may have timed out) — check if this is a hand-off reply
-      try {
+      if (ccBccReplyAsHandOff) {
+        try {
         if (senderEmail) {
           const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
           if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
@@ -241,6 +242,7 @@ export class SesChannelHost {
         }
       } catch (error) {
         logger.warn({ error, projectId, conversationId: replyConversationId }, 'SES: conversation not found for hand-off check, falling through to new conversation');
+      }
       }
     }
 
