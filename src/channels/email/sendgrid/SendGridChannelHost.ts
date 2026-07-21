@@ -26,6 +26,7 @@ import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
 import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
+import { stripEmailQuotes } from '../shared/EmailBodyCleaner';
 
 const DEFAULT_SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -136,7 +137,8 @@ export class SendGridChannelHost {
 
     const payload = req.body as SendGridInboundPayload;
     const senderEmail = payload.from;
-    const messageText = payload.text?.trim();
+    const rawBody = payload.text?.trim();
+    const messageText = rawBody ? stripEmailQuotes(rawBody) : '';
     const headers = this.parseHeaders(payload.headers);
 
     if (!senderEmail || !messageText) {
