@@ -24,7 +24,7 @@ import { sendGridSendBodySchema, sendGridSendResponseSchema } from '../../../htt
 import type { SendGridSendResponse } from '../../../http/contracts/sendgrid-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
-import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
+import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
 import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 import { stripEmailQuotes } from '../shared/EmailBodyCleaner';
 
@@ -146,19 +146,58 @@ export class SendGridChannelHost {
       return;
     }
 
-    const replyConversationId = extractConversationIdFromMessageId(headers['in-reply-to']);
+    const replyConversationId = extractConversationIdFromMessageId(headers['in-reply-to']) ?? extractConversationIdFromReferences(headers['references']);
 
     if (replyConversationId) {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
       if (existingSessionId) {
+        const existingSession = this.sessionManager.getSession(existingSessionId);
+        const conversationUserEmail = existingSession?.clientConnection instanceof SendGridConnection
+          ? existingSession.clientConnection.getUserEmail()
+          : undefined;
+
+        if (conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+          logger.info({
+            projectId,
+            conversationId: replyConversationId,
+            from: senderEmail,
+            conversationUserEmail,
+          }, 'SendGrid: reply from non-conversation user (CC/BCC hand-off), closing conversation');
+          await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+          const emailKey = `${projectId}:${replyConversationId}`;
+          this.emailSessionMap.delete(emailKey);
+          await this.sessionManager.unregisterSession(existingSessionId);
+          return;
+        }
+
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
         await this.dispatchTextInput(existingSessionId, messageText);
         return;
       }
+
+      // Session not found (may have timed out) — check if this is a hand-off reply
+      try {
+        if (senderEmail) {
+          const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
+          if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
+            logger.info({
+              projectId,
+              conversationId: replyConversationId,
+              from: senderEmail,
+              conversationUserId: conversation.userId,
+            }, 'SendGrid: reply from non-conversation user (CC/BCC hand-off), session timed out, closing conversation');
+            await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+            return;
+          }
+        }
+      } catch (error) {
+        logger.warn({ error, projectId, conversationId: replyConversationId }, 'SendGrid: conversation not found for hand-off check, falling through to new conversation');
+      }
     }
 
     const connection = new SendGridConnection(senderEmail, fromAddress, threadingStrategy ?? 'messageId', this.sessionManager, payload.subject ?? 'Re: Conversation', apiKey, undefined, undefined);
+    connection.setUserEmail(senderEmail);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
@@ -265,6 +304,7 @@ export class SendGridChannelHost {
       resolvedCc,
       resolvedBcc,
     );
+    connection.setUserEmail(body.to);
     const defaultSettings = sessionSettingsSchema.parse({ sendVoiceInput: false, receiveVoiceOutput: false, receiveTranscriptionUpdates: false, receiveEvents: false });
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);

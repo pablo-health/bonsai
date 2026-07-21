@@ -274,6 +274,27 @@ export class SmtpImapChannelHost {
       const existingSessionId = this.findSessionByConversationId(projectId, replyConversationId);
       if (existingSessionId) {
         const existingSession = this.sessionManager.getSession(existingSessionId);
+        const conversationUserEmail = existingSession?.clientConnection instanceof SmtpImapConnection
+          ? existingSession.clientConnection.getUserEmail()
+          : undefined;
+
+        if (conversationUserEmail && senderEmail.toLowerCase() !== conversationUserEmail.toLowerCase()) {
+          logger.info({
+            projectId,
+            conversationId: replyConversationId,
+            from: senderEmail,
+            conversationUserEmail,
+          }, 'SMTP/IMAP: reply from non-conversation user (CC/BCC hand-off), closing conversation');
+          await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+          const emailKey = `${projectId}:${replyConversationId}`;
+          this.emailSessionMap.delete(emailKey);
+          if (existingSession?.conversationId) {
+            this.conversationTargetEmailMap.delete(existingSession.conversationId);
+          }
+          await this.sessionManager.unregisterSession(existingSessionId);
+          return;
+        }
+
         if (existingSession?.clientConnection instanceof SmtpImapConnection) {
           existingSession.clientConnection.setOnEmailSent(onEmailSent);
           if (messageId) {
@@ -297,6 +318,25 @@ export class SmtpImapChannelHost {
         this.scheduleTimeout(existingSessionId, emailKey);
         await this.dispatchTextInput(existingSessionId, emailBody);
         return;
+      }
+
+      // Session not found (may have timed out) — check if this is a hand-off reply
+      try {
+        if (senderEmail) {
+          const conversation = await this.conversationService.getConversationById(projectId, replyConversationId);
+          if (conversation.userId.toLowerCase() !== senderEmail.toLowerCase()) {
+            logger.info({
+              projectId,
+              conversationId: replyConversationId,
+              from: senderEmail,
+              conversationUserId: conversation.userId,
+            }, 'SMTP/IMAP: reply from non-conversation user (CC/BCC hand-off), session timed out, closing conversation');
+            await this.conversationService.finishConversation(projectId, replyConversationId, 'Hand-off: reply from CC/BCC recipient');
+            return;
+          }
+        }
+      } catch (error) {
+        logger.warn({ error, projectId, conversationId: replyConversationId }, 'SMTP/IMAP: conversation not found for hand-off check, falling through to new conversation');
       }
     }
 

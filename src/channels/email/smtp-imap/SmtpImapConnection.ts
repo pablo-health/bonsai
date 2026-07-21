@@ -159,6 +159,10 @@ export class SmtpImapConnection extends EmailConnectionBase {
     this.onEmailSent = callback;
   }
 
+  getUserEmail(): string {
+    return this.toAddress;
+  }
+
   attachSession(session: Session): void {
     this.session = session;
   }

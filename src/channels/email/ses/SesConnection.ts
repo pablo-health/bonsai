@@ -12,6 +12,7 @@ export class SesConnection extends EmailConnectionBase {
   private cc: string | undefined;
   private bcc: string | undefined;
   private conversationId: string | undefined;
+  private userEmail: string | undefined;
   private inboundMessageId: string | undefined;
   private skipNextEmail = false;
 
@@ -54,6 +55,14 @@ export class SesConnection extends EmailConnectionBase {
 
   setSkipNextEmail(skip: boolean): void {
     this.skipNextEmail = skip;
+  }
+
+  setUserEmail(email: string): void {
+    this.userEmail = email;
+  }
+
+  getUserEmail(): string | undefined {
+    return this.userEmail;
   }
 
   attachSession(session: Session): void {
