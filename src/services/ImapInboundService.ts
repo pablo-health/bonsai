@@ -10,6 +10,7 @@ import { SecretRefUtils } from './secrets/SecretRefUtils';
 import { logger } from '../utils/logger';
 import { extractRecipientEmails, resolveEmailRouting } from '../channels/email/shared/EmailRoutingUtils';
 import type { EmailRoutingEntry } from '../channels/email/shared/EmailRoutingTypes';
+import { stripEmailQuotes } from '../channels/email/shared/EmailBodyCleaner';
 
 type MailboxState = 'disconnected' | 'connecting' | 'polling' | 'searching';
 
@@ -243,7 +244,8 @@ class ImapMailboxSession {
       logger.info({ providerId: this.providerId, uid, sourcePreview: source.substring(0, 200) }, 'IMAP: parsing email source');
       const parsed = await simpleParser(source);
       const senderEmail = parsed.from?.value?.[0]?.address ?? parsed.from?.text ?? 'unknown';
-      const emailBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim() ?? '';
+      const rawBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim() ?? '';
+      const emailBody = rawBody ? stripEmailQuotes(rawBody) : '';
       const subject = parsed.subject ?? '';
 
       const messageId = parsed.messageId || extractHeaderFromSource(source, 'Message-ID') || undefined;

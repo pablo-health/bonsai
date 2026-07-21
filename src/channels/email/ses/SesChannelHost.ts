@@ -26,6 +26,7 @@ import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
 import { extractConversationIdFromMessageId } from '../shared/MessageIdUtils';
 import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
+import { stripEmailQuotes } from '../shared/EmailBodyCleaner';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { simpleParser } from 'mailparser';
 
@@ -455,14 +456,9 @@ export class SesChannelHost {
 
     try {
       const parsed = await simpleParser(rawMime);
-      if (parsed.text) {
-        return parsed.text.trim();
-      }
-      if (parsed.textAsHtml) {
-        return parsed.textAsHtml.trim();
-      }
-      if (parsed.html) {
-        return parsed.html.trim();
+      const rawBody = parsed.text?.trim() ?? parsed.textAsHtml?.trim() ?? parsed.html?.trim();
+      if (rawBody) {
+        return stripEmailQuotes(rawBody);
       }
     } catch (error) {
       logger.warn({ error }, 'SES webhook: failed to parse MIME content');
