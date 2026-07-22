@@ -139,6 +139,55 @@ describe('RBAC Enforcement', () => {
       });
     });
 
+    describe('can delete project-scoped entities', () => {
+      it('can delete an agent', async () => {
+        const createRes = await agent.post(`/api/projects/${projectId}/agents`).send({
+          name: 'CM Agent to Delete',
+          prompt: 'Test prompt',
+        });
+        expect(createRes.status).to.equal(201);
+        expect((await agent.delete(`/api/projects/${projectId}/agents/${createRes.body.id}`).send({ version: createRes.body.version })).status).to.equal(204);
+      });
+
+      it('can delete a user', async () => {
+        const createRes = await agent.post(`/api/projects/${projectId}/users`).send({
+          profile: { name: 'CM User to Delete' },
+        });
+        expect(createRes.status).to.equal(201);
+        expect((await agent.delete(`/api/projects/${projectId}/users/${createRes.body.id}`)).status).to.equal(204);
+      });
+
+      it('can delete a scenario', async () => {
+        const createRes = await agent.post(`/api/projects/${projectId}/scenarios`).send({
+          name: 'CM Scenario to Delete',
+          language: 'en',
+          startingStageId: 'stage_123',
+          maxTurns: 10,
+        });
+        expect(createRes.status).to.equal(201);
+        expect((await agent.delete(`/api/projects/${projectId}/scenarios/${createRes.body.id}`).send({ version: createRes.body.version })).status).to.equal(204);
+      });
+
+      it('can delete a tester', async () => {
+        const createRes = await agent.post(`/api/projects/${projectId}/testers`).send({
+          name: 'CM Tester to Delete',
+          prompt: 'Test tester prompt',
+        });
+        expect(createRes.status).to.equal(201);
+        expect((await agent.delete(`/api/projects/${projectId}/testers/${createRes.body.id}`).send({ version: createRes.body.version })).status).to.equal(204);
+      });
+
+      it('can delete a quick prompt', async () => {
+        const createRes = await agent.post(`/api/projects/${projectId}/quick-prompts`).send({
+          categoryId: 'agent',
+          name: 'CM Quick Prompt to Delete',
+          content: 'Test content',
+        });
+        expect(createRes.status).to.equal(201);
+        expect((await agent.delete(`/api/projects/${projectId}/quick-prompts/${createRes.body.id}`).send({ version: createRes.body.version })).status).to.equal(204);
+      });
+    });
+
     describe('cannot access (403)', () => {
       it('cannot delete a project', async () => {
         expect((await agent.delete(`/api/projects/${projectId}`)).status).to.equal(403);
