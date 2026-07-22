@@ -65,4 +65,54 @@ describe('Analytics API', () => {
       expect(res.status).to.equal(200);
     });
   });
+
+  describe('slice query', () => {
+    it('returns empty results with valid query', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'conversations',
+        metrics: 'count',
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.rows).to.be.an('array');
+    });
+
+    it('returns 400 for missing source', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        metrics: 'count',
+      });
+      expect(res.status).to.equal(400);
+    });
+
+    it('returns 400 for missing metrics', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'conversations',
+      });
+      expect(res.status).to.equal(400);
+    });
+
+    it('returns 400 for unknown source', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'nonexistent_source',
+        metrics: 'count',
+      });
+      expect(res.status).to.equal(400);
+    });
+
+    it('returns results for non-existent project (no project filter enforced)', async () => {
+      const res = await authed().get('/api/projects/nonexistent/analytics/query').query({
+        source: 'conversations',
+        metrics: 'count',
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.rows).to.be.an('array');
+    });
+  });
+
+  describe('conversation timeline', () => {
+    it('returns empty timeline for non-existent conversation', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/conversations/nonexistent/timeline`);
+      expect(res.status).to.equal(200);
+      expect(res.body).to.be.an('object');
+    });
+  });
 });
