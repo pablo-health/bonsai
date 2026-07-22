@@ -28,6 +28,7 @@ export async function globalSetup(): Promise<void> {
   process.env.PORT = '0'; // don't bind a real port in tests
   process.env.RATE_LIMIT_API_WINDOW_MS = '60000';
   process.env.RATE_LIMIT_API_MAX = '10000'; // generous limit for tests
+  process.env.MASTER_ENCRYPTION_KEY = '0000000000000000000000000000000000000000000000000000000000000000'; // 32-byte hex key for test encryption
 
   // 3. Run migrations against the fresh container
   migrationPool = new Pool({ connectionString: connStr });
