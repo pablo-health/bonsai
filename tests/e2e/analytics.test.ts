@@ -74,6 +74,8 @@ describe('Analytics API', () => {
       });
       expect(res.status).to.equal(200);
       expect(res.body.rows).to.be.an('array');
+      expect(res.body.source).to.equal('conversations');
+      expect(res.body.metrics).to.deep.equal(['count']);
     });
 
     it('returns 400 for missing source', async () => {
@@ -105,6 +107,63 @@ describe('Analytics API', () => {
       });
       expect(res.status).to.equal(200);
       expect(res.body.rows).to.be.an('array');
+    });
+
+    it('accepts groupBy parameter', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'events',
+        metrics: 'count',
+        groupBy: 'eventType',
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.groupBy).to.deep.equal(['eventType']);
+    });
+
+    it('accepts interval parameter', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'events',
+        metrics: 'count',
+        interval: 'day',
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.interval).to.equal('day');
+    });
+
+    it('accepts relativeTime parameter', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'events',
+        metrics: 'count',
+        'relativeTime[amount]': '7',
+        'relativeTime[unit]': 'days',
+      });
+      expect(res.status).to.equal(200);
+    });
+
+    it('accepts limit parameter', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'conversations',
+        metrics: 'count',
+        limit: '50',
+      });
+      expect(res.status).to.equal(200);
+    });
+
+    it('accepts multiple metric specs', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'turns',
+        metrics: ['count', 'avg:totalTurnDurationMs'],
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.metrics).to.have.length(2);
+    });
+
+    it('returns 400 for invalid interval', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/analytics/query`).query({
+        source: 'conversations',
+        metrics: 'count',
+        interval: 'minute',
+      });
+      expect(res.status).to.equal(400);
     });
   });
 

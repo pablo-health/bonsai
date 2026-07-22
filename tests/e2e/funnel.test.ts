@@ -126,5 +126,56 @@ describe('Funnel Saved Query API', () => {
       expect(res.body).to.have.property('usersAtStart');
       expect(res.body).to.have.property('steps');
     });
+
+    it('runs a funnel query with from/to range', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/funnels/query`).send({
+        steps: [
+          { eventType: 'session_started', params: { minSessions: '1' } },
+          { eventType: 'enter_stage', params: { stageName: 'welcome' } },
+        ],
+        from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        to: new Date().toISOString(),
+      });
+      expect(res.status).to.equal(200);
+      expect(res.body.steps).to.be.an('array');
+    });
+
+    it('rejects missing steps (400)', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/funnels/query`).send({
+        relativeTime: { amount: 7, unit: 'days' },
+      });
+      expect(res.status).to.equal(400);
+    });
+
+    it('rejects empty steps (400)', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/funnels/query`).send({
+        steps: [],
+        relativeTime: { amount: 7, unit: 'days' },
+      });
+      expect(res.status).to.equal(400);
+    });
+
+    it('rejects invalid eventType (400)', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/funnels/query`).send({
+        steps: [
+          { eventType: 'invalid_event_type', params: {} },
+        ],
+        relativeTime: { amount: 7, unit: 'days' },
+      });
+      expect(res.status).to.equal(400);
+    });
+  });
+
+  describe('funnel query with scenarioRunId', () => {
+    it('accepts scenarioRunId filter', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/funnels/query?scenarioRunId=some-run-id`).send({
+        steps: [
+          { eventType: 'session_started', params: { minSessions: '1' } },
+          { eventType: 'enter_stage', params: { stageName: 'welcome' } },
+        ],
+        relativeTime: { amount: 7, unit: 'days' },
+      });
+      expect(res.status).to.equal(200);
+    });
   });
 });

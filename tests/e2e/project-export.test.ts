@@ -68,5 +68,30 @@ describe('Project Export API', () => {
       });
       expect(res.status).to.equal(400);
     });
+
+    it('imports from a real export bundle', async () => {
+      // Export the current project
+      const exportRes = await authed().get(`/api/projects/${fix.projectId}/export`);
+      expect(exportRes.status).to.equal(200);
+      const bundle = exportRes.body;
+
+      // Import it (creates a new project with new IDs)
+      const importRes = await authed().post('/api/projects/import').send(bundle);
+      expect(importRes.status).to.equal(201);
+      expect(importRes.body).to.have.property('projectId');
+      expect(importRes.body.projectId).to.not.equal(fix.projectId);
+    });
+
+    it('imports multiple times without conflict', async () => {
+      const exportRes = await authed().get(`/api/projects/${fix.projectId}/export`);
+      const bundle = exportRes.body;
+
+      // Import twice — each creates fresh IDs
+      const first = await authed().post('/api/projects/import').send(bundle);
+      const second = await authed().post('/api/projects/import').send(bundle);
+      expect(first.status).to.equal(201);
+      expect(second.status).to.equal(201);
+      expect(first.body.projectId).to.not.equal(second.body.projectId);
+    });
   });
 });

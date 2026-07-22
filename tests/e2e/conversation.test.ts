@@ -19,6 +19,12 @@ describe('Conversation API', () => {
       expect(res.status).to.equal(200);
       expect(res.body.items).to.be.an('array').that.is.empty;
     });
+
+    it('respects pagination params', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/conversations?offset=0&limit=10`);
+      expect(res.status).to.equal(200);
+      expect(res.body.offset).to.equal(0);
+    });
   });
 
   describe('get by id', () => {
@@ -48,6 +54,11 @@ describe('Conversation API', () => {
 
     it('returns 404 for non-existent artifact', async () => {
       const res = await authed().get(`/api/projects/${fix.projectId}/conversations/nonexistent/artifacts/nonexistent`);
+      expect(res.status).to.equal(404);
+    });
+
+    it('returns 404 for artifact download', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/conversations/nonexistent/artifacts/nonexistent/download`);
       expect(res.status).to.equal(404);
     });
   });
