@@ -22,6 +22,13 @@ describe('Sample Copy API', () => {
   });
 
   describe('list', () => {
+    it('returns empty list', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/sample-copies`);
+      expect(res.status).to.equal(200);
+      expect(res.body.items).to.be.an('array').that.is.empty;
+      expect(res.body.total).to.equal(0);
+    });
+
     it('returns copies after creation', async () => {
       await authed().post(`/api/projects/${fix.projectId}/sample-copies`).send({ ...minimalSampleCopy(), name: 'A' });
       const res = await authed().get(`/api/projects/${fix.projectId}/sample-copies`);
