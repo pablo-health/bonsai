@@ -21,12 +21,20 @@ describe('Copy Decorator API', () => {
   });
 
   describe('list', () => {
+    it('returns empty list', async () => {
+      const res = await authed().get(`/api/projects/${fix.projectId}/copy-decorators`);
+      expect(res.status).to.equal(200);
+      expect(res.body.items).to.be.an('array').that.is.empty;
+      expect(res.body.total).to.equal(0);
+    });
+
     it('returns decorators after creation', async () => {
       await authed().post(`/api/projects/${fix.projectId}/copy-decorators`).send({ ...minimalDecorator(), name: 'A' });
       const res = await authed().get(`/api/projects/${fix.projectId}/copy-decorators`);
       expect(res.status).to.equal(200);
       expect(res.body.items).to.have.length.greaterThanOrEqual(1);
     });
+
   });
 
   describe('create', () => {

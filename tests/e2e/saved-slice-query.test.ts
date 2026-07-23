@@ -58,6 +58,21 @@ describe('Saved Slice Query API', () => {
       const res = await authed().post(`/api/projects/${fix.projectId}/analytics/saved-queries`).send(p);
       expect(res.status).to.equal(400);
     });
+
+    it('creates with isShared flag', async () => {
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/saved-queries`).send({
+        ...minimalSliceQuery(),
+        isShared: true,
+      });
+      expect(res.status).to.equal(201);
+      expect(res.body.isShared).to.equal(true);
+    });
+
+    it('rejects duplicate name', async () => {
+      await authed().post(`/api/projects/${fix.projectId}/analytics/saved-queries`).send(minimalSliceQuery());
+      const res = await authed().post(`/api/projects/${fix.projectId}/analytics/saved-queries`).send(minimalSliceQuery());
+      expect(res.status).to.be.oneOf([400, 409, 500]);
+    });
   });
 
 

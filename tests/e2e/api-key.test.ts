@@ -155,4 +155,34 @@ describe('API Key API', () => {
       expect(res.body.length).to.be.greaterThanOrEqual(1);
     });
   });
+
+  describe('pagination and filtering', () => {
+    it('respects offset/limit', async () => {
+      for (let i = 0; i < 3; i++) {
+        await authed().post(`/api/projects/${fix.projectId}/api-keys`).send({ name: `Key ${i}` });
+      }
+      const res = await authed().get(`/api/projects/${fix.projectId}/api-keys?offset=1&limit=1`);
+      expect(res.body.items).to.have.length(1);
+      expect(res.body.total).to.equal(3);
+    });
+
+    it('searches by name', async () => {
+      await authed().post(`/api/projects/${fix.projectId}/api-keys`).send({ name: 'Alpha Key' });
+      await authed().post(`/api/projects/${fix.projectId}/api-keys`).send({ name: 'Beta Key' });
+      const res = await authed().get(`/api/projects/${fix.projectId}/api-keys?textSearch=alpha`);
+      expect(res.body.items).to.have.length(1);
+    });
+
+    it('filters by isActive', async () => {
+      await authed().post(`/api/projects/${fix.projectId}/api-keys`).send({ name: 'Active Key' });
+      const inactiveRes = await authed().post(`/api/projects/${fix.projectId}/api-keys`).send({ name: 'Inactive Key' });
+      await authed().put(`/api/projects/${fix.projectId}/api-keys/${inactiveRes.body.id}`).send({
+        isActive: false,
+        version: inactiveRes.body.version,
+      });
+      const res = await authed().get(`/api/projects/${fix.projectId}/api-keys?filters[isActive]=true`);
+      expect(res.body.items).to.have.length(1);
+      expect(res.body.items[0].name).to.equal('Active Key');
+    });
+  });
 });
