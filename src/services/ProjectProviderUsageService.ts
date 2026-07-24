@@ -28,8 +28,9 @@ interface UsageRow {
 
 /**
  * Service that aggregates provider usage across all project-scoped entities.
- * Queries agents, stages, classifiers, tools, contextTransformers, and testers
- * to find which global providers are actively referenced.
+ * Queries agents, stages, classifiers, tools, contextTransformers, testers,
+ * and project-level settings (ASR, storage, moderation) to find which global
+ * providers are actively referenced.
  */
 @injectable()
 export class ProjectProviderUsageService extends BaseService {
@@ -146,6 +147,45 @@ export class ProjectProviderUsageService extends BaseService {
         FROM testers te
         WHERE te.project_id = ${projectId}
           AND te.llm_provider_id IS NOT NULL
+
+        UNION ALL
+
+        -- Project-level ASR (ASR)
+        SELECT
+          'project' AS entity_type,
+          pr.id    AS entity_id,
+          pr.name  AS entity_name,
+          (pr.asr_config->>'asrProviderId')::text AS provider_id,
+          NULL::text AS model_name
+        FROM projects pr
+        WHERE pr.id = ${projectId}
+          AND pr.asr_config->>'asrProviderId' IS NOT NULL
+
+        UNION ALL
+
+        -- Project-level Storage (Storage)
+        SELECT
+          'project' AS entity_type,
+          pr.id    AS entity_id,
+          pr.name  AS entity_name,
+          (pr.storage_config->>'storageProviderId')::text AS provider_id,
+          NULL::text AS model_name
+        FROM projects pr
+        WHERE pr.id = ${projectId}
+          AND pr.storage_config->>'storageProviderId' IS NOT NULL
+
+        UNION ALL
+
+        -- Project-level Moderation (LLM)
+        SELECT
+          'project' AS entity_type,
+          pr.id    AS entity_id,
+          pr.name  AS entity_name,
+          (pr.moderation_config->>'llmProviderId')::text AS provider_id,
+          NULL::text AS model_name
+        FROM projects pr
+        WHERE pr.id = ${projectId}
+          AND pr.moderation_config->>'llmProviderId' IS NOT NULL
       ) ref
       JOIN providers p ON p.id = ref.provider_id
       ORDER BY p.name, ref.entity_type, ref.entity_name

@@ -25,7 +25,7 @@ export type ProjectProviderUsageQuery = z.infer<typeof projectProviderUsageQuery
 /**
  * Entity types that can reference providers
  */
-export const entityTypeSchema = z.enum(['agent', 'stage', 'classifier', 'tool', 'contextTransformer', 'tester']).describe('Type of entity referencing the provider');
+export const entityTypeSchema = z.enum(['agent', 'stage', 'classifier', 'tool', 'contextTransformer', 'tester', 'project']).describe('Type of entity referencing the provider');
 
 export type EntityType = z.infer<typeof entityTypeSchema>;
 
