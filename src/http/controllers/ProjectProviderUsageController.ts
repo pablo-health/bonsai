@@ -28,7 +28,7 @@ export class ProjectProviderUsageController {
         path: '/api/projects/{projectId}/providers/used',
         tags: ['Providers'],
         summary: 'Get providers used in a project',
-        description: 'Returns a comprehensive report of all providers actively referenced by entities (agents, stages, classifiers, tools, context transformers, testers) within the project. Includes entity-level usage details and a summary grouped by provider type. When checkIfAvailable is true, also checks model availability via provider API (LLM providers only).',
+        description: 'Returns a comprehensive report of all providers actively referenced by entities (agents, stages, classifiers, tools, context transformers, testers) and project-level settings (ASR, storage, moderation) within the project. Includes entity-level usage details and a summary grouped by provider type. When checkIfAvailable is true, also checks model availability via provider API (LLM providers only).',
         request: {
           params: projectProviderUsageRouteParamsSchema,
           query: projectProviderUsageQuerySchema,
