@@ -3,7 +3,7 @@ import type { Request, Response, Router } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { PERMISSIONS } from '../../permissions';
 import { ProjectProviderUsageService } from '../../services/ProjectProviderUsageService';
-import { projectProviderUsageRouteParamsSchema, projectProviderUsageResponseSchema } from '../contracts/projectProviders';
+import { projectProviderUsageRouteParamsSchema, projectProviderUsageQuerySchema, projectProviderUsageResponseSchema } from '../contracts/projectProviders';
 import { checkPermissions } from '../../utils/permissions';
 import { asyncHandler } from '../../utils/asyncHandler';
 
@@ -28,9 +28,10 @@ export class ProjectProviderUsageController {
         path: '/api/projects/{projectId}/providers/used',
         tags: ['Providers'],
         summary: 'Get providers used in a project',
-        description: 'Returns a comprehensive report of all providers actively referenced by entities (agents, stages, classifiers, tools, context transformers, testers) within the project. Includes entity-level usage details and a summary grouped by provider type.',
+        description: 'Returns a comprehensive report of all providers actively referenced by entities (agents, stages, classifiers, tools, context transformers, testers) within the project. Includes entity-level usage details and a summary grouped by provider type. When checkIfAvailable is true, also checks model availability via provider API (LLM providers only).',
         request: {
           params: projectProviderUsageRouteParamsSchema,
+          query: projectProviderUsageQuerySchema,
         },
         responses: {
           200: {
@@ -62,7 +63,8 @@ export class ProjectProviderUsageController {
   private async getUsedProviders(req: Request, res: Response): Promise<void> {
     checkPermissions(req, [PERMISSIONS.PROVIDER_READ]);
     const params = projectProviderUsageRouteParamsSchema.parse(req.params);
-    const result = await this.projectProviderUsageService.getUsedProviders(params.projectId, req.context);
+    const query = projectProviderUsageQuerySchema.parse(req.query);
+    const result = await this.projectProviderUsageService.getUsedProviders(params.projectId, req.context, query.checkIfAvailable);
     res.status(200).json(result);
   }
 }

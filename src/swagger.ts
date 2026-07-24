@@ -22,7 +22,7 @@ import { createCopyDecoratorSchema, updateCopyDecoratorBodySchema, deleteCopyDec
 import { createEnvironmentSchema, updateEnvironmentBodySchema, deleteEnvironmentBodySchema, environmentResponseSchema, environmentListResponseSchema, environmentRouteParamsSchema } from './http/contracts/environment';
 import { createGuardrailSchema, updateGuardrailBodySchema, deleteGuardrailBodySchema, guardrailResponseSchema, guardrailListResponseSchema, cloneGuardrailSchema } from './http/contracts/guardrail';
 import { createProviderSchema, updateProviderBodySchema, deleteProviderBodySchema, providerResponseSchema, providerListResponseSchema, providerModelsResponseSchema } from './http/contracts/provider';
-import { providerUsageEntrySchema, usedProviderDetailSchema, providerTypeSummarySchema, projectProviderUsageResponseSchema } from './http/contracts/projectProviders';
+import { providerUsageEntrySchema, modelAvailabilitySchema, providerAvailabilitySchema, usedProviderDetailSchema, providerTypeSummarySchema, projectProviderUsageResponseSchema } from './http/contracts/projectProviders';
 import { providerCatalogSchema, asrProvidersResponseSchema, ttsProvidersResponseSchema, llmProvidersResponseSchema, asrProviderInfoSchema, ttsProviderInfoSchema, llmProviderInfoSchema, asrModelInfoSchema, llmModelInfoSchema, voiceInfoSchema, languageInfoSchema, ttsModelInfoSchema, moderationProvidersResponseSchema, moderationProviderInfoSchema, moderationModelInfoSchema, moderationCategoryInfoSchema } from './http/contracts/providerCatalog';
 import { channelCapabilitiesSchema, channelInfoSchema, channelCatalogResponseSchema } from './http/contracts/channelCatalog';
 import { auditLogResponseSchema, auditLogListResponseSchema } from './http/contracts/audit';
@@ -456,6 +456,8 @@ export function getOpenAPISpec(): any {
 
   // Register ProjectProviderUsage routes from ProjectProviderUsageController
   registry.register('ProviderUsageEntry', providerUsageEntrySchema);
+  registry.register('ModelAvailability', modelAvailabilitySchema);
+  registry.register('ProviderAvailability', providerAvailabilitySchema);
   registry.register('UsedProviderDetail', usedProviderDetailSchema);
   registry.register('ProviderTypeSummary', providerTypeSummarySchema);
   registry.register('ProjectProviderUsageResponse', projectProviderUsageResponseSchema);

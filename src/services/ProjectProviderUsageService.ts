@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { injectable } from 'tsyringe';
+import { injectable, inject } from 'tsyringe';
 import { db } from '../db/index';
 import { providers, projects } from '../db/schema';
 import { NotFoundError } from '../errors';
@@ -7,8 +7,9 @@ import { logger } from '../utils/logger';
 import { BaseService } from './BaseService';
 import type { RequestContext } from './RequestContext';
 import { PERMISSIONS } from '../permissions';
-import type { ProjectProviderUsageResponse } from '../http/contracts/projectProviders';
+import type { ProjectProviderUsageResponse, UsedProviderDetail } from '../http/contracts/projectProviders';
 import { projectProviderUsageResponseSchema } from '../http/contracts/projectProviders';
+import { LlmProviderFactory } from './providers/llm/LlmProviderFactory';
 
 /**
  * Internal row returned by the SQL query that collects all provider references
@@ -32,16 +33,25 @@ interface UsageRow {
  */
 @injectable()
 export class ProjectProviderUsageService extends BaseService {
+  constructor(@inject(LlmProviderFactory) private readonly llmProviderFactory: LlmProviderFactory) {
+    super();
+  }
+
   /**
    * Returns a comprehensive report of all providers used within a project.
    *
    * @param projectId - The project to analyze
    * @param context - Request context for authorization
+   * @param checkIfAvailable - When true, checks model availability via provider API (LLM only)
    * @throws {NotFoundError} When the project does not exist
    */
-  async getUsedProviders(projectId: string, context: RequestContext): Promise<ProjectProviderUsageResponse> {
+  async getUsedProviders(
+    projectId: string,
+    context: RequestContext,
+    checkIfAvailable: boolean = false,
+  ): Promise<ProjectProviderUsageResponse> {
     this.requirePermission(context, PERMISSIONS.PROVIDER_READ);
-    logger.info({ projectId, operatorId: context.operatorId }, 'Fetching used providers for project');
+    logger.info({ projectId, checkIfAvailable, operatorId: context.operatorId }, 'Fetching used providers for project');
 
     // Verify project exists
     const projectExists = await db.select({ id: projects.id }).from(projects).where(sql`${projects.id} = ${projectId}`).limit(1);
@@ -150,22 +160,31 @@ export class ProjectProviderUsageService extends BaseService {
       providerMap.set(row.provider_id, existing);
     }
 
-    // Build response
-    const providerDetails = Array.from(providerMap.entries()).map(([providerId, usages]) => {
-      const first = usages[0];
-      return {
-        id: providerId,
-        name: first.provider_name,
-        providerType: first.provider_type,
-        apiType: first.api_type,
-        usage: usages.map(u => ({
-          entityType: u.entity_type,
-          entityId: u.entity_id,
-          entityName: u.entity_name,
-          modelName: u.model_name ?? null,
-        })),
-      };
-    });
+    // Build response with optional availability checks
+    const providerDetails = await Promise.all(
+      Array.from(providerMap.entries()).map(async ([providerId, usages]) => {
+        const first = usages[0];
+        const detail: UsedProviderDetail = {
+          id: providerId,
+          name: first.provider_name,
+          providerType: first.provider_type as UsedProviderDetail['providerType'],
+          apiType: first.api_type,
+          usage: usages.map(u => ({
+            entityType: u.entity_type as UsedProviderDetail['usage'][number]['entityType'],
+            entityId: u.entity_id,
+            entityName: u.entity_name,
+            modelName: u.model_name ?? null,
+          })),
+        };
+
+        // Optional availability check (LLM providers only)
+        if (checkIfAvailable) {
+          detail.availability = await this.checkProviderAvailability(providerId, first.provider_type, usages);
+        }
+
+        return detail;
+      }),
+    );
 
     // Build summary
     const byType: Record<string, number> = { llm: 0, tts: 0, asr: 0, embeddings: 0, storage: 0, channel: 0 };
@@ -186,5 +205,98 @@ export class ProjectProviderUsageService extends BaseService {
 
     logger.info({ projectId, totalProviders: response.summary.totalProviders }, 'Used providers fetched successfully');
     return response;
+  }
+
+  /**
+   * Checks model availability for a provider by querying its API.
+   * Only LLM providers support model enumeration; other types return not_applicable.
+   * Each provider check is bounded by a 10-second timeout.
+   */
+  private async checkProviderAvailability(
+    providerId: string,
+    providerType: string,
+    usages: UsageRow[],
+  ): Promise<NonNullable<import('../http/contracts/projectProviders').UsedProviderDetail['availability']>> {
+    // Non-LLM providers don't have model enumeration
+    if (providerType !== 'llm') {
+      return { status: 'not_applicable', models: [] };
+    }
+
+    // Collect distinct model names from entity usage
+    const modelMap = new Map<string, string[]>(); // model -> [entityIds]
+    for (const u of usages) {
+      if (u.model_name) {
+        const existing = modelMap.get(u.model_name) ?? [];
+        existing.push(u.entity_id);
+        modelMap.set(u.model_name, existing);
+      }
+    }
+
+    // If no models are configured, mark as available (nothing to check)
+    if (modelMap.size === 0) {
+      return { status: 'available', models: [] };
+    }
+
+    // Fetch available models from the provider API with timeout
+    const availableModelIds = await this.fetchAvailableModels(providerId);
+
+    // Compare configured models against available ones
+    const models = Array.from(modelMap.entries()).map(([model, usedBy]) => ({
+      model,
+      status: availableModelIds.has(model) ? 'available' as const : 'unavailable' as const,
+      usedBy,
+    }));
+
+    const availableCount = models.filter(m => m.status === 'available').length;
+    const status: NonNullable<import('../http/contracts/projectProviders').UsedProviderDetail['availability']>['status'] =
+      availableCount === models.length
+        ? 'available'
+        : availableCount > 0
+          ? 'partially_available'
+          : 'unavailable';
+
+    return { status, models };
+  }
+
+  /**
+   * Fetches available model IDs from an LLM provider's API.
+   * Falls back to empty set on any error (network, auth, timeout).
+   * Bounded by a 10-second timeout per provider.
+   */
+  private async fetchAvailableModels(providerId: string): Promise<Set<string>> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Provider model enumeration timed out after 10s')), 10_000);
+    });
+
+    try {
+      const provider = await db.query.providers.findFirst({
+        where: (p, { eq }) => eq(p.id, providerId),
+      });
+
+      if (!provider) {
+        logger.warn({ providerId }, 'Provider not found during availability check');
+        return new Set();
+      }
+
+      const racePromise = this.llmProviderFactory
+        .createProviderForEnumeration(provider)
+        .then(async (instance) => {
+          await instance.init();
+          try {
+            const models = await instance.enumerateModels();
+            return new Set(models.map(m => m.id));
+          } finally {
+            await instance.cleanup();
+          }
+        });
+
+      const result = await Promise.race([racePromise, timeoutPromise]);
+      logger.info({ providerId, modelCount: result.size }, 'Provider model enumeration completed');
+      return result;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn({ providerId, error: msg }, 'Provider model enumeration failed');
+      return new Set();
+    }
   }
 }

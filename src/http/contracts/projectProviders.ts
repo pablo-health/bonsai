@@ -14,6 +14,15 @@ export const projectProviderUsageRouteParamsSchema = z.object({
 export type ProjectProviderUsageRouteParams = z.infer<typeof projectProviderUsageRouteParamsSchema>;
 
 /**
+ * Schema for query params of the project provider usage endpoint
+ */
+export const projectProviderUsageQuerySchema = z.object({
+  checkIfAvailable: z.coerce.boolean().default(false).describe('When true, checks whether each provider\'s configured models are still available by querying the provider API (LLM providers only). Each provider check has a 10-second timeout.'),
+});
+
+export type ProjectProviderUsageQuery = z.infer<typeof projectProviderUsageQuerySchema>;
+
+/**
  * Entity types that can reference providers
  */
 export const entityTypeSchema = z.enum(['agent', 'stage', 'classifier', 'tool', 'contextTransformer', 'tester']).describe('Type of entity referencing the provider');
@@ -33,6 +42,27 @@ export const providerUsageEntrySchema = z.object({
 export type ProviderUsageEntry = z.infer<typeof providerUsageEntrySchema>;
 
 /**
+ * Status of a single model within a provider's availability check
+ */
+export const modelAvailabilitySchema = z.object({
+  model: z.string().describe('Model name as configured on the entity'),
+  status: z.enum(['available', 'unavailable']).describe('Whether the model is available on the provider'),
+  usedBy: z.array(z.string()).describe('List of entity IDs that depend on this model'),
+}).openapi('ModelAvailability').describe('Availability status of a single model');
+
+export type ModelAvailability = z.infer<typeof modelAvailabilitySchema>;
+
+/**
+ * Availability information for a provider
+ */
+export const providerAvailabilitySchema = z.object({
+  status: z.enum(['available', 'partially_available', 'unavailable', 'not_applicable']).describe('Overall availability: available (all models OK), partially_available (some models missing), unavailable (no models OK), not_applicable (non-LLM provider)'),
+  models: z.array(modelAvailabilitySchema).describe('Per-model availability breakdown (only populated when checkIfAvailable is true and provider is LLM)'),
+}).openapi('ProviderAvailability').describe('Availability information for a provider');
+
+export type ProviderAvailability = z.infer<typeof providerAvailabilitySchema>;
+
+/**
  * Detail about a single provider used in the project
  */
 export const usedProviderDetailSchema = z.object({
@@ -41,6 +71,7 @@ export const usedProviderDetailSchema = z.object({
   providerType: providerTypeSchema,
   apiType: z.string().describe('Specific provider implementation (e.g., openai, anthropic, elevenlabs)'),
   usage: z.array(providerUsageEntrySchema).describe('List of entities within the project that reference this provider'),
+  availability: providerAvailabilitySchema.optional().describe('Availability check results (only populated when checkIfAvailable query parameter is true)'),
 }).openapi('UsedProviderDetail').describe('Provider with its usage references within the project');
 
 export type UsedProviderDetail = z.infer<typeof usedProviderDetailSchema>;
