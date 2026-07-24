@@ -25,6 +25,7 @@ import { CopyDecoratorController } from './http/controllers/CopyDecoratorControl
 import { EnvironmentController } from './http/controllers/EnvironmentController';
 import { ProviderController } from './http/controllers/ProviderController';
 import { ProviderCatalogController } from './http/controllers/ProviderCatalogController';
+import { ProjectProviderUsageController } from './http/controllers/ProjectProviderUsageController';
 import { ChannelCatalogController } from './http/controllers/ChannelCatalogController';
 import { AuditController } from './http/controllers/AuditController';
 import { AnalyticsController } from './http/controllers/AnalyticsController';
@@ -241,6 +242,9 @@ export async function createApp(): Promise<express.Application> {
 
   const providerCatalogController = container.resolve(ProviderCatalogController);
   providerCatalogController.registerRoutes(app);
+
+  const projectProviderUsageController = container.resolve(ProjectProviderUsageController);
+  projectProviderUsageController.registerRoutes(app);
 
   const channelCatalogController = container.resolve(ChannelCatalogController);
   channelCatalogController.registerRoutes(app);

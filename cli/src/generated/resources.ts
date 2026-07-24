@@ -1607,6 +1607,27 @@ export const RESOURCES: Record<string, ResourceDef> = {
       },
     ],
   },
+  "providers_used": {
+    name: "providers_used",
+    scope: "project",
+    operations: [
+      {
+        method: "get",
+        path: "/api/projects/{projectId}/providers/used",
+        pathTemplate: "/api/projects/{projectId}/providers/used",
+        pathParams: [],
+        queryParamNames: ["checkIfAvailable"],
+        repeatableParams: [],
+        hasBody: false,
+        bodySchemaRef: null,
+        action: "list",
+        summary: "Get providers used in a project",
+        description: "Returns a comprehensive report of all providers actively referenced by entities (agents, stages, classifiers, tools, context transformers, testers) within the project. Includes entity-level usage details and a summary grouped by provider type. When checkIfAvailable is true, also checks model availability via provider API (LLM providers only).",
+        isPaginated: false,
+        isUpdateOrDelete: false,
+      },
+    ],
+  },
   "channel_catalog": {
     name: "channel_catalog",
     scope: "global",
