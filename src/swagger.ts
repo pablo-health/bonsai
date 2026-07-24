@@ -22,6 +22,7 @@ import { createCopyDecoratorSchema, updateCopyDecoratorBodySchema, deleteCopyDec
 import { createEnvironmentSchema, updateEnvironmentBodySchema, deleteEnvironmentBodySchema, environmentResponseSchema, environmentListResponseSchema, environmentRouteParamsSchema } from './http/contracts/environment';
 import { createGuardrailSchema, updateGuardrailBodySchema, deleteGuardrailBodySchema, guardrailResponseSchema, guardrailListResponseSchema, cloneGuardrailSchema } from './http/contracts/guardrail';
 import { createProviderSchema, updateProviderBodySchema, deleteProviderBodySchema, providerResponseSchema, providerListResponseSchema, providerModelsResponseSchema } from './http/contracts/provider';
+import { providerUsageEntrySchema, usedProviderDetailSchema, providerTypeSummarySchema, projectProviderUsageResponseSchema } from './http/contracts/projectProviders';
 import { providerCatalogSchema, asrProvidersResponseSchema, ttsProvidersResponseSchema, llmProvidersResponseSchema, asrProviderInfoSchema, ttsProviderInfoSchema, llmProviderInfoSchema, asrModelInfoSchema, llmModelInfoSchema, voiceInfoSchema, languageInfoSchema, ttsModelInfoSchema, moderationProvidersResponseSchema, moderationProviderInfoSchema, moderationModelInfoSchema, moderationCategoryInfoSchema } from './http/contracts/providerCatalog';
 import { channelCapabilitiesSchema, channelInfoSchema, channelCatalogResponseSchema } from './http/contracts/channelCatalog';
 import { auditLogResponseSchema, auditLogListResponseSchema } from './http/contracts/audit';
@@ -84,6 +85,7 @@ import { CopyDecoratorController } from './http/controllers/CopyDecoratorControl
 import { EnvironmentController } from './http/controllers/EnvironmentController';
 import { ProviderController } from './http/controllers/ProviderController';
 import { ProviderCatalogController } from './http/controllers/ProviderCatalogController';
+import { ProjectProviderUsageController } from './http/controllers/ProjectProviderUsageController';
 import { ChannelCatalogController } from './http/controllers/ChannelCatalogController';
 import { AuditController } from './http/controllers/AuditController';
 import { AnalyticsController } from './http/controllers/AnalyticsController';
@@ -449,6 +451,16 @@ export function getOpenAPISpec(): any {
   // Register ProviderCatalog routes from ProviderCatalogController
   const providerCatalogPaths = ProviderCatalogController.getOpenAPIPaths();
   for (const path of providerCatalogPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register ProjectProviderUsage routes from ProjectProviderUsageController
+  registry.register('ProviderUsageEntry', providerUsageEntrySchema);
+  registry.register('UsedProviderDetail', usedProviderDetailSchema);
+  registry.register('ProviderTypeSummary', providerTypeSummarySchema);
+  registry.register('ProjectProviderUsageResponse', projectProviderUsageResponseSchema);
+  const projectProviderUsagePaths = ProjectProviderUsageController.getOpenAPIPaths();
+  for (const path of projectProviderUsagePaths) {
     registry.registerPath(path);
   }
 
