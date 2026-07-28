@@ -1,8 +1,26 @@
 import { injectable } from 'tsyringe';
-import { and, eq, lt, ne } from 'drizzle-orm';
+import { and, count, desc, eq, lt, ne } from 'drizzle-orm';
 import { db } from '../db/index';
 import { deferredProcessing } from '../db/schema';
+import type { DeferredProcessingStatus } from '../db/schema';
 import type { CALInputMessage } from '../channels/messages';
+
+/** Maximum delay window in milliseconds (30 days) */
+const MAX_RESCHEDULE_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface DeferredProcessingListFilters {
+  projectId: string;
+  status?: DeferredProcessingStatus;
+  conversationId?: string;
+  channelType?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface DeferredProcessingListResult {
+  items: typeof deferredProcessing.$inferSelect[];
+  total: number;
+}
 
 /** Entry passed to the queue method */
 export interface DeferredProcessingEntry {
@@ -82,6 +100,82 @@ export class DeferredProcessingService {
     if (result.length > 0) {
       const { logger } = await import('../utils/logger');
       logger.debug({ count: result.length }, 'Cleaned up old deferred processing records');
+    }
+  }
+
+  /**
+   * List deferred processing entries for a project with optional filters.
+   */
+  public async list(filters: DeferredProcessingListFilters): Promise<DeferredProcessingListResult> {
+    const { projectId, status, conversationId, channelType, offset = 0, limit = 50 } = filters;
+
+    const whereClause = and(
+      eq(deferredProcessing.projectId, projectId),
+      status ? eq(deferredProcessing.status, status) : undefined,
+      conversationId ? eq(deferredProcessing.conversationId, conversationId) : undefined,
+      channelType ? eq(deferredProcessing.channelType, channelType) : undefined,
+    );
+
+    // Count total matching rows
+    const [{ total }] = await db.select({ total: count() }).from(deferredProcessing).where(whereClause);
+
+    // Fetch page
+    const items = await db.select().from(deferredProcessing)
+      .where(whereClause)
+      .orderBy(desc(deferredProcessing.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    return { items, total };
+  }
+
+  /**
+   * Get a single deferred processing entry by ID.
+   */
+  public async getById(id: string): Promise<typeof deferredProcessing.$inferSelect | null> {
+    const [row] = await db.select().from(deferredProcessing).where(eq(deferredProcessing.id, id));
+    return row ?? null;
+  }
+
+  /**
+   * Reschedule a pending entry to a new processAt timestamp.
+   * Use a past date to trigger immediate processing (next poll cycle).
+   */
+  public async reschedule(id: string, newProcessAt: Date): Promise<void> {
+    // Clamp to reasonable bounds
+    const now = new Date();
+    const maxFuture = new Date(Date.now() + MAX_RESCHEDULE_DELAY_MS);
+    const clampedProcessAt = newProcessAt < now ? now : newProcessAt > maxFuture ? maxFuture : newProcessAt;
+
+    const result = await db.update(deferredProcessing)
+      .set({ processAt: clampedProcessAt, updatedAt: new Date() })
+      .where(and(
+        eq(deferredProcessing.id, id),
+        eq(deferredProcessing.status, 'pending'),
+      ))
+      .returning();
+
+    if (result.length === 0) {
+      const { NotFoundError } = await import('../errors');
+      throw new NotFoundError(`Deferred processing entry ${id} not found or not in pending status`);
+    }
+  }
+
+  /**
+   * Cancel a single pending entry by ID.
+   */
+  public async cancel(id: string): Promise<void> {
+    const result = await db.update(deferredProcessing)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(and(
+        eq(deferredProcessing.id, id),
+        eq(deferredProcessing.status, 'pending'),
+      ))
+      .returning();
+
+    if (result.length === 0) {
+      const { NotFoundError } = await import('../errors');
+      throw new NotFoundError(`Deferred processing entry ${id} not found or not in pending status`);
     }
   }
 }
