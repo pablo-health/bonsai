@@ -316,6 +316,12 @@ class ImapMailboxSession {
         this.processingDelayMaxMs,
       );
 
+      // Move the email to the processed folder immediately after handling.
+      // This prevents duplicate processing on the next IMAP poll cycle when
+      // processing deferral is active (the email would otherwise stay in the
+      // inbox until the AI response is sent, getting re-queued every 30s).
+      this.moveMessage(uid, this.processedFolder);
+
     } catch (error) {
       logger.error({ error, uid, providerId: this.providerId }, 'Failed to process email');
     }
