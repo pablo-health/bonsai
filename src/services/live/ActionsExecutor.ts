@@ -117,8 +117,32 @@ export class ActionsExecutor {
   }
 
   /**
+   * Default execution priority for each effect type.
+   * Lower numbers execute first. Users can override per-effect via the `priority` field.
+   */
+  /**
+   * Default execution priority for each effect type.
+   * Spaced by ~1000 so per-effect `priority` overrides can slot between defaults.
+   */
+  private static readonly DEFAULT_PRIORITIES: Record<Effect['type'], number> = {
+    call_tool: 2000, // resolved per-tool-type below; this is the fallback (smart_function)
+    modify_variables: 3000,
+    modify_user_profile: 4000,
+    modify_user_input: 5000,
+    ban_user: 7000,
+    save_artifact: 8000,
+    attach_file: 9500,
+    change_visibility: 9000,
+    generate_response: 10000,
+    end_conversation: 11000,
+    abort_conversation: 12000,
+    go_to_stage: 13000,
+  };
+
+  /**
    * Gets the execution priority for an effect type.
    * Lower numbers execute first.
+   * If the effect carries an explicit `priority` override, that value is used instead of the default.
    * For call_tool effects, priority is determined by the referenced tool's type:
    * webhook tools run at priority 1, script tools at priority 6, smart_function tools at priority 2.
    * @param effect - The effect to get priority for
@@ -126,35 +150,41 @@ export class ActionsExecutor {
    * @returns Priority number
    */
   private getEffectPriority(effect: Effect, toolTypes?: Map<string, ToolType>): number {
+    // Per-effect override takes precedence over all defaults
+    const explicitPriority = (effect as Record<string, unknown>).priority;
+    if (typeof explicitPriority === 'number') {
+      return explicitPriority;
+    }
+
     switch (effect.type) {
       case 'call_tool': {
         const toolType = toolTypes?.get((effect as CallToolEffect).toolId);
-        if (toolType === 'webhook') return 1;
-        if (toolType === 'script') return 6;
-        return 2; // smart_function or unknown
+        if (toolType === 'webhook') return 1000;
+        if (toolType === 'script') return 6000;
+        return 2000; // smart_function or unknown
       }
       case 'modify_variables':
-        return 3;
+        return ActionsExecutor.DEFAULT_PRIORITIES.modify_variables;
       case 'modify_user_profile':
-        return 4;
+        return ActionsExecutor.DEFAULT_PRIORITIES.modify_user_profile;
       case 'modify_user_input':
-        return 5;
+        return ActionsExecutor.DEFAULT_PRIORITIES.modify_user_input;
       case 'ban_user':
-        return 7;
+        return ActionsExecutor.DEFAULT_PRIORITIES.ban_user;
       case 'save_artifact':
-        return 8;
+        return ActionsExecutor.DEFAULT_PRIORITIES.save_artifact;
       case 'attach_file':
-        return 9;
+        return ActionsExecutor.DEFAULT_PRIORITIES.attach_file;
       case 'change_visibility':
-        return 50;
+        return ActionsExecutor.DEFAULT_PRIORITIES.change_visibility;
       case 'generate_response':
-        return 100;
+        return ActionsExecutor.DEFAULT_PRIORITIES.generate_response;
       case 'end_conversation':
-        return 200;
+        return ActionsExecutor.DEFAULT_PRIORITIES.end_conversation;
       case 'abort_conversation':
-        return 201;
+        return ActionsExecutor.DEFAULT_PRIORITIES.abort_conversation;
       case 'go_to_stage':
-        return 202;
+        return ActionsExecutor.DEFAULT_PRIORITIES.go_to_stage;
       default:
         return 999; // Unknown effects execute last
     }

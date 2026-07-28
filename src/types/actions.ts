@@ -13,6 +13,7 @@ extendZodWithOpenApi(z);
 export const endConversationEffectSchema = z.object({
   type: z.literal('end_conversation').describe('Effect type'),
   reason: z.string().optional().describe('Optional reason for ending the conversation'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 11000.'),
 }).openapi('EndConversationEffect');
 
 /**
@@ -22,6 +23,7 @@ export const endConversationEffectSchema = z.object({
 export const abortConversationEffectSchema = z.object({
   type: z.literal('abort_conversation').describe('Effect type'),
   reason: z.string().optional().describe('Optional reason for aborting the conversation'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 12000.'),
 }).openapi('AbortConversationEffect');
 
 /**
@@ -31,6 +33,7 @@ export const abortConversationEffectSchema = z.object({
 export const goToStageEffectSchema = z.object({
   type: z.literal('go_to_stage').describe('Effect type'),
   stageId: z.string().min(1).describe('ID of the stage to switch to'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 13000.'),
 }).openapi('GoToStageEffect');
 
 /**
@@ -40,6 +43,7 @@ export const goToStageEffectSchema = z.object({
 export const modifyUserInputEffectSchema = z.object({
   type: z.literal('modify_user_input').describe('Effect type'),
   template: z.string().min(1).describe('Template to render and replace user input with'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 5000.'),
 }).openapi('ModifyUserInputEffect');
 
 /**
@@ -67,6 +71,7 @@ export const userProfileOperationSchema = z.object({
 export const modifyVariablesEffectSchema = z.object({
   type: z.literal('modify_variables').describe('Effect type'),
   modifications: z.array(variableOperationSchema).min(1).describe('Array of variable modifications to apply'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 3000.'),
 }).openapi('ModifyVariablesEffect');
 
 /**
@@ -76,6 +81,7 @@ export const modifyVariablesEffectSchema = z.object({
 export const modifyUserProfileEffectSchema = z.object({
   type: z.literal('modify_user_profile').describe('Effect type'),
   modifications: z.array(userProfileOperationSchema).min(1).describe('Array of user profile field modifications to apply'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 4000.'),
 }).openapi('ModifyUserProfileEffect');
 
 /**
@@ -87,6 +93,7 @@ export const callToolEffectSchema = z.object({
   toolId: z.string().min(1).describe('ID of the tool to call'),
   parameters: z.record(z.string(), z.unknown()).describe('Parameters to pass to the tool'),
   asynchronous: z.boolean().optional().default(false).describe('When true, the tool runs in the background without blocking the conversation. The result is not stored in context and flow control signals (go_to_stage, end_conversation, etc.) are discarded. Use for fire-and-forget operations such as logging or saving data.'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 1000 (webhook), 2000 (smart_function), 6000 (script).'),
 }).openapi('CallToolEffect');
 
 /**
@@ -98,6 +105,7 @@ export const generateResponseEffectSchema = z.object({
   responseMode: z.enum(['generated', 'prescripted']).optional().default('generated').describe('Type of response to generate: generated (AI-generated), prescripted (predefined response), best_match (choose the best match from predefined responses)'),
   prescriptedSelectionStrategy: z.enum(['random', 'round_robin']).optional().default('random').describe('Strategy to select prescripted response when multiple are provided'),
   prescriptedResponses: z.array(z.string()).optional().describe('Optional array of prescripted responses to use'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 10000.'),
 }).openapi('GenerateResponseEffect');
 
 /**
@@ -108,6 +116,7 @@ export const changeVisibilityEffectSchema = z.object({
   type: z.literal('change_visibility').describe('Effect type'),
   visibility: z.enum(['always', 'stage', 'never', 'conditional']).describe('Visibility setting: always (always visible), stage (visible only in current stage), never (never visible), conditional (visible based on a JavaScript condition expression)'),
   condition: z.string().optional().describe('JavaScript condition expression evaluated against the conversation context — required when visibility is "conditional"'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 9000.'),
 }).openapi('ChangeVisibilityEffect');
 
 /**
@@ -117,6 +126,7 @@ export const changeVisibilityEffectSchema = z.object({
 export const banUserEffectSchema = z.object({
   type: z.literal('ban_user').describe('Effect type'),
   reason: z.string().optional().describe('Optional reason for banning the user'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 7000.'),
 }).openapi('BanUserEffect');
 
 /**
@@ -132,6 +142,7 @@ export const saveArtifactEffectSchema = z.object({
   fileName: z.string().min(1).describe('Display name for the stored file; supports Handlebars templating'),
   mimeType: z.string().min(1).optional().describe('MIME type for the stored file'),
   variableName: z.string().min(1).describe('Variable name to store the artifactId in (e.g. "myArtifactId")'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 8000.'),
 }).openapi('SaveArtifactEffect');
 
 /**
@@ -144,6 +155,7 @@ export const attachFileEffectSchema = z.object({
   artifactId: z.string().min(1).describe('Artifact ID of the file in storage to attach. Typically from a save_artifact effect or a tool result.'),
   fileName: z.string().min(1).optional().describe('Display name for the attachment. Defaults to the artifact\'s stored name when omitted.'),
   mimeType: z.string().min(1).optional().describe('MIME type override. When omitted, uses the artifact\'s stored MIME type.'),
+  priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 9500.'),
 }).openapi('AttachFileEffect');
 
 /**
