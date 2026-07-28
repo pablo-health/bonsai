@@ -14,6 +14,8 @@ export const sesChannelProviderConfigSchema = z.strictObject({
   s3BucketName: z.string().optional().describe('S3 bucket name for "s3" inbound mode. Must match the S3 bucket configured in the SES receipt rule. The object key is provided by the notification.'),
   emailToProject: z.record(z.string().email(), z.union([z.string(), emailRoutingEntrySchema])).optional().describe('Maps email addresses to routing entries for multi-project routing. Each entry can specify projectId, cc, bcc, fromAddress, subject, stageId, and agentId. Plain string values (projectId only) are supported for backward compatibility.'),
   ccBccReplyAsHandOff: z.boolean().default(true).describe('When enabled, a reply from a CC/BCC recipient (not the conversation user) is treated as a human hand-off: the conversation is closed and no AI response is sent.'),
+  processingDelayMinMs: z.number().int().min(0).default(0).describe('Minimum delay in milliseconds before processing an incoming message. 0 means immediate processing.'),
+  processingDelayMaxMs: z.number().int().min(0).default(0).describe('Maximum delay in milliseconds before processing an incoming message. Must be >= processingDelayMinMs.'),
 }).openapi('SesChannelConfig');
 
 export type SesChannelProviderConfig = z.infer<typeof sesChannelProviderConfigSchema>;

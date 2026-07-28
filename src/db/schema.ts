@@ -941,6 +941,32 @@ export const quickPrompts = pgTable('quick_prompts', {
   index('idx_quick_prompts_is_public').on(table.isPublic),
 ]);
 
+// ─── Processing Deferral ────────────────────────────────────────────────────
+
+/** Status of a deferred processing entry */
+export type DeferredProcessingStatus = 'pending' | 'processed' | 'failed' | 'cancelled';
+
+// deferred_processing — incoming messages queued for delayed processing
+export const deferredProcessing = pgTable('deferred_processing', {
+  id: text('id').notNull().primaryKey(),
+  sessionId: text('session_id').notNull(),
+  providerId: text('provider_id').notNull().references(() => providers.id),
+  projectId: text('project_id').notNull().references(() => projects.id),
+  conversationId: text('conversation_id'),
+  channelType: text('channel_type').notNull(),
+  processAt: timestamp('process_at').notNull(),
+  message: jsonb('message').notNull().$type<Record<string, unknown>>(),
+  status: text('status').notNull().default('pending').$type<DeferredProcessingStatus>(),
+  retryCount: integer('retry_count').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  processedAt: timestamp('processed_at'),
+}, (table) => [
+  index('idx_deferred_processing_process_at_status').on(table.processAt, table.status),
+  index('idx_deferred_processing_session_id').on(table.sessionId),
+]);
+
 // ─── Benchmarking ────────────────────────────────────────────────────────────
 
 export type BenchmarkProviderType = 'llm' | 'tts' | 'asr';

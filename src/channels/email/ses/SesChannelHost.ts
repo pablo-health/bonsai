@@ -24,6 +24,8 @@ import { sesSendBodySchema, sesSendResponseSchema } from '../../../http/contract
 import type { SesSendResponse } from '../../../http/contracts/ses-outgoing';
 import { NotFoundError } from '../../../errors';
 import { SYSTEM_CONTEXT } from '../../../services/RequestContext';
+import { DeferredProcessingService } from '../../../services/DeferredProcessingService';
+import { randomBetween } from '../../../utils/randomBetween';
 import { extractConversationIdFromMessageId, extractConversationIdFromReferences } from '../shared/MessageIdUtils';
 import { resolveEmailRouting, extractRecipientEmails } from '../shared/EmailRoutingUtils';
 import { stripEmailQuotes } from '../shared/EmailBodyCleaner';
@@ -86,6 +88,7 @@ export class SesChannelHost {
     @inject(ProjectService) private readonly projectService: ProjectService,
     @inject(UserService) private readonly userService: UserService,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(DeferredProcessingService) private readonly deferredProcessingService: DeferredProcessingService,
   ) {}
 
   static getOpenAPIPaths(): RouteConfig[] {
@@ -160,7 +163,7 @@ export class SesChannelHost {
       logger.error({ channelProviderId, issues: configResult.error.issues }, 'SES webhook: channel provider config is invalid');
       return;
     }
-    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName, ccBccReplyAsHandOff } = configResult.data;
+    const { accessKeyId, secretAccessKey, region, fromAddress, threadingStrategy, inboundMode, s3BucketName, ccBccReplyAsHandOff, processingDelayMinMs, processingDelayMaxMs } = configResult.data;
 
     const snsNotification = req.body as SnsNotification;
 
@@ -220,7 +223,7 @@ export class SesChannelHost {
 
         const emailKey = `${projectId}:${replyConversationId}`;
         this.scheduleTimeout(existingSessionId, emailKey);
-        await this.dispatchTextInput(existingSessionId, emailBody);
+        await this.dispatchTextInput(existingSessionId, emailBody, channelProviderId, processingDelayMinMs, processingDelayMaxMs);
         return;
       }
 
@@ -273,7 +276,7 @@ export class SesChannelHost {
     const startMsg: CALInputMessage = { type: 'start_conversation', userId: senderEmail, stageId, agentId, correlationId: undefined };
     await this.dispatcher.dispatch(startMsg, this.buildContext(sessionId));
 
-    await this.dispatchTextInput(sessionId, emailBody);
+    await this.dispatchTextInput(sessionId, emailBody, channelProviderId, processingDelayMinMs, processingDelayMaxMs);
   }
 
   private async handleOutgoingMessage(req: Request, res: Response): Promise<void> {
@@ -400,7 +403,7 @@ export class SesChannelHost {
     res.status(201).json(response);
   }
 
-  private async dispatchTextInput(sessionId: string, text: string): Promise<void> {
+  private async dispatchTextInput(sessionId: string, text: string, providerId: string, processingDelayMinMs: number, processingDelayMaxMs: number): Promise<void> {
     const session = this.sessionManager.getSession(sessionId);
     if (!session?.conversationId) {
       logger.warn({ sessionId }, 'SES: cannot dispatch message — no active conversation');
@@ -413,6 +416,32 @@ export class SesChannelHost {
     }
 
     const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text, correlationId: undefined };
+
+    // Check deferral config
+    if (processingDelayMinMs > 0 && processingDelayMaxMs > 0) {
+      const delayMs = randomBetween(processingDelayMinMs, processingDelayMaxMs);
+      const processAt = new Date(Date.now() + delayMs);
+
+      await this.deferredProcessingService.queue({
+        sessionId,
+        providerId,
+        projectId: session.projectId ?? '',
+        conversationId: session.conversationId,
+        channelType: 'ses',
+        processAt,
+        message: msg,
+      });
+
+      logger.info({
+        sessionId,
+        projectId: session.projectId,
+        conversationId: session.conversationId,
+        delayMs,
+        processAt,
+      }, 'SES: incoming message queued for deferred processing');
+      return;
+    }
+
     await this.dispatcher.dispatch(msg, this.buildContext(sessionId));
   }
 
@@ -515,6 +544,10 @@ export class SesChannelHost {
 
     const handle = setTimeout(async () => {
       logger.info({ sessionId }, 'SES: session timed out due to inactivity');
+
+      // Cancel any pending deferred messages for this session
+      await this.deferredProcessingService.cancelBySessionId(sessionId);
+
       this.emailSessionMap.delete(emailKey);
       this.sessionTimeoutMap.delete(sessionId);
       await this.sessionManager.unregisterSession(sessionId);

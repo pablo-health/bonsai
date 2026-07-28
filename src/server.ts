@@ -39,6 +39,7 @@ import { ProjectExchangeController } from './http/controllers/ProjectExchangeCon
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
 import { ScenarioRunExecutorService } from './services/testing/ScenarioRunExecutorService';
 import { ImapInboundService } from './services/ImapInboundService';
+import { ProcessingDeferralService } from './services/ProcessingDeferralService';
 import { OAuth2TokenRefreshService } from './services/OAuth2TokenRefreshService';
 import { errorHandler } from './http/middleware/errorHandler';
 import { optionalAuthMiddleware } from './http/middleware/auth';
@@ -328,6 +329,7 @@ export async function createApp(): Promise<express.Application> {
   container.resolve(BenchmarkExecutorService).start();
   container.resolve(ImapInboundService).start();
   container.resolve(OAuth2TokenRefreshService).start();
+  container.resolve(ProcessingDeferralService).start();
 
   app.use(errorHandler);
 

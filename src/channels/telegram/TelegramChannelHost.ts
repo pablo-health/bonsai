@@ -20,6 +20,8 @@ import { SecretRefUtils } from '../../services/secrets/SecretRefUtils';
 import { PERMISSIONS } from '../../permissions';
 import { checkPermissions } from '../../utils/permissions';
 import { NotFoundError, RemoteConnectionError } from '../../errors';
+import { DeferredProcessingService } from '../../services/DeferredProcessingService';
+import { randomBetween } from '../../utils/randomBetween';
 import { deployTelegramWebhookSchema, deployTelegramWebhookResponseSchema } from '../../http/contracts/telegram';
 
 /** Default inactivity session timeout in milliseconds (30 minutes). */
@@ -64,11 +66,14 @@ type WebhookContext = {
   apiKey: string;
   stageId?: string;
   agentId?: string;
+  channelProviderId: string;
   projectId: string;
   keySettings: Record<string, unknown> | undefined;
   botToken: string;
   senderId: number;
   messageText: string;
+  processingDelayMinMs: number;
+  processingDelayMaxMs: number;
 };
 
 /**
@@ -103,6 +108,7 @@ export class TelegramChannelHost {
     @inject(ChannelHandlerDispatcher) private readonly dispatcher: ChannelHandlerDispatcher,
     @inject(IpRateLimiter) private readonly rateLimiter: IpRateLimiter,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(DeferredProcessingService) private readonly deferredProcessingService: DeferredProcessingService,
   ) {}
 
   /**
@@ -285,7 +291,7 @@ export class TelegramChannelHost {
           return;
         }
         this.scheduleTimeout(existingSessionId, userKey);
-        await this.dispatchCommand(existingSessionId, cmd, ctx.messageText);
+        await this.dispatchCommand(existingSessionId, cmd, ctx.messageText, ctx.channelProviderId, ctx.processingDelayMinMs, ctx.processingDelayMaxMs);
         res.status(200).json({ ok: true });
         return;
       }
@@ -379,11 +385,14 @@ export class TelegramChannelHost {
       apiKey,
       stageId,
       agentId,
+      channelProviderId,
       projectId,
       keySettings: keySettings as Record<string, unknown> | undefined,
       botToken,
       senderId,
       messageText: message.text.trim(),
+      processingDelayMinMs: configResult.data.processingDelayMinMs,
+      processingDelayMaxMs: configResult.data.processingDelayMaxMs,
     };
   }
 
@@ -430,7 +439,7 @@ export class TelegramChannelHost {
    * @param cmd - The parsed command result.
    * @param rawText - Original message text (used for plain text fall-through).
    */
-  private async dispatchCommand(sessionId: string, cmd: SlashCommandResult, rawText: string): Promise<void> {
+  private async dispatchCommand(sessionId: string, cmd: SlashCommandResult, rawText: string, providerId: string, processingDelayMinMs: number, processingDelayMaxMs: number): Promise<void> {
     const session = this.sessionManager.getSession(sessionId);
     if (!session?.conversationId) {
       logger.warn({ sessionId }, 'Telegram: cannot dispatch message — no active conversation');
@@ -453,6 +462,32 @@ export class TelegramChannelHost {
       return;
     }
     const msg: CALInputMessage = { type: 'send_user_text_input', conversationId: session.conversationId, text: rawText, correlationId: undefined };
+
+    // Check deferral config
+    if (processingDelayMinMs > 0 && processingDelayMaxMs > 0) {
+      const delayMs = randomBetween(processingDelayMinMs, processingDelayMaxMs);
+      const processAt = new Date(Date.now() + delayMs);
+
+      await this.deferredProcessingService.queue({
+        sessionId,
+        providerId,
+        projectId: session.projectId ?? '',
+        conversationId: session.conversationId,
+        channelType: 'telegram',
+        processAt,
+        message: msg,
+      });
+
+      logger.info({
+        sessionId,
+        projectId: session.projectId,
+        conversationId: session.conversationId,
+        delayMs,
+        processAt,
+      }, 'Telegram: incoming message queued for deferred processing');
+      return;
+    }
+
     await this.dispatcher.dispatch(msg, this.buildContext(sessionId));
   }
 
@@ -518,6 +553,10 @@ export class TelegramChannelHost {
     const handle = setTimeout(() => {
       (async () => {
         logger.info({ sessionId }, 'Telegram: session timed out due to inactivity');
+
+        // Cancel any pending deferred messages for this session
+        await this.deferredProcessingService.cancelBySessionId(sessionId);
+
         this.userSessionMap.delete(userKey);
         this.sessionTimeoutMap.delete(sessionId);
         await this.sessionManager.unregisterSession(sessionId);
