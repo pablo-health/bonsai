@@ -525,23 +525,17 @@ If the session has timed out and been unregistered by the time `processAt` arriv
 - The conversation record remains in its current state. Acceptable — operator can inspect via audit log.
 - If a new inbound message arrives from the same user, a new session is created and the new message goes through its own deferral cycle.
 
-### 8.2 Multiple Messages Queued for Same Conversation
+### 8.2 Message Coalescing
 
-If a user sends multiple messages while a previous message is still deferred, each message is queued independently with its own `processAt`. There is **no deduplication, no coalescing, and no queue-per-conversation limit**. The consequences:
-
-- **Independent processing**: Each queued message triggers a full AI turn when `processAt` fires. The user gets N separate AI responses for N queued messages.
-- **No message coalescing**: Unlike a real-time chat where rapid messages might be batched into one context, deferred messages are processed as independent `send_user_text_input` dispatches.
-- **Ordering**: Messages are processed in `processAt` order (`ORDER BY process_at ASC`), which generally matches arrival order since delay is random but bounded. However, if Message A has a longer random delay than Message B, B fires first.
+When multiple user messages arrive for the same conversation while one is already queued:
+- **Coalescing**: The channel host checks for an existing `pending` entry for the same conversation. If found, the new text is **appended** to the existing entry's message text (separated by `\n\n`), and the old entry's `processAt` is **not** changed. The single queued entry fires once and delivers all accumulated texts as one `send_user_text_input`.
+- **Single AI turn**: The user gets one AI response that sees all their messages in context, rather than N separate turns.
+- **Ordering preserved**: Texts are appended in arrival order, so the AI sees them chronologically.
 - **Session timer**: The session inactivity timer is reset on each new message **arrival** (not processing), so the session stays alive as long as the user keeps sending messages.
-- **No back-pressure**: The channel host performs no check for already-queued messages before queuing a new one. A user who sends 10 emails in 30 seconds with a 2-minute deferral gets 10 queued entries and 10 AI responses.
 
-**This is a known limitation of V1.** Possible future mitigations:
-1. **Drop-and-replace**: If a message for the same conversation is already queued, cancel the old one and queue only the latest. The user gets one response for their latest message.
-2. **Coalesce**: Merge multiple pending messages into a single queued entry with all texts concatenated.
-3. **Per-conversation queue limit**: Cap the number of pending entries per conversation (e.g., 2) and drop the rest.
-4. **Defer on first only**: Only defer the first message; subsequent messages while one is pending are processed immediately.
+This applies to **`send_user_text_input` only** — the only message type subject to deferral. All other CAL message types (`start_conversation`, `go_to_stage`, `end_conversation`, `set_var`, `get_var`, etc.) are **always dispatched immediately** and never queued.
 
-**For email channels (SMTP/IMAP)**, this is less likely to be an issue in practice — users rarely send multiple emails in rapid succession within the same thread. For chat-like channels (WhatsApp, Telegram), it's more probable but still uncommon given the deferral delay is typically shorter than the time between user messages.
+**Rationale**: Deferral only makes sense for user-generated text input. Control messages from clients (WebSocket, API calls) need predictable immediate delivery. Coalescing prevents the "10 emails = 10 AI turns" problem while keeping the implementation simple — no per-conversation queue limits or drop-and-replace logic needed.
 
 ### 8.3 Conversation Not Yet Created
 
@@ -750,8 +744,7 @@ src/
 2. **Should `start_conversation` ever be deferred?** Resolved: no — conversation creation is immediate, only user input is deferred. Deferring conversation creation would leave the session in a limbo state with no conversation attached.
 3. **Should there be a "human-like" preset** that uses a normal distribution centered on the midpoint? Not in V1 — uniform random is simpler and sufficient.
 4. **Should the deferral timer start from the incoming message timestamp or include AI generation time?** Resolved: timer starts from message arrival. Total user wait = deferral delay + AI generation time. This is the correct order — delay first, then process.
-5. **Should there be a maximum queue size per conversation?** Not in V1. If a user floods messages while deferral is active, each is queued independently. A future rate-limiting layer could cap this.
-9. **What happens when multiple messages arrive for the same conversation while one is already queued?** Current behavior: each message is queued independently with no deduplication or coalescing. The user gets N separate AI responses for N messages. This is documented in edge case 8.2. Possible mitigations (not in V1): drop-and-replace (cancel old, queue latest), coalesce into one entry, per-conversation queue limit, or defer-on-first-only. For email channels this is rare in practice; for chat-like channels (WhatsApp, Telegram) it's more probable but still uncommon given typical deferral delays are shorter than time between user messages.
+5. **Should there be a maximum queue size per conversation?** Resolved: not needed — coalescing (8.2) means only one pending entry exists per conversation regardless of message volume.
 6. **Should `ConversationTimeoutService` cancel deferred messages?** Open: `cancelByConversationId` exists but is not wired up. When a conversation is aborted by the timeout service, pending deferred messages remain in `pending` status until `processAt` fires and the missing session is detected. Wiring this up would clean up the queue more promptly.
 7. **Should `terminateSession` cancel deferred messages?** Open: WhatsApp and Telegram `/reset` commands terminate the session but do not explicitly cancel pending deferred messages. The messages are eventually cancelled when `processAt` fires, but there's a window where they appear as `pending` in the REST API.
 8. **Should slash commands (`/stage`, `/reset`) be deferred?** Resolved: no — control commands are dispatched immediately to ensure predictable behavior. Only plain text input is deferred.
