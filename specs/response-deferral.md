@@ -571,23 +571,19 @@ Control commands (`/reset`, `/stage <stageId>`, `/start`) are dispatched immedia
 - `/stage` navigation takes effect immediately.
 - `/start` creates the conversation immediately.
 
-### 8.8 `terminateSession` Does Not Cancel Deferred Messages
+### 8.8 `terminateSession` Cancels Deferred Messages
 
 When `/reset` triggers `terminateSession()` on WhatsApp or Telegram:
+- `cancelBySessionId` is called before `unregisterSession`, so pending deferred messages are marked `cancelled` immediately.
 - The session timer is cleared, the session is unregistered, and `end_conversation` is dispatched.
-- Pending deferred messages for that session are **not** explicitly cancelled at this point.
-- When `processAt` arrives, `ProcessingDeferralService` detects the missing session and marks the entry as `cancelled`.
-- This means deferred entries remain in `pending` status until their `processAt` fires, even though the session is already dead. The REST API will show them as `pending` during this window.
-- **Mitigation**: `cancelBySessionId` is called during session timeout (`scheduleTimeout`), so timeout-based cancellation is immediate. Only `/reset`-based termination has this gap.
+- Wrapped in try/catch so cancellation failures don't block session teardown.
 
-### 8.9 Conversation Timeout Does Not Cancel Deferred Messages
+### 8.9 Conversation Timeout Cancels Deferred Messages
 
 When the `ConversationTimeoutService` aborts a conversation (project-level `conversationTimeoutSeconds`):
-- The conversation is aborted and the session is closed.
-- Pending deferred messages for that conversation are **not** explicitly cancelled.
-- `cancelByConversationId` exists in `DeferredProcessingService` but is **not wired up** to `ConversationTimeoutService`.
-- When `processAt` arrives, `ProcessingDeferralService` detects the missing session and marks the entry as `cancelled`.
-- **Open question**: Should `ConversationTimeoutService` call `cancelByConversationId` for aborted conversations? This would clean up the queue more promptly.
+- The conversation is aborted, sessions are closed, and `cancelByConversationId` is called.
+- Pending deferred messages are marked `cancelled` immediately.
+- Wrapped in try/catch so cancellation failures don't block conversation abort.
 
 ### 8.10 Provider Config Change During Deferral Window
 
@@ -625,13 +621,12 @@ The session inactivity timer is set/reset when the message **arrives** (and is q
 - If the user sends another message before the 30-minute timeout, the timer resets again.
 - **Edge case**: If deferral is set to 35 minutes (longer than the 30-minute session timeout), the session could expire before the deferred message is processed. The message is then cancelled.
 
-### 8.15 Queue Entries Survive Provider Deletion
+### 8.15 Provider Deletion Cancels Deferred Messages
 
 If a channel provider is deleted while messages are queued:
-- Queue entries remain with a foreign key reference to the deleted provider.
-- The `providerId` is not used during `ProcessingDeferralService` processing, so dispatch proceeds normally.
-- This is a data integrity concern but not a functional issue — the entry still has `sessionId`, `conversationId`, and `message`.
-- The 7-day cleanup will eventually remove processed/failed/cancelled records.
+- `cancelByProviderId` is called after the provider is deleted.
+- All pending deferred messages for that provider are marked `cancelled` immediately.
+- Wrapped in try/catch so cancellation failures don't block provider deletion.
 
 ### 8.16 Reschedule Clamping
 
@@ -745,6 +740,7 @@ src/
 3. **Should there be a "human-like" preset** that uses a normal distribution centered on the midpoint? Not in V1 — uniform random is simpler and sufficient.
 4. **Should the deferral timer start from the incoming message timestamp or include AI generation time?** Resolved: timer starts from message arrival. Total user wait = deferral delay + AI generation time. This is the correct order — delay first, then process.
 5. **Should there be a maximum queue size per conversation?** Resolved: not needed — coalescing (8.2) means only one pending entry exists per conversation regardless of message volume.
-6. **Should `ConversationTimeoutService` cancel deferred messages?** Open: `cancelByConversationId` exists but is not wired up. When a conversation is aborted by the timeout service, pending deferred messages remain in `pending` status until `processAt` fires and the missing session is detected. Wiring this up would clean up the queue more promptly.
-7. **Should `terminateSession` cancel deferred messages?** Open: WhatsApp and Telegram `/reset` commands terminate the session but do not explicitly cancel pending deferred messages. The messages are eventually cancelled when `processAt` fires, but there's a window where they appear as `pending` in the REST API.
+6. **Should `ConversationTimeoutService` cancel deferred messages?** Resolved: yes — `cancelByConversationId` is wired up (8.9).
+7. **Should `terminateSession` cancel deferred messages?** Resolved: yes — `cancelBySessionId` is called before `unregisterSession` (8.8).
+9. **Should provider deletion cancel deferred messages?** Resolved: yes — `cancelByProviderId` is called after provider deletion (8.15).
 8. **Should slash commands (`/stage`, `/reset`) be deferred?** Resolved: no — control commands are dispatched immediately to ensure predictable behavior. Only plain text input is deferred.
