@@ -597,6 +597,13 @@ export class WhatsAppChannelHost {
       }
     }
 
+    // Cancel any pending deferred messages for this session
+    try {
+      await this.deferredProcessingService.cancelBySessionId(sessionId);
+    } catch (error) {
+      logger.warn({ error, sessionId }, 'WhatsApp /reset: error cancelling deferred messages, continuing with session teardown');
+    }
+
     await this.sessionManager.unregisterSession(sessionId);
     logger.info({ sessionId }, 'WhatsApp: session terminated by /reset command');
   }

@@ -41,9 +41,37 @@ export interface DeferredProcessingEntry {
 export class DeferredProcessingService {
   /**
    * Queue a message for deferred processing.
+   * If a `pending` entry already exists for the same conversation, the new text is
+   * appended to the existing entry's message (coalescing) instead of creating a new row.
    * The message will be processed by ProcessingDeferralService when `processAt` elapses.
    */
   public async queue(entry: DeferredProcessingEntry): Promise<void> {
+    // Coalesce: check for existing pending entry for the same conversation
+    if (entry.conversationId) {
+      const [existing] = await db.select().from(deferredProcessing)
+        .where(and(
+          eq(deferredProcessing.conversationId, entry.conversationId),
+          eq(deferredProcessing.status, 'pending'),
+        ));
+
+      if (existing) {
+        // Coalesce: append new text to existing message
+        // Only send_user_text_input messages are deferred, so text is always present
+        const existingMessage = existing.message as Record<string, unknown>;
+        const existingText = typeof existingMessage.text === 'string' ? existingMessage.text : '';
+        const newMessage = entry.message as Record<string, unknown>;
+        const newText = typeof newMessage.text === 'string' ? newMessage.text : '';
+        const coalescedText = existingText + '\n\n' + newText;
+
+        await db.update(deferredProcessing)
+          .set({ message: { ...existingMessage, text: coalescedText } })
+          .where(eq(deferredProcessing.id, existing.id));
+
+        return;
+      }
+    }
+
+    // No existing entry — insert new
     await db.insert(deferredProcessing).values({
       id: `deferred_${crypto.randomUUID()}`,
       sessionId: entry.sessionId,
@@ -78,6 +106,19 @@ export class DeferredProcessingService {
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(and(
         eq(deferredProcessing.conversationId, conversationId),
+        eq(deferredProcessing.status, 'pending'),
+      ));
+  }
+
+  /**
+   * Cancel all pending messages for a given provider.
+   * Called when a provider is deleted.
+   */
+  public async cancelByProviderId(providerId: string): Promise<void> {
+    await db.update(deferredProcessing)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(and(
+        eq(deferredProcessing.providerId, providerId),
         eq(deferredProcessing.status, 'pending'),
       ));
   }
