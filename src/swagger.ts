@@ -117,7 +117,9 @@ import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigCon
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { timingStatsSchema, benchmarkStatsSchema, createBenchmarkSuiteSchema, updateBenchmarkSuiteSchema, benchmarkSuiteResponseSchema, benchmarkSuiteListResponseSchema, createBenchmarkProviderConfigSchema, updateBenchmarkProviderConfigSchema, benchmarkProviderConfigResponseSchema, benchmarkProviderConfigListResponseSchema, createBenchmarkConfigSchema, updateBenchmarkConfigSchema, benchmarkConfigResponseSchema, benchmarkConfigListResponseSchema, triggerBenchmarkRunSchema, benchmarkConfigExecutionResponseSchema, benchmarkRunResponseSchema, benchmarkRunListResponseSchema, llmIterationOutputSchema, ttsIterationOutputSchema, asrIterationOutputSchema, benchmarkIterationResultDataSchema, benchmarkResultResponseSchema } from './http/contracts/benchmark';
 import { QuickPromptController } from './http/controllers/QuickPromptController';
+import { DeferredProcessingController } from './http/controllers/DeferredProcessingController';
 import { createQuickPromptSchema, createProjectQuickPromptSchema, updateQuickPromptBodySchema, deleteQuickPromptBodySchema, cloneQuickPromptSchema, quickPromptResponseSchema, quickPromptListResponseSchema, quickPromptRouteParamsSchema, quickPromptProjectRouteParamsSchema } from './http/contracts/quickPrompt';
+import { deferredProcessingResponseSchema, deferredProcessingListResponseSchema, rescheduleDeferredProcessingBodySchema, cancelDeferredProcessingBodySchema } from './http/contracts/deferredProcessing';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
@@ -753,6 +755,16 @@ export function getOpenAPISpec(): any {
   registry.register('QuickPromptListResponse', quickPromptListResponseSchema);
   const quickPromptPaths = QuickPromptController.getOpenAPIPaths();
   for (const path of quickPromptPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register DeferredProcessing schemas and routes
+  registry.register('DeferredProcessingEntry', deferredProcessingResponseSchema);
+  registry.register('DeferredProcessingList', deferredProcessingListResponseSchema);
+  registry.register('RescheduleDeferredProcessing', rescheduleDeferredProcessingBodySchema);
+  registry.register('CancelDeferredProcessing', cancelDeferredProcessingBodySchema);
+  const deferredProcessingPaths = DeferredProcessingController.getOpenAPIPaths();
+  for (const path of deferredProcessingPaths) {
     registry.registerPath(path);
   }
 

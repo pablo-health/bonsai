@@ -250,7 +250,9 @@ export class SmtpImapConnection extends EmailConnectionBase {
       const info = await this.transporter.sendMail(mailOptions);
       logger.info({ to, messageId, sessionId: this.session?.id, messageIdRemote: info.messageId, attachmentCount: attachments.length }, 'SMTP/IMAP email sent');
       if (this.onEmailSent) {
-        this.onEmailSent();
+        const callback = this.onEmailSent;
+        this.onEmailSent = undefined;
+        callback();
       }
     } catch (error) {
       logger.error({ error, to, messageId, sessionId: this.session?.id }, 'Failed to send SMTP/IMAP email');

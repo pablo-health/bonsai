@@ -39,6 +39,7 @@ import { ProjectExchangeController } from './http/controllers/ProjectExchangeCon
 import { ConversationTimeoutService } from './services/ConversationTimeoutService';
 import { ScenarioRunExecutorService } from './services/testing/ScenarioRunExecutorService';
 import { ImapInboundService } from './services/ImapInboundService';
+import { ProcessingDeferralService } from './services/ProcessingDeferralService';
 import { OAuth2TokenRefreshService } from './services/OAuth2TokenRefreshService';
 import { errorHandler } from './http/middleware/errorHandler';
 import { optionalAuthMiddleware } from './http/middleware/auth';
@@ -70,6 +71,7 @@ import { BenchmarkProviderConfigController } from './http/controllers/BenchmarkP
 import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigController';
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { QuickPromptController } from './http/controllers/QuickPromptController';
+import { DeferredProcessingController } from './http/controllers/DeferredProcessingController';
 import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
 import SpeexResamplerClass from './services/audio/speexResampler';
 import smartTurnDetector from './services/audio/SmartTurnDetector';
@@ -290,6 +292,9 @@ export async function createApp(): Promise<express.Application> {
   const quickPromptController = container.resolve(QuickPromptController);
   quickPromptController.registerRoutes(app);
 
+  const deferredProcessingController = container.resolve(DeferredProcessingController);
+  deferredProcessingController.registerRoutes(app);
+
   container.resolve(WebRTCChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
@@ -328,6 +333,7 @@ export async function createApp(): Promise<express.Application> {
   container.resolve(BenchmarkExecutorService).start();
   container.resolve(ImapInboundService).start();
   container.resolve(OAuth2TokenRefreshService).start();
+  container.resolve(ProcessingDeferralService).start();
 
   app.use(errorHandler);
 

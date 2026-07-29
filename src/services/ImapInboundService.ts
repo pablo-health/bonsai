@@ -49,6 +49,8 @@ class ImapMailboxSession {
     public readonly oauth2AccessToken: string | undefined,
     public readonly processedFolder: string,
     public readonly ccBccReplyAsHandOff: boolean,
+    public readonly processingDelayMinMs: number,
+    public readonly processingDelayMaxMs: number,
   ) {}
 
   public async connect(): Promise<void> {
@@ -310,7 +312,15 @@ class ImapMailboxSession {
         routing.fromAddress,
         () => this.moveMessage(uid, this.processedFolder),
         this.ccBccReplyAsHandOff,
+        this.processingDelayMinMs,
+        this.processingDelayMaxMs,
       );
+
+      // Move the email to the processed folder immediately after handling.
+      // This prevents duplicate processing on the next IMAP poll cycle when
+      // processing deferral is active (the email would otherwise stay in the
+      // inbox until the AI response is sent, getting re-queued every 30s).
+      this.moveMessage(uid, this.processedFolder);
 
     } catch (error) {
       logger.error({ error, uid, providerId: this.providerId }, 'Failed to process email');
@@ -539,6 +549,8 @@ export class ImapInboundService {
       config.oauth2?.accessToken,
       config.processedFolder,
       config.ccBccReplyAsHandOff,
+      config.processingDelayMinMs,
+      config.processingDelayMaxMs,
     );
 
     this.sessions.set(provider.id, session);
@@ -603,6 +615,8 @@ export class ImapInboundService {
           config.oauth2?.accessToken,
           config.processedFolder,
           config.ccBccReplyAsHandOff,
+          config.processingDelayMinMs,
+          config.processingDelayMaxMs,
         );
 
         this.sessions.set(provider.id, session);
