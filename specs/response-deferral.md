@@ -532,6 +532,7 @@ If a user sends multiple messages while a previous message is still deferred:
 - Messages are processed in `processAt` order (enforced by `ORDER BY process_at ASC`).
 - The ConversationRunner handles sequential input naturally — each `send_user_text_input` is processed in order.
 - **Note**: If messages arrive very close together, their `processAt` values may be nearly identical. The `ORDER BY` ensures FIFO within the same second.
+- The session inactivity timer is reset on each new message **arrival** (not processing), so the session stays alive as long as the user keeps sending messages.
 
 ### 8.3 Conversation Not Yet Created
 
@@ -560,15 +561,110 @@ There is no upper bound enforced by the system. An operator could set `processin
 
 WebSocket and WebRTC channels are **never deferred**. The deferral config is only added to non-immediate channel provider schemas. Even if an operator somehow set the config, the WebSocket/WebRTC channel hosts do not use `dispatchOrDefer` — they dispatch directly.
 
-## 9. API Surface (Future — Not V1)
+### 8.7 Slash Commands Are Never Deferred
 
-These endpoints are not part of V1 but are planned for observability:
+Control commands (`/reset`, `/stage <stageId>`, `/start`) are dispatched immediately, bypassing deferral entirely. Only plain text input (`send_user_text_input`) is subject to deferral. This ensures:
+- `/reset` tears down the session immediately (not after the deferral window).
+- `/stage` navigation takes effect immediately.
+- `/start` creates the conversation immediately.
 
-```
-GET  /api/projects/:projectId/deferred-processing?conversationId=xxx&status=pending
-GET  /api/projects/:projectId/deferred-processing/:id
-POST /api/projects/:projectId/deferred-processing/:id/cancel
-```
+### 8.8 `terminateSession` Does Not Cancel Deferred Messages
+
+When `/reset` triggers `terminateSession()` on WhatsApp or Telegram:
+- The session timer is cleared, the session is unregistered, and `end_conversation` is dispatched.
+- Pending deferred messages for that session are **not** explicitly cancelled at this point.
+- When `processAt` arrives, `ProcessingDeferralService` detects the missing session and marks the entry as `cancelled`.
+- This means deferred entries remain in `pending` status until their `processAt` fires, even though the session is already dead. The REST API will show them as `pending` during this window.
+- **Mitigation**: `cancelBySessionId` is called during session timeout (`scheduleTimeout`), so timeout-based cancellation is immediate. Only `/reset`-based termination has this gap.
+
+### 8.9 Conversation Timeout Does Not Cancel Deferred Messages
+
+When the `ConversationTimeoutService` aborts a conversation (project-level `conversationTimeoutSeconds`):
+- The conversation is aborted and the session is closed.
+- Pending deferred messages for that conversation are **not** explicitly cancelled.
+- `cancelByConversationId` exists in `DeferredProcessingService` but is **not wired up** to `ConversationTimeoutService`.
+- When `processAt` arrives, `ProcessingDeferralService` detects the missing session and marks the entry as `cancelled`.
+- **Open question**: Should `ConversationTimeoutService` call `cancelByConversationId` for aborted conversations? This would clean up the queue more promptly.
+
+### 8.10 Provider Config Change During Deferral Window
+
+If deferral is enabled/disabled on a channel provider while messages are already queued:
+- **Queued messages are NOT affected** — they continue to be processed by `ProcessingDeferralService` regardless of the current provider config.
+- **New messages** use the current provider config at arrival time.
+- Deferral is a "point-in-time" decision made when the message is queued.
+
+### 8.11 Poll Cycle Skipping (`isProcessing` Guard)
+
+`ProcessingDeferralService` uses an `isProcessing` flag to prevent concurrent poll cycles:
+- If processing 50 entries takes longer than 15 seconds (the poll interval), the next scheduled poll is **skipped**.
+- Messages due during this window are processed in the next non-skipped cycle.
+- In practice, this is rare — most dispatches complete in seconds. Under heavy load or slow AI generation, this could cause additional delay beyond the configured deferral window.
+
+### 8.12 Poll Batch Size Limit (50)
+
+Each poll cycle fetches at most 50 due messages (`POLL_BATCH_SIZE = 50`):
+- If more than 50 messages are due in a single 15-second window, only 50 are processed.
+- The remaining messages wait for the next poll cycle.
+- This is unlikely to be an issue in production but could matter during bulk testing or message floods.
+
+### 8.13 Outbound Messages Are Never Deferred
+
+Outbound-initiated conversations (`POST /api/whatsapp/send`, `POST /api/twilio/messaging/send`, `POST /api/email/smtp-imap/send`):
+- The `start_conversation` is dispatched immediately.
+- The AI generates and sends the opening message immediately.
+- Deferral only applies to **inbound** messages (user replies).
+
+### 8.14 Session Inactivity Timer Starts From Message Arrival
+
+The session inactivity timer is set/reset when the message **arrives** (and is queued), not when it's processed:
+- If deferral is set to 5 minutes and session timeout is 30 minutes, the session timer starts counting from arrival.
+- The deferred message is processed at 5 minutes, which resets the timer.
+- If the user sends another message before the 30-minute timeout, the timer resets again.
+- **Edge case**: If deferral is set to 35 minutes (longer than the 30-minute session timeout), the session could expire before the deferred message is processed. The message is then cancelled.
+
+### 8.15 Queue Entries Survive Provider Deletion
+
+If a channel provider is deleted while messages are queued:
+- Queue entries remain with a foreign key reference to the deleted provider.
+- The `providerId` is not used during `ProcessingDeferralService` processing, so dispatch proceeds normally.
+- This is a data integrity concern but not a functional issue — the entry still has `sessionId`, `conversationId`, and `message`.
+- The 7-day cleanup will eventually remove processed/failed/cancelled records.
+
+### 8.16 Reschedule Clamping
+
+The REST API `reschedule` endpoint clamps `processAt` to `[now, now + 30 days]`:
+- Past dates are clamped to `now` (immediate processing on next poll).
+- Future dates beyond 30 days are clamped to `now + 30 days`.
+- Only entries in `pending` status can be rescheduled.
+- The `MAX_RESCHEDULE_DELAY_MS` constant (30 days) prevents unreasonable delays.
+
+### 8.17 Feature Permission Check Before Deferral
+
+The `text_input` feature permission is checked **before** the deferral decision:
+- If the API key doesn't permit `text_input`, the message is dropped immediately (not queued).
+- This prevents queuing messages that would be rejected anyway.
+- `go_to_stage` similarly requires `stage_control` permission before dispatch.
+
+### 8.18 SMTP/IMAP Duplicate Processing Prevention
+
+SMTP-IMAP polls the inbox every 30 seconds with `search(['ALL'])`:
+- Without deferral, the `\Seen` flag was set after the AI response was sent, creating a window where the same message could be picked up again.
+- With deferral, the email is moved to the processed folder **immediately** after `handleInboundEmail` returns (before the deferral window), preventing re-picking.
+- The `onEmailSent` callback is cleared after first use to prevent duplicate move attempts.
+- Other channels (SendGrid, SES, Twilio, WhatsApp, Telegram) are webhook-driven and have no duplicate risk.
+
+## 9. API Surface (Implemented)
+
+The following endpoints are implemented for observability and manual control:
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/projects/:projectId/deferred-processing` | `PROJECT_READ` | List entries with filters (status, conversationId, channelType, pagination) |
+| `GET` | `/api/projects/:projectId/deferred-processing/:id` | `PROJECT_READ` | Get single entry by ID |
+| `POST` | `/api/projects/:projectId/deferred-processing/:id/reschedule` | `PROJECT_WRITE` | Change `processAt` — use past date for immediate processing (next poll cycle). Max 30-day future delay. |
+| `POST` | `/api/projects/:projectId/deferred-processing/:id/cancel` | `PROJECT_WRITE` | Cancel a pending entry |
+
+All entries are scoped to the project — cross-project access returns 404. The `reschedule` endpoint clamps `processAt` to `[now, now + 30 days]`.
 
 ## 10. Testing Strategy
 
@@ -642,7 +738,10 @@ src/
 ## 13. Open Questions
 
 1. **Should deferral apply to the first message only**, or every message? Current spec: every `send_user_text_input`. A per-conversation "first message only" flag could be added later.
-2. **Should `start_conversation` ever be deferred?** Current spec: no — conversation creation is immediate, only user input is deferred. Deferring conversation creation would leave the session in a limbo state with no conversation attached.
+2. **Should `start_conversation` ever be deferred?** Resolved: no — conversation creation is immediate, only user input is deferred. Deferring conversation creation would leave the session in a limbo state with no conversation attached.
 3. **Should there be a "human-like" preset** that uses a normal distribution centered on the midpoint? Not in V1 — uniform random is simpler and sufficient.
-4. **Should the deferral timer start from the incoming message timestamp or include AI generation time?** Current spec: timer starts from message arrival. Total user wait = deferral delay + AI generation time. This is the correct order — delay first, then process.
+4. **Should the deferral timer start from the incoming message timestamp or include AI generation time?** Resolved: timer starts from message arrival. Total user wait = deferral delay + AI generation time. This is the correct order — delay first, then process.
 5. **Should there be a maximum queue size per conversation?** Not in V1. If a user floods messages while deferral is active, each is queued independently. A future rate-limiting layer could cap this.
+6. **Should `ConversationTimeoutService` cancel deferred messages?** Open: `cancelByConversationId` exists but is not wired up. When a conversation is aborted by the timeout service, pending deferred messages remain in `pending` status until `processAt` fires and the missing session is detected. Wiring this up would clean up the queue more promptly.
+7. **Should `terminateSession` cancel deferred messages?** Open: WhatsApp and Telegram `/reset` commands terminate the session but do not explicitly cancel pending deferred messages. The messages are eventually cancelled when `processAt` fires, but there's a window where they appear as `pending` in the REST API.
+8. **Should slash commands (`/stage`, `/reset`) be deferred?** Resolved: no — control commands are dispatched immediately to ensure predictable behavior. Only plain text input is deferred.
