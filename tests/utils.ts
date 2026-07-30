@@ -47,6 +47,9 @@ const TABLES = [
   // quick prompts
   'quick_prompts',
 
+  // project snapshots
+  'project_snapshots',
+
   // audit
   'audit_logs',
 

@@ -72,6 +72,7 @@ import { BenchmarkConfigController } from './http/controllers/BenchmarkConfigCon
 import { BenchmarkRunController } from './http/controllers/BenchmarkRunController';
 import { QuickPromptController } from './http/controllers/QuickPromptController';
 import { DeferredProcessingController } from './http/controllers/DeferredProcessingController';
+import { ProjectSnapshotController } from './http/controllers/ProjectSnapshotController';
 import { BenchmarkExecutorService } from './services/BenchmarkExecutorService';
 import SpeexResamplerClass from './services/audio/speexResampler';
 import smartTurnDetector from './services/audio/SmartTurnDetector';
@@ -294,6 +295,9 @@ export async function createApp(): Promise<express.Application> {
 
   const deferredProcessingController = container.resolve(DeferredProcessingController);
   deferredProcessingController.registerRoutes(app);
+
+  const projectSnapshotController = container.resolve(ProjectSnapshotController);
+  projectSnapshotController.registerRoutes(app);
 
   container.resolve(WebRTCChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
