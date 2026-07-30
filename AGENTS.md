@@ -211,6 +211,6 @@ VitePress docs (`docs/`): never use bare `{{ }}` outside fenced code blocks (Vue
 
 ## Branch / PR
 
-PRs to `dev` branch; `main` is production. CI runs on `dev`, Node 20.x, only validates `npm install && npm run build`.
+PRs to `dev` branch; `main` is production. CI runs on `dev`, Node 24.x, only validates `npm install && npm run build`.
 
 Before merging, run `npm run test:e2e` locally to verify all 636 tests pass. Add e2e tests for any new or modified controller endpoints.
