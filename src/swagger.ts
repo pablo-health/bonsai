@@ -118,6 +118,7 @@ import { BenchmarkRunController } from './http/controllers/BenchmarkRunControlle
 import { timingStatsSchema, benchmarkStatsSchema, createBenchmarkSuiteSchema, updateBenchmarkSuiteSchema, benchmarkSuiteResponseSchema, benchmarkSuiteListResponseSchema, createBenchmarkProviderConfigSchema, updateBenchmarkProviderConfigSchema, benchmarkProviderConfigResponseSchema, benchmarkProviderConfigListResponseSchema, createBenchmarkConfigSchema, updateBenchmarkConfigSchema, benchmarkConfigResponseSchema, benchmarkConfigListResponseSchema, triggerBenchmarkRunSchema, benchmarkConfigExecutionResponseSchema, benchmarkRunResponseSchema, benchmarkRunListResponseSchema, llmIterationOutputSchema, ttsIterationOutputSchema, asrIterationOutputSchema, benchmarkIterationResultDataSchema, benchmarkResultResponseSchema } from './http/contracts/benchmark';
 import { QuickPromptController } from './http/controllers/QuickPromptController';
 import { DeferredProcessingController } from './http/controllers/DeferredProcessingController';
+import { ProjectSnapshotController } from './http/controllers/ProjectSnapshotController';
 import { createQuickPromptSchema, createProjectQuickPromptSchema, updateQuickPromptBodySchema, deleteQuickPromptBodySchema, cloneQuickPromptSchema, quickPromptResponseSchema, quickPromptListResponseSchema, quickPromptRouteParamsSchema, quickPromptProjectRouteParamsSchema } from './http/contracts/quickPrompt';
 import { deferredProcessingResponseSchema, deferredProcessingListResponseSchema, rescheduleDeferredProcessingBodySchema, cancelDeferredProcessingBodySchema } from './http/contracts/deferredProcessing';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
@@ -765,6 +766,12 @@ export function getOpenAPISpec(): any {
   registry.register('CancelDeferredProcessing', cancelDeferredProcessingBodySchema);
   const deferredProcessingPaths = DeferredProcessingController.getOpenAPIPaths();
   for (const path of deferredProcessingPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register ProjectSnapshot schemas and routes
+  const snapshotPaths = ProjectSnapshotController.getOpenAPIPaths();
+  for (const path of snapshotPaths) {
     registry.registerPath(path);
   }
 
