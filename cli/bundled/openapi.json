@@ -24680,6 +24680,16 @@
             "type": "integer",
             "minimum": 0,
             "description": "Number of quick prompts"
+          },
+          "savedSliceQueries": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of saved slice queries"
+          },
+          "savedFunnelQueries": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of saved funnel queries"
           }
         },
         "required": [
@@ -24696,7 +24706,9 @@
           "copyDecorators",
           "testers",
           "scenarios",
-          "quickPrompts"
+          "quickPrompts",
+          "savedSliceQueries",
+          "savedFunnelQueries"
         ],
         "description": "Entity counts summary"
       },

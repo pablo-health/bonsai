@@ -61,6 +61,8 @@ export const entityCountsSchema = z.object({
   testers: z.number().int().nonnegative().describe('Number of testers'),
   scenarios: z.number().int().nonnegative().describe('Number of scenarios'),
   quickPrompts: z.number().int().nonnegative().describe('Number of quick prompts'),
+  savedSliceQueries: z.number().int().nonnegative().describe('Number of saved slice queries'),
+  savedFunnelQueries: z.number().int().nonnegative().describe('Number of saved funnel queries'),
 }).openapi('EntityCounts').describe('Entity counts summary for a snapshot');
 
 /**
