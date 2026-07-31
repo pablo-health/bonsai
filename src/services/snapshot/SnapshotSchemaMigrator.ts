@@ -26,6 +26,8 @@ export interface EntityData {
   testers: unknown[];
   scenarios: unknown[];
   quickPrompts: unknown[];
+  savedSliceQueries: unknown[];
+  savedFunnelQueries: unknown[];
 }
 
 /**

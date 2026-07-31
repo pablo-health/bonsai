@@ -6,6 +6,7 @@ import {
   tools, globalActions, guardrails,
   knowledgeCategories, knowledgeItems,
   sampleCopies, copyDecorators, testers, scenarios, quickPrompts,
+  savedSliceQueries, savedFunnelQueries,
   projectSnapshots, providers,
 } from '../db/schema';
 import { BaseService } from './BaseService';
@@ -278,6 +279,7 @@ export class ProjectSnapshotService extends BaseService {
       'agents', 'stages', 'classifiers', 'contextTransformers', 'tools',
       'globalActions', 'guardrails', 'knowledgeCategories', 'knowledgeItems',
       'sampleCopies', 'copyDecorators', 'testers', 'scenarios', 'quickPrompts',
+      'savedSliceQueries', 'savedFunnelQueries',
     ];
 
     const diffs: Array<{ entityType: string; entityId: string; entityName: string; changes: Array<{ field: string; from: unknown; to: unknown }> }> = [];
@@ -421,6 +423,8 @@ export class ProjectSnapshotService extends BaseService {
       // Tables that depend on others must be deleted first
       await tx.delete(scenarios).where(eq(scenarios.projectId, projectId));
       await tx.delete(quickPrompts).where(eq(quickPrompts.projectId, projectId));
+      await tx.delete(savedSliceQueries).where(eq(savedSliceQueries.projectId, projectId));
+      await tx.delete(savedFunnelQueries).where(eq(savedFunnelQueries.projectId, projectId));
       await tx.delete(sampleCopies).where(eq(sampleCopies.projectId, projectId));
       await tx.delete(stages).where(eq(stages.projectId, projectId));
       await tx.delete(knowledgeItems).where(eq(knowledgeItems.projectId, projectId));
@@ -491,6 +495,8 @@ export class ProjectSnapshotService extends BaseService {
       testerRows,
       scenarioRows,
       quickPromptRows,
+      savedSliceQueryRows,
+      savedFunnelQueryRows,
     ] = await Promise.all([
       db.select().from(projects).where(eq(projects.id, projectId)).limit(1),
       db.select().from(agents).where(eq(agents.projectId, projectId)),
@@ -507,6 +513,8 @@ export class ProjectSnapshotService extends BaseService {
       db.select().from(testers).where(eq(testers.projectId, projectId)),
       db.select().from(scenarios).where(eq(scenarios.projectId, projectId)),
       db.select().from(quickPrompts).where(and(eq(quickPrompts.projectId, projectId))),
+      db.select().from(savedSliceQueries).where(eq(savedSliceQueries.projectId, projectId)),
+      db.select().from(savedFunnelQueries).where(eq(savedFunnelQueries.projectId, projectId)),
     ]);
 
     const project = projectRows[0];
@@ -535,6 +543,8 @@ export class ProjectSnapshotService extends BaseService {
       testers: testerRows as unknown[],
       scenarios: scenarioRows as unknown[],
       quickPrompts: quickPromptRows as unknown[],
+      savedSliceQueries: savedSliceQueryRows as unknown[],
+      savedFunnelQueries: savedFunnelQueryRows as unknown[],
     };
 
     return entityData;
@@ -654,7 +664,21 @@ export class ProjectSnapshotService extends BaseService {
       await tx.insert(quickPrompts).values({ ...row, projectId });
     }
 
-    // 15. Stages (last — depend on agents and classifiers)
+    // 15. Saved slice queries
+    for (const sq of entityData.savedSliceQueries) {
+      const row = sq as Record<string, unknown>;
+      this.restoreTimestamps(row);
+      await tx.insert(savedSliceQueries).values({ ...row, projectId });
+    }
+
+    // 16. Saved funnel queries
+    for (const fq of entityData.savedFunnelQueries) {
+      const row = fq as Record<string, unknown>;
+      this.restoreTimestamps(row);
+      await tx.insert(savedFunnelQueries).values({ ...row, projectId });
+    }
+
+    // 17. Stages (last — depend on agents and classifiers)
     for (const s of entityData.stages) {
       const row = s as Record<string, unknown>;
       this.restoreTimestamps(row);
@@ -804,6 +828,8 @@ export class ProjectSnapshotService extends BaseService {
       testers: entityData.testers.length,
       scenarios: entityData.scenarios.length,
       quickPrompts: entityData.quickPrompts.length,
+      savedSliceQueries: entityData.savedSliceQueries.length,
+      savedFunnelQueries: entityData.savedFunnelQueries.length,
     };
   }
 
@@ -868,6 +894,8 @@ function entityTypeToSingular(type: string): string {
     testers: 'tester',
     scenarios: 'scenario',
     quickPrompts: 'quickPrompt',
+    savedSliceQueries: 'savedSliceQuery',
+    savedFunnelQueries: 'savedFunnelQuery',
   };
   return map[type] ?? type;
 }
