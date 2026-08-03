@@ -15,7 +15,8 @@
     "schemas:generate": "tsx src/scripts/generateWebSocketSchemas.ts",
     "cli:generate": "tsx src/scripts/generateCli.ts",
     "secrets:migrate": "tsx src/scripts/migrateSecretsToEncrypted.ts",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:unit",
+    "test:unit": "tsx tests/unit/runner.ts",
     "test:e2e": "tsx tests/runner.ts"
   },
   "author": "utter.one",
