@@ -207,6 +207,16 @@ export class ConversationTestHarness {
   }
 
   /**
+   * Re-prepare the conversation after stage data has changed.
+   * This reloads stage data from DB into the runner's cache.
+   */
+  async rePrepare(): Promise<this> {
+    if (!this.runner) throw new Error('Runner not initialized. Call setup() first.');
+    await this.runner.prepareConversation(this.conversationId, this.session, this.events);
+    return this;
+  }
+
+  /**
    * Create an additional stage (for multi-stage transition tests).
    */
   async addStage(config: StageConfig): Promise<string> {

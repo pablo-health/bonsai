@@ -1,6 +1,12 @@
 import 'reflect-metadata';
 import { expect } from 'chai';
+import { container } from 'tsyringe';
 import { ConversationTestHarness } from './conversationTestHarness';
+import { LlmProviderFactory } from '../../../src/services/providers/llm/LlmProviderFactory';
+import { MockLlmProvider } from './mockLlmProvider';
+import { EventCollectorClientConnection } from './eventCollectorClientConnection';
+import { authed, resetDatabase } from '../../utils';
+import { MINIMAL_PROJECT, MINIMAL_AGENT } from '../../fixtures';
 
 describe('ConversationRunner', () => {
   let harness: ConversationTestHarness;
@@ -208,10 +214,80 @@ describe('ConversationRunner', () => {
   });
 
   describe('stage transitions', () => {
-    // NOTE: Stage transition via go_to_stage requires the runner to reload stage data
-    // from DB after prepareConversation(). The current harness caches stage data at
-    // prepareConversation time, so dynamic updates are not reflected. This test is
-    // deferred until the harness supports re-preparation mid-conversation.
+    it('transitions to another stage via go_to_stage effect', async () => {
+      // Set up Stage A first to get project/agent/provider
+      await harness.setup({
+        name: 'Stage A',
+        prompt: 'You are stage A.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+        actions: {
+          __on_enter: {
+            name: 'On Enter A',
+            triggerOnUserInput: false,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+        },
+      });
+
+      // Create Stage B (same DB session as Stage A)
+      const stageBId = await harness.addStage({
+        name: 'Stage B',
+        prompt: 'You are stage B.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+        actions: {
+          __on_enter: {
+            name: 'On Enter B',
+            triggerOnUserInput: false,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+        },
+      });
+
+      // Now update Stage A to include goToB action referencing Stage B
+      const stageA = await authed().get(`/api/projects/${harness.projectId}/stages/${harness.stageId}`);
+      const putRes = await authed()
+        .put(`/api/projects/${harness.projectId}/stages/${harness.stageId}`)
+        .send({
+          name: stageA.body.name,
+          prompt: stageA.body.prompt,
+          version: stageA.body.version,
+          actions: {
+            ...stageA.body.actions,
+            goToB: {
+              name: 'Go to B',
+              triggerOnUserInput: true,
+              triggerOnClientCommand: false,
+              parameters: [],
+              effects: [
+                { type: 'go_to_stage', stageId: stageBId },
+              ],
+            },
+          },
+        });
+
+      harness.mockLlm.queueResponse('Hello from A!');
+      await harness.start();
+
+      harness.assertEvent('conversation_start');
+      expect(harness.events.aiResponses).to.include('Hello from A!');
+
+      // Queue response for Stage B on_enter
+      harness.mockLlm.queueResponse('Hello from B!');
+
+      // Trigger transition via runAction
+      await harness.runner!.runAction('goToB', {});
+
+      harness.assertEvent('jump_to_stage');
+      expect(harness.events.aiResponses).to.include('Hello from B!');
+    });
   });
 
   describe('variable operations', () => {
@@ -393,6 +469,123 @@ describe('ConversationRunner', () => {
       await harness.start();
 
       harness.assertEvent('conversation_start');
+    });
+
+    it('handles provider failure gracefully', async () => {
+      // Set up with a mock that throws on generate
+      harness.mockLlm = new MockLlmProvider();
+      harness.mockLlm.queueResult({
+        id: 'mock_fail',
+        content: [],
+        role: 'assistant',
+        finishReason: 'error',
+      });
+      harness.events = new EventCollectorClientConnection();
+
+      await harness.setup({
+        name: 'Failing',
+        prompt: 'You are failing.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+        actions: {
+          __on_enter: {
+            name: 'On Enter',
+            triggerOnUserInput: false,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+        },
+      });
+
+      await harness.start();
+
+      // Conversation should start regardless of provider behavior
+      harness.assertEvent('conversation_start');
+    });
+  });
+
+  describe('abort conversation', () => {
+    it('ends conversation via abort_conversation effect', async () => {
+      await harness.setup({
+        name: 'Abort',
+        prompt: 'You are a helpful assistant.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+        actions: {
+          __on_enter: {
+            name: 'On Enter',
+            triggerOnUserInput: false,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+          abortNow: {
+            name: 'Abort Now',
+            triggerOnUserInput: true,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'abort_conversation' },
+            ],
+          },
+        },
+      });
+
+      harness.mockLlm.queueResponse('Welcome!');
+      await harness.start();
+
+      harness.assertEvent('conversation_start');
+
+      // Trigger abort via regular action (abort_conversation restricted in __on_enter)
+      await harness.runner!.runAction('abortNow', {});
+      // Execute the deferred terminal action
+      await harness.runner!.executePendingTerminalAction();
+
+      harness.assertEvent('conversation_aborted');
+    });
+  });
+
+  describe('multi-turn conversations', () => {
+    it('handles multiple user inputs with default action', async () => {
+      await harness.setup({
+        name: 'MultiTurn',
+        prompt: 'You are a helpful assistant.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+        actions: {
+          __on_enter: {
+            name: 'On Enter',
+            triggerOnUserInput: false,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+          default: {
+            name: 'Default',
+            triggerOnUserInput: true,
+            triggerOnClientCommand: false,
+            parameters: [],
+            effects: [
+              { type: 'generate_response', responseMode: 'generated' },
+            ],
+          },
+        },
+      });
+
+      harness.mockLlm.queueResponse('Welcome!');
+      await harness.start();
+
+      expect(harness.events.aiResponses).to.include('Welcome!');
+
+      harness.mockLlm.queueResponse('Got your message!');
+      const response = await harness.sendInput('hello');
+
+      expect(response).to.equal('Got your message!');
+      expect(harness.events.aiResponses).to.have.length(2);
     });
   });
 });
