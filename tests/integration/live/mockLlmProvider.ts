@@ -147,8 +147,12 @@ export class MockLlmProvider implements ILlmProvider {
     return [{ id: 'mock-model', name: 'Mock Model', contextWindow: 128000 }];
   }
 
+  /** Whether moderation should flag input. */
+  public moderationFlagged = false;
+  public moderationCategories: string[] = [];
+
   async moderateUserInput(_input: string): Promise<{ flagged: boolean; categories: string[] }> {
-    return { flagged: false, categories: [] };
+    return { flagged: this.moderationFlagged, categories: this.moderationCategories };
   }
 
   /** Reset all state for a fresh test. */

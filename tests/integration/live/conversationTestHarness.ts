@@ -83,6 +83,9 @@ export class ConversationTestHarness {
           baseUrl: 'https://mock.openai.com/v1',
         },
       });
+    if (!providerRes.body || !providerRes.body.id) {
+      throw new Error(`Provider creation failed: ${providerRes.status} - ${JSON.stringify(providerRes.body)}`);
+    }
     this._providerId = providerRes.body.id;
 
     // Create stage
@@ -100,6 +103,9 @@ export class ConversationTestHarness {
     const stageRes = await authed()
       .post(`/api/projects/${this.projectId}/stages`)
       .send(stagePayload);
+    if (!stageRes.body || !stageRes.body.id) {
+      throw new Error(`Stage creation failed: ${stageRes.status} - ${JSON.stringify(stageRes.body)}`);
+    }
     this.stageId = stageRes.body.id;
 
     // Create user record (required for conversation FK)
@@ -125,11 +131,14 @@ export class ConversationTestHarness {
     // Override LlmProviderFactory to return our mock
     this.overrideLlmProvider();
 
+    // Build session
+    this.session = this.buildSession();
+
     // Resolve runner
     this.runner = container.resolve(ConversationRunner);
 
-    // Build session
-    this.session = this.buildSession();
+    // Link runner to session (required for UserInputProcessor.processTextInput)
+    this.session.runner = this.runner;
 
     return this;
   }
@@ -172,6 +181,50 @@ export class ConversationTestHarness {
       throw new Error(`Expected AI response '${expected}' but got: ${JSON.stringify(this.events.aiResponses)}`);
     }
     return this;
+  }
+
+  /**
+   * Assert that a conversation event of the given type was NOT emitted.
+   */
+  assertNoEvent(eventType: string): this {
+    const events = this.events.getEventsByType(eventType);
+    if (events.length > 0) {
+      throw new Error(`Expected no event '${eventType}' but found ${events.length}`);
+    }
+    return this;
+  }
+
+  /**
+   * Assert that the conversation has a specific status in the DB.
+   */
+  async assertConversationStatus(expected: string): Promise<this> {
+    const conv = await this.getConversation();
+    if (!conv) throw new Error('Conversation not found');
+    if (conv.status !== expected) {
+      throw new Error(`Expected conversation status '${expected}' but got '${conv.status}'`);
+    }
+    return this;
+  }
+
+  /**
+   * Create an additional stage (for multi-stage transition tests).
+   */
+  async addStage(config: StageConfig): Promise<string> {
+    const stagePayload: any = {
+      name: config.name,
+      prompt: config.prompt,
+      llmProviderId: this._providerId,
+      llmSettings: config.llmSettings,
+      agentId: this.agentId,
+      actions: config.actions || {},
+    };
+    if (config.useKnowledge !== undefined) stagePayload.useKnowledge = config.useKnowledge;
+    if (config.knowledgeTags) stagePayload.knowledgeTags = config.knowledgeTags;
+
+    const stageRes = await authed()
+      .post(`/api/projects/${this.projectId}/stages`)
+      .send(stagePayload);
+    return stageRes.body.id;
   }
 
   /**
