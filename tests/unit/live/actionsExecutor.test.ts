@@ -550,6 +550,167 @@ describe('ActionsExecutor', () => {
       expect(outcome.stagedAttachments[0].artifactId).to.equal('artifact_123');
       expect(outcome.stagedAttachments[0].fileName).to.equal('test.txt');
     });
+
+    it('returns correct outcome for modify_user_input', async () => {
+      deps.templatingEngine = { render: async (tpl: string) => 'modified_input' };
+      executor = new ActionsExecutor(
+        deps.toolService, deps.toolExecutor, deps.contextBuilder, deps.templatingEngine,
+        deps.modifyVariablesExecutor, deps.modifyUserProfileExecutor,
+        deps.userService, deps.storageService,
+      );
+
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      const outcome = await (executor as any).executeActions(
+        [buildAction([{ type: 'modify_user_input', template: 'modified_input' }])], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(outcome.hasModifiedUserInput).to.be.true;
+      expect(context.userInput).to.equal('modified_input');
+    });
+
+    it('returns correct outcome for ban_user', async () => {
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      const outcome = await (executor as any).executeActions(
+        [buildAction([{ type: 'ban_user', reason: 'spam' }])], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(outcome.success).to.be.true;
+      expect(outcome.shouldEndConversation).to.be.false;
+      expect(outcome.shouldAbortConversation).to.be.false;
+    });
+
+    it('returns correct outcome for save_artifact', async () => {
+      // save_artifact requires DB access (queries projects table) — deferred to integration tests
+      // Unit test verifies the effect is accepted and tracked via execution_plan
+      const effects: Effect[] = [
+        { type: 'save_artifact', data: 'test_data', fileName: 'test.txt', variableName: 'aid', mimeType: 'text/plain' },
+      ];
+
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      await (executor as any).executeActions(
+        [buildAction(effects)], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      // execution_plan should include save_artifact
+      expect(events[0].type).to.equal('execution_plan');
+      expect((events[0].data as any).effects).to.have.length(1);
+      expect((events[0].data as any).effects[0].effect.type).to.equal('save_artifact');
+    });
+
+    it('returns correct outcome for call_tool (synchronous)', async () => {
+      deps.toolService = {
+        getToolById: async () => ({ id: 'tool_1', name: 'TestTool', type: 'smart_function', parameters: [] }),
+        getToolTypesByIds: async () => new Map(),
+      };
+      deps.toolExecutor = {
+        executeTool: async () => ({
+          success: true,
+          result: { output: 'tool_result' },
+          renderedPrompt: '',
+          llmUsage: undefined,
+          durationMs: 10,
+          startMs: Date.now(),
+          endMs: Date.now(),
+        }),
+      };
+      executor = new ActionsExecutor(
+        deps.toolService, deps.toolExecutor, deps.contextBuilder, deps.templatingEngine,
+        deps.modifyVariablesExecutor, deps.modifyUserProfileExecutor,
+        deps.userService, deps.storageService,
+      );
+
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      const outcome = await (executor as any).executeActions(
+        [buildAction([{ type: 'call_tool', toolId: 'tool_1', parameters: {} }])], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(outcome.success).to.be.true;
+      expect(context.results.tools).to.have.property('tool_1');
+      expect(context.results.tools['tool_1'].result).to.deep.equal({ output: 'tool_result' });
+    });
+
+    it('returns correct outcome for call_tool (asynchronous)', async () => {
+      deps.toolService = {
+        getToolById: async () => ({ id: 'tool_1', name: 'TestTool', type: 'smart_function', parameters: [] }),
+        getToolTypesByIds: async () => new Map(),
+      };
+      deps.toolExecutor = {
+        executeTool: async () => ({
+          success: true,
+          result: { output: 'async_result' },
+        }),
+      };
+      executor = new ActionsExecutor(
+        deps.toolService, deps.toolExecutor, deps.contextBuilder, deps.templatingEngine,
+        deps.modifyVariablesExecutor, deps.modifyUserProfileExecutor,
+        deps.userService, deps.storageService,
+      );
+
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      const outcome = await (executor as any).executeActions(
+        [buildAction([{ type: 'call_tool', toolId: 'tool_1', parameters: {}, asynchronous: true }])], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(outcome.success).to.be.true;
+      // Async tool dispatches immediately without blocking — result not stored synchronously
+      // execution_plan event should be emitted
+      expect(events[0].type).to.equal('execution_plan');
+    });
+  });
+
+  describe('go_to_stage source tracking', () => {
+    it('tracks goToStageSourceAction for go_to_stage effect', async () => {
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      const outcome = await (executor as any).executeActions(
+        [buildAction([{ type: 'go_to_stage', stageId: 'next_stage' }])], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(outcome.goToStageSourceAction).to.equal('TestAction');
+    });
+  });
+
+  describe('multiple actions', () => {
+    it('executes effects from multiple actions', async () => {
+      const executedTypes: string[] = [];
+
+      const originalExecuteEffect = (executor as any).executeEffect.bind(executor);
+      (executor as any).executeEffect = async (effect: Effect, ctx: ConversationContext, actionName: string, emitEvent: any) => {
+        executedTypes.push(effect.type);
+        return originalExecuteEffect(effect, ctx, actionName, emitEvent);
+      };
+
+      const context = buildContext();
+      const events: Array<{ type: ConversationEventType, data: ConversationEventData }> = [];
+
+      await (executor as any).executeActions(
+        [
+          buildAction([{ type: 'modify_variables', modifications: [{ variableName: 'x', operation: 'set', value: 1 }] }]),
+          buildAction([{ type: 'generate_response', responseMode: 'generated' }]),
+        ], context, 'stage_test', null,
+        async (type: ConversationEventType, data: ConversationEventData) => events.push({ type, data }),
+      );
+
+      expect(executedTypes).to.include('modify_variables');
+      expect(executedTypes).to.include('generate_response');
+    });
   });
 
   describe('error handling', () => {

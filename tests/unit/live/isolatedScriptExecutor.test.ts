@@ -458,6 +458,29 @@ describe('IsolatedScriptExecutor', () => {
 
       expect(result.value).to.equal('undefined');
     });
+
+    it('times out on long-running scripts', async () => {
+      const context = buildContext();
+      const result = await executor.executeScript(`
+        while (true) {}
+      `, context);
+
+      // Script should time out and return undefined
+      expect(result.value).to.be.undefined;
+      expect(result.hasModifiedVars).to.be.false;
+    });
+
+    it('does not crash on memory-heavy scripts', async () => {
+      const context = buildContext();
+      const result = await executor.executeScript(`
+        var arr = [];
+        for (var i = 0; i < 1000000; i++) { arr.push(i); }
+        arr.length;
+      `, context);
+
+      // Should either succeed or fail gracefully without crashing
+      expect(result.value).to.be.oneOf([1000000, undefined]);
+    });
   });
 
   describe('tool parameters', () => {
@@ -473,6 +496,55 @@ describe('IsolatedScriptExecutor', () => {
       const result = await executor.executeScript('typeof params', context);
 
       expect(result.value).to.equal('undefined');
+    });
+  });
+
+  describe('conditional visibility evaluation', () => {
+    it('evaluates simple boolean conditions', async () => {
+      const context = buildContext();
+      const result = await executor.executeScript('true', context);
+
+      expect(result.value).to.be.true;
+    });
+
+    it('evaluates conditions with vars', async () => {
+      const context = buildContext({ vars: { count: 5 } });
+      const result = await executor.executeScript('vars.count > 3', context);
+
+      expect(result.value).to.be.true;
+    });
+
+    it('evaluates conditions with history', async () => {
+      const context = buildContext({
+        history: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'hi' },
+        ],
+      });
+      const result = await executor.executeScript('history.length >= 2', context);
+
+      expect(result.value).to.be.true;
+    });
+
+    it('evaluates conditions with stageVars', async () => {
+      const context = buildContext({ stageVars: { stage_test: { visited: true } } });
+      const result = await executor.executeScript('stageVars.stage_test.visited === true', context);
+
+      expect(result.value).to.be.true;
+    });
+
+    it('evaluates conditions with channel', async () => {
+      const context = buildContext({ channel: 'telegram' as any });
+      const result = await executor.executeScript('channel === "telegram"', context);
+
+      expect(result.value).to.be.true;
+    });
+
+    it('evaluates complex conditions', async () => {
+      const context = buildContext({ vars: { count: 5 }, channel: 'websocket' as any });
+      const result = await executor.executeScript('vars.count > 3 && channel === "websocket"', context);
+
+      expect(result.value).to.be.true;
     });
   });
 });
