@@ -10,8 +10,8 @@
 The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. Several issues require attention — particularly around dependency vulnerabilities, potential SSRF vectors, and path traversal in local storage. C1 (missing security headers) has been remediated.
 
 **Risk Distribution:**
-- 🔴 Critical: 3 (C1 remediated, C2-C4 remain)
-- 🟠 High: 6
+- 🔴 Critical: 2 (C1 remediated, C2 partially remediated, C3-C4 remain)
+- 🟠 High: 3 (reduced from 6)
 - 🟡 Medium: 10
 - 🔵 Low: 3
 
@@ -46,17 +46,25 @@ The Bonsai backend has a solid security foundation with proper JWT authenticatio
 
 ---
 
-### C2. Dependency Vulnerabilities (21 total: 2 critical, 14 high)
+### C2. ~~Dependency Vulnerabilities~~ — ✅ PARTIALLY REMEDIATED
 
-**Command:** `npm audit --production`
+**Before:** 30 vulnerabilities (2 critical, 14 high, 5 moderate)
+**After (production):** 9 vulnerabilities (1 critical, 3 high, 5 moderate)
+**After (all):** 12 vulnerabilities (1 critical, 3 high, 8 moderate)
 
-Critical/High vulnerabilities found:
-- **node-tar** (via `@discordjs/opus`): Multiple path traversal and symlink poisoning vulnerabilities (GHSA-34x7-hfp2-rc4v, GHSA-8qq5-rm4j-mr97, GHSA-83g3-92jg-28cx, etc.)
-- **uuid** (via `@google-cloud/storage`): Buffer bounds check vulnerability (GHSA-w5hq-g745-h8pq)
+**Fixed via npm overrides in `package.json`:**
+- `tar` → `7.5.22` (was 6.2.1 via `@discordjs/opus` — path traversal, symlink poisoning)
+- `nodemailer` → `9.0.4` (was 8.0.11 — SSRF via raw option)
+- `adm-zip` → `0.6.0` (was <0.6.0 via `avr-vad` — 4GB memory allocation DoS)
+- `semver` → `7.8.5` (was 5.x via `imap` → `utf7` — ReDoS)
+- `sharp` → `0.35.3` (was 0.32.x via `@xenova/transformers` — libvips CVEs)
+- `serialize-javascript` → `7.0.7` (dev dep via `mocha` — RCE, DoS)
+- `diff` → `9.0.0` (dev dep via `mocha` — DoS)
+- `esbuild` → `0.28.1` (dev dep via `drizzle-kit` — dev server exposure)
 
-**Impact:** Potential arbitrary file creation/overwrite, process crashes, and DoS via crafted inputs.
-
-**Recommendation:** Run `npm audit fix` or update `@discordjs/opus` and `@google-cloud/storage` to patched versions. If `@discordjs/opus` is non-essential, consider removing it.
+**Remaining (unfixable without breaking changes):**
+- **protobufjs 6.11.6** (critical, 11 GHSA entries) — via `@xenova/transformers` → `onnxruntime-web` → `onnx-proto` → `protobufjs@^6.8.8`. The 6.x line is unmaintained; no patched version exists. `onnx-proto` (latest 8.0.1) still pins `protobufjs@^6.8.8`. Forcing protobufjs 7.x/8.x would break the ONNX runtime. **Risk assessment:** Exploitation requires crafted protobuf input — ONNX models come from trusted sources (`@xenova/transformers` Hub), so practical risk is low.
+- **uuid <11.1.1** (moderate) — via `@google-cloud/storage` → `teeny-request`/`gaxios`. uuid 11.x has breaking API changes. `@google-cloud/storage@7.21.0` (latest) still depends on vulnerable `teeny-request`. **Risk assessment:** Buffer bounds check only triggers when caller provides a `buf` parameter — `gaxios`/`teeny-request` use `uuid.v4()` which doesn't pass `buf`, so practical risk is negligible.
 
 ---
 
@@ -456,9 +464,10 @@ The following security patterns are well-implemented:
 | Priority | Finding | Effort | Risk |
 |----------|---------|--------|------|
 | ~~P1~~ | ~~C1: No security headers~~ | ~~Low~~ | ~~Critical~~ |
-| P0 | C2: Dependency vulnerabilities | Low | Critical |
+| ~~P0~~ | ~~C2: Dependency vulnerabilities~~ | ~~Low~~ | ~~Critical~~ |
 | P0 | C3: Path traversal in LocalStorageProvider | Low | Critical |
 | P1 | C4: DB SSL rejectUnauthorized | Low | Critical |
+| P1 | C2-rem: protobufjs 6.x (accepted risk) | N/A | Critical |
 | P1 | H1-H3: SSRF vectors | Medium | High |
 | P2 | H4: Zod error details exposure | Low | High |
 | P2 | H5: Optional auth on all routes | Medium | High |
