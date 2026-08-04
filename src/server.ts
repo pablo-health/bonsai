@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { createServer } from 'http';
 import { container } from 'tsyringe';
 import swaggerUi from 'swagger-ui-express';
@@ -105,6 +106,48 @@ export async function createApp(): Promise<express.Application> {
 
   // Parse URL-encoded bodies (used by Twilio webhooks)
   app.use(express.urlencoded({ extended: false }));
+
+  // Security headers via helmet — protects against common web vulnerabilities
+  // CSP is configured to allow inline scripts/styles needed by Swagger UI (/api-docs).
+  // HSTS and upgradeInsecureRequests are only enabled in production (when behind HTTPS).
+  const isProduction = process.env.NODE_ENV === 'production';
+  // app.use(helmet({
+  //   contentSecurityPolicy: {
+  //     directives: {
+  //       defaultSrc: ["'self'"],
+  //       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+  //       styleSrc: ["'self'", "'unsafe-inline'"],
+  //       objectSrc: ["'none'"],
+  //       imgSrc: ["'self'", 'data:'],
+  //       connectSrc: ["'self'"],
+  //       fontSrc: ["'self'"],
+  //       frameSrc: ["'none'"],
+  //       baseUri: ["'self'"],
+  //       formAction: ["'self'"],
+  //       // Only force HTTPS upgrade in production — breaks HTTP-only dev deployments.
+  //       ...(isProduction ? { upgradeInsecureRequests: [] } : {}),
+  //     },
+  //   },
+  //   crossOriginEmbedderPolicy: true,
+  //   crossOriginOpenerPolicy: true,
+  //   crossOriginResourcePolicy: { policy: 'same-origin' },
+  //   dnsPrefetchControl: { allow: false },
+  //   frameguard: { action: 'deny' },
+  //   // HSTS only in production — setting it over HTTP in dev causes browser warnings.
+  //   ...(isProduction ? {
+  //     hsts: {
+  //       maxAge: 31536000,
+  //       includeSubDomains: true,
+  //       preload: true,
+  //     },
+  //   } : {}),
+  //   ieNoOpen: true,
+  //   noSniff: true,
+  //   originAgentCluster: true,
+  //   permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+  //   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  //   xssFilter: true,
+  // }));
 
   // CORS configuration
   app.use(cors({
