@@ -17,6 +17,7 @@ import { openAiTtsProviderConfigSchema } from '../../services/providers/tts/Open
 import { deepgramTtsProviderConfigSchema } from '../../services/providers/tts/DeepgramTtsProvider';
 import { cartesiaTtsProviderConfigSchema } from '../../services/providers/tts/CartesiaTtsProvider';
 import { azureTtsProviderConfigSchema } from '../../services/providers/tts/AzureTtsProvider';
+import { sonioxTtsProviderConfigSchema } from '../../services/providers/tts/SonioxTtsProvider';
 import { azureAsrProviderConfigSchema } from '../../services/providers/asr/AzureAsrProvider';
 import { elevenLabsAsrProviderConfigSchema } from '../../services/providers/asr/ElevenLabsAsrProvider';
 import { deepgramAsrProviderConfigSchema } from '../../services/providers/asr/DeepgramAsrProvider';
@@ -61,6 +62,7 @@ export const ttsProviderConfigSchema = z.union([
   deepgramTtsProviderConfigSchema,
   cartesiaTtsProviderConfigSchema,
   azureTtsProviderConfigSchema,
+  sonioxTtsProviderConfigSchema,
 ]).describe('TTS provider configuration');
 
 /**
