@@ -10,7 +10,7 @@
 The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. Several issues require attention — particularly around dependency vulnerabilities, potential SSRF vectors, and path traversal in local storage. C1 (missing security headers) has been remediated.
 
 **Risk Distribution:**
-- 🔴 Critical: 2 (C1 remediated, C2 partially remediated, C3-C4 remain)
+- 🔴 Critical: 0 (all remediated, except accepted protobufjs 6.x risk)
 - 🟠 High: 3 (reduced from 6)
 - 🟡 Medium: 10
 - 🔵 Low: 3
@@ -68,27 +68,14 @@ The Bonsai backend has a solid security foundation with proper JWT authenticatio
 
 ---
 
-### C3. Path Traversal in LocalStorageProvider
+### C3. ~~Path Traversal in LocalStorageProvider~~ — ✅ REMEDIATED
 
-**File:** `src/services/providers/storage/LocalStorageProvider.ts:203`
+**File:** `src/services/providers/storage/LocalStorageProvider.ts`
 
+**Status:** Fixed — `getFullPath()` now resolves the path and validates it stays under `basePath`.
+
+**Fix applied:**
 ```ts
-private getFullPath(key: string): string {
-  const base = this.config!.basePath;
-  const sub = this.settings.subPath || '';
-  return path.join(base, sub, key);
-}
-```
-
-The `key` parameter is not sanitized against `..` sequences. A key like `../../../etc/passwd` could escape the intended storage directory.
-
-**Impact:** Arbitrary file read/write outside the intended storage directory.
-
-**Recommendation:** Sanitize the key parameter:
-
-```ts
-import { relative, isAbsolute } from 'path';
-
 private getFullPath(key: string): string {
   const base = this.config!.basePath;
   const sub = this.settings.subPath || '';
@@ -96,36 +83,52 @@ private getFullPath(key: string): string {
   const resolved = path.resolve(fullPath);
   const baseResolved = path.resolve(base);
 
-  if (!resolved.startsWith(baseResolved)) {
-    throw new InvalidOperationError(`Storage key "${key}" escapes base directory`);
+  if (!resolved.startsWith(baseResolved + path.sep) && resolved !== baseResolved) {
+    throw new InvalidOperationError(
+      `Storage key "${key}" escapes base directory "${baseResolved}"`,
+    );
   }
   return resolved;
 }
 ```
 
+**Note:** Uses `path.sep` after `baseResolved` to prevent prefix attacks (e.g., base `/data` matching `/data-malicious`).
+
 ---
 
-### C4. Database SSL with `rejectUnauthorized: false`
+### C4. ~~Database SSL with `rejectUnauthorized: false`~~ — ✅ REMEDIATED
 
-**File:** `src/db/index.ts:22`
+**File:** `src/db/index.ts`
 
+**Status:** Fixed — SSL verification is now conditional based on connection target.
+
+**Fix applied:**
 ```ts
-ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+function buildSslConfig(connStr: string | undefined) {
+  if (process.env.DB_SSL !== 'true') return false;
+
+  // If CA cert is provided, always enforce strict verification
+  if (process.env.DB_SSL_CA) {
+    return { ca: Buffer.from(process.env.DB_SSL_CA, 'base64'), rejectUnauthorized: true };
+  }
+
+  // Localhost connections have no MITM risk — self-signed certs are fine
+  if (connStr && isLocalhost(connStr)) {
+    return { rejectUnauthorized: false };
+  }
+
+  // Remote connections must verify certs
+  return { rejectUnauthorized: true };
+}
 ```
 
-When `DB_SSL=true`, the connection uses TLS but **does not verify the server certificate**. This is vulnerable to MITM attacks.
+**Behavior:**
+- **Localhost** (`localhost`, `127.0.0.1`, `::1`): `rejectUnauthorized: false` — no MITM risk on loopback
+- **Remote with `DB_SSL_CA`**: strict verification with provided CA cert
+- **Remote without `DB_SSL_CA`**: `rejectUnauthorized: true` — will fail if cert is invalid
+- **`DB_SSL=false`**: no SSL (unchanged)
 
-**Impact:** An attacker on the network path could intercept or modify database traffic.
-
-**Recommendation:** In production, set `rejectUnauthorized: true` and provide a CA certificate:
-
-```ts
-ssl: process.env.DB_SSL === 'true'
-  ? process.env.DB_SSL_CA
-    ? { ca: Buffer.from(process.env.DB_SSL_CA, 'base64'), rejectUnauthorized: true }
-    : { rejectUnauthorized: true }
-  : false,
-```
+**New env var:** `DB_SSL_CA` — optional base64-encoded CA certificate for remote DB verification
 
 ---
 
@@ -465,8 +468,8 @@ The following security patterns are well-implemented:
 |----------|---------|--------|------|
 | ~~P1~~ | ~~C1: No security headers~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P0~~ | ~~C2: Dependency vulnerabilities~~ | ~~Low~~ | ~~Critical~~ |
-| P0 | C3: Path traversal in LocalStorageProvider | Low | Critical |
-| P1 | C4: DB SSL rejectUnauthorized | Low | Critical |
+| ~~P0~~ | ~~C3: Path traversal in LocalStorageProvider~~ | ~~Low~~ | ~~Critical~~ |
+| ~~P1~~ | ~~C4: DB SSL rejectUnauthorized~~ | ~~Low~~ | ~~Critical~~ |
 | P1 | C2-rem: protobufjs 6.x (accepted risk) | N/A | Critical |
 | P1 | H1-H3: SSRF vectors | Medium | High |
 | P2 | H4: Zod error details exposure | Low | High |

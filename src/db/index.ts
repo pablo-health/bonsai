@@ -12,6 +12,37 @@ type DbType = NodePgDatabase<typeof schema>;
 let _pool: Pool | null = null;
 let _db: DbType | null = null;
 
+function isLocalhost(connStr: string): boolean {
+  // Match localhost, 127.0.0.1, or ::1 in the connection string
+  return /postgresql:\/\/(?:[^@]+@)?(?:localhost|127\.0\.0\.1|\[::1\])/.test(connStr);
+}
+
+function buildSslConfig(connStr: string | undefined): boolean | { ca?: Buffer; rejectUnauthorized: boolean } {
+  if (process.env.DB_SSL !== 'true') return false;
+
+  // If CA cert is provided, always enforce strict verification
+  if (process.env.DB_SSL_CA) {
+    return {
+      ca: Buffer.from(process.env.DB_SSL_CA, 'base64'),
+      rejectUnauthorized: true,
+    };
+  }
+
+  // Localhost connections have no MITM risk — self-signed certs are fine
+  if (connStr && isLocalhost(connStr)) {
+    return { rejectUnauthorized: false };
+  }
+
+  // Remote connections must verify certs
+  if (process.env.NODE_ENV === 'production') {
+    logger.warn(
+      'DB_SSL=true for remote host without DB_SSL_CA. ' +
+      'For production, set DB_SSL_CA to the base64-encoded CA certificate.',
+    );
+  }
+  return { rejectUnauthorized: true };
+}
+
 function createPool(): Pool {
   const connStr = process.env.DB_CONNECTION_STRING;
   // SAFETY GATE: in test mode, refuse to connect to the default PostgreSQL port (5432).
@@ -26,10 +57,11 @@ function createPool(): Pool {
       );
     }
   }
+  const sslConfig = buildSslConfig(connStr);
   const pool = new Pool({
     connectionString: connStr,
     max: parseInt(process.env.DB_POOL_SIZE || '10'),
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    ssl: sslConfig,
   });
 
   // Enforce UTC on every connection so that:
