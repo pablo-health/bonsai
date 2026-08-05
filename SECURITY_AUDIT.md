@@ -7,11 +7,11 @@
 
 ## Executive Summary
 
-The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. Several issues require attention — particularly around dependency vulnerabilities, potential SSRF vectors, and path traversal in local storage. C1 (missing security headers) has been remediated.
+The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. All critical findings have been remediated. SSRF vectors (H1-H3) are accepted by design — outbound fetch calls need to reach internal services. Remaining high findings (H4-H6) are low-effort fixes.
 
 **Risk Distribution:**
 - 🔴 Critical: 0 (all remediated, except accepted protobufjs 6.x risk)
-- 🟠 High: 3 (reduced from 6)
+- 🟠 High: 3 (H1-H3 accepted by design, H4-H6 remain)
 - 🟡 Medium: 10
 - 🔵 Low: 3
 
@@ -134,52 +134,21 @@ function buildSslConfig(connStr: string | undefined) {
 
 ## 🟠 High Findings
 
-### H1. SSRF via Webhook Tool URLs
+### H1-H3. SSRF via outbound fetch calls — ✅ ACCEPTED (BY DESIGN)
 
-**File:** `src/services/live/ToolExecutor.ts:162`
+**Files:** `src/services/live/ToolExecutor.ts`, `src/services/MigrationService.ts`, `src/services/OAuth2TokenRefreshService.ts`
 
-Webhook tools execute `fetch()` against user-provided URLs with only `http:`/`https:` protocol validation. No IP range blocking, no loopback detection, no DNS rebinding protection.
+**Status:** Accepted risk — SSRF protection is intentionally not enforced.
 
-**Impact:** An attacker with access to create/edit webhook tools can make the server fetch internal resources (metadata endpoints, internal APIs, etc.).
+**Rationale:**
+- Webhook tools, migration, and OAuth2 token refresh all need to reach internal services, other instances on the same network, and internal OAuth providers
+- A blanket blocklist of private IPs would break legitimate use cases
+- Migration (H2) and OAuth2 token refresh (H3) are admin-only — privilege boundary is sufficient control
+- Cloud metadata SSRF can be mitigated at the infrastructure level (disable metadata endpoints, use IMDSv2)
 
-**Recommendation:** Implement an allowlist or blocklist for webhook URLs:
-- Block private IP ranges (`10.x`, `172.16-31.x`, `192.168.x`, `127.x`, `169.254.x`)
-- Block DNS resolution to internal IPs
-- Consider using a proxy with egress filtering
-
----
-
-### H2. SSRF via Migration Service
-
-**File:** `src/services/MigrationService.ts:799`
-
-The MigrationService fetches from user-provided environment URLs. While HTTPS is enforced, there's no IP range validation.
-
-```ts
-if (!env.url.startsWith('https://')) {
-  throw new InvalidOperationError('Remote environment URL must use HTTPS...');
-}
-```
-
-**Impact:** An attacker can use the migration service to probe internal HTTPS services or perform DNS rebinding attacks.
-
-**Recommendation:** Add IP range validation on resolved URLs, similar to H1.
-
----
-
-### H3. SSRF via OAuth2 Token URL
-
-**File:** `src/services/OAuth2TokenRefreshService.ts:158`
-
-```ts
-const response = await fetch(oauth2.tokenUrl, { ... });
-```
-
-The `tokenUrl` is user-provided (configured per provider) and fetched without IP validation.
-
-**Impact:** Same as H1 — internal network access via OAuth2 token refresh.
-
-**Recommendation:** Validate resolved IP against an allowlist/blocklist.
+**If tighter control is needed:**
+- Infrastructure-level: disable cloud metadata endpoints, use egress filtering
+- Application-level: configurable allowlist/blocklist per endpoint, or `SSRF_ALLOW_PRIVATE` env var
 
 ---
 
@@ -470,8 +439,8 @@ The following security patterns are well-implemented:
 | ~~P0~~ | ~~C2: Dependency vulnerabilities~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P0~~ | ~~C3: Path traversal in LocalStorageProvider~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P1~~ | ~~C4: DB SSL rejectUnauthorized~~ | ~~Low~~ | ~~Critical~~ |
+| ~~P1~~ | ~~H1-H3: SSRF vectors~~ | ~~Medium~~ | ~~High~~ |
 | P1 | C2-rem: protobufjs 6.x (accepted risk) | N/A | Critical |
-| P1 | H1-H3: SSRF vectors | Medium | High |
 | P2 | H4: Zod error details exposure | Low | High |
 | P2 | H5: Optional auth on all routes | Medium | High |
 | P2 | H6: Swagger UI exposure | Low | High |
