@@ -7,11 +7,11 @@
 
 ## Executive Summary
 
-The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. All critical findings have been remediated. H1-H4 are accepted by design. H5-H6 remain as low-effort hygiene fixes.
+The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. All critical findings have been remediated. All high findings are accepted by design.
 
 **Risk Distribution:**
 - 🔴 Critical: 0 (all remediated, except accepted protobufjs 6.x risk)
-- 🟠 High: 2 (H1-H4 accepted, H5-H6 remain)
+- 🟠 High: 0 (all accepted)
 - 🟡 Medium: 10
 - 🔵 Low: 3
 
@@ -162,39 +162,25 @@ function buildSslConfig(connStr: string | undefined) {
 
 ---
 
-### H5. Optional Auth Middleware on All Routes
+### H5. Optional Auth Middleware on All Routes — ✅ ACCEPTED
 
 **File:** `src/server.ts:150`
 
-```ts
-app.use(optionalAuthMiddleware);
-```
+**Status:** Accepted — defense-in-depth pattern is already in place.
 
-`optionalAuthMiddleware` is applied globally. Routes that don't explicitly call `checkPermissions()` are accessible without authentication. If a controller forgets to add permission checks, the route is silently public.
+**Rationale:** All controllers consistently use both `checkPermissions()` (controller layer) and `requirePermission()` (service layer). The risk is human error during future development — not a vulnerability in the current code. Adding a default-deny middleware would be an architectural change with marginal benefit over the existing pattern.
 
-**Impact:** Accidental exposure of protected endpoints if permission checks are missing.
-
-**Recommendation:** Consider a default-deny approach with explicit `@public` decorators on routes that should be unauthenticated. Alternatively, add a middleware that logs when `req.user` is undefined for non-public routes.
+**Mitigation:** Code review discipline — every new endpoint needs `checkPermissions` + `requirePermission`.
 
 ---
 
-### H6. Swagger UI and OpenAPI Spec Publicly Accessible
+### H6. Swagger UI and OpenAPI Spec Publicly Accessible — ✅ ACCEPTED
 
 **File:** `src/server.ts:132-145`
 
-```ts
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, { ... }));
-app.get('/openapi.json', (req, res) => { ... });
-```
+**Status:** Accepted — API documentation is intentionally public.
 
-Full API documentation including all endpoints, request/response schemas, and authentication details is publicly accessible without any authentication.
-
-**Impact:** Attackers get a complete map of the API surface, including internal endpoints, parameter structures, and business logic details.
-
-**Recommendation:** Either:
-- Protect Swagger UI with authentication in production
-- Remove Swagger UI and OpenAPI endpoints from production builds
-- Add a note in documentation about this risk
+**Rationale:** Swagger/OpenAPI endpoints are standard developer tools. The schemas they expose are the same as the Zod contracts already visible in Zod validation errors. No sensitive data is exposed. If tighter control is needed, these endpoints can be disabled in production builds.
 
 ---
 
@@ -424,9 +410,9 @@ The following security patterns are well-implemented:
 | ~~P1~~ | ~~C4: DB SSL rejectUnauthorized~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P1~~ | ~~H1-H3: SSRF vectors~~ | ~~Medium~~ | ~~High~~ |
 | ~~P2~~ | ~~H4: Zod error details~~ | ~~Low~~ | ~~High~~ |
+| ~~P2~~ | ~~H5: Optional auth~~ | ~~Medium~~ | ~~High~~ |
+| ~~P2~~ | ~~H6: Swagger UI exposure~~ | ~~Low~~ | ~~High~~ |
 | P1 | C2-rem: protobufjs 6.x (accepted risk) | N/A | Critical |
-| P2 | H5: Optional auth on all routes | Medium | High |
-| P2 | H6: Swagger UI exposure | Low | High |
 | P3 | M1-M10: Medium findings | Varies | Medium |
 | P4 | L1-L3: Low findings | Low | Low |
 
