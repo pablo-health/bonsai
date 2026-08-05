@@ -7,11 +7,11 @@
 
 ## Executive Summary
 
-The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. All critical findings have been remediated. SSRF vectors (H1-H3) are accepted by design — outbound fetch calls need to reach internal services. Remaining high findings (H4-H6) are low-effort fixes.
+The Bonsai backend has a solid security foundation with proper JWT authentication, RBAC permissions, Zod input validation, isolated-VM script execution, and AES-256-GCM secret encryption. All critical findings have been remediated. H1-H4 are accepted by design. H5-H6 remain as low-effort hygiene fixes.
 
 **Risk Distribution:**
 - 🔴 Critical: 0 (all remediated, except accepted protobufjs 6.x risk)
-- 🟠 High: 3 (H1-H3 accepted by design, H4-H6 remain)
+- 🟠 High: 2 (H1-H4 accepted, H5-H6 remain)
 - 🟡 Medium: 10
 - 🔵 Low: 3
 
@@ -152,30 +152,13 @@ function buildSslConfig(connStr: string | undefined) {
 
 ---
 
-### H4. Zod Validation Error Details Exposed
+### H4. Zod Validation Error Details Exposed — ✅ ACCEPTED
 
 **File:** `src/http/middleware/errorHandler.ts:12`
 
-```ts
-if (err instanceof z.ZodError) {
-  res.status(400).json({ error: 'Validation failed', details: err.issues });
-}
-```
+**Status:** Accepted — Zod errors echo back the same schema already exposed via OpenAPI/Swagger.
 
-Full Zod validation issues are returned to the client, including field paths, codes, and expected values. This reveals internal schema structure.
-
-**Impact:** Information disclosure — attackers can enumerate valid field names, types, and expected formats.
-
-**Recommendation:** Strip detailed validation issues in production:
-
-```ts
-if (err instanceof z.ZodError) {
-  const details = process.env.NODE_ENV === 'production'
-    ? [{ message: 'Invalid request body', path: [] }]
-    : err.issues;
-  res.status(400).json({ error: 'Validation failed', details });
-}
-```
+**Rationale:** The Zod schema IS the OpenAPI spec (generated from the same source). Validation errors don't reveal anything beyond `/openapi.json` and `/api-docs`. Returning detailed errors is also useful for API consumers debugging integration issues.
 
 ---
 
@@ -440,8 +423,8 @@ The following security patterns are well-implemented:
 | ~~P0~~ | ~~C3: Path traversal in LocalStorageProvider~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P1~~ | ~~C4: DB SSL rejectUnauthorized~~ | ~~Low~~ | ~~Critical~~ |
 | ~~P1~~ | ~~H1-H3: SSRF vectors~~ | ~~Medium~~ | ~~High~~ |
+| ~~P2~~ | ~~H4: Zod error details~~ | ~~Low~~ | ~~High~~ |
 | P1 | C2-rem: protobufjs 6.x (accepted risk) | N/A | Critical |
-| P2 | H4: Zod error details exposure | Low | High |
 | P2 | H5: Optional auth on all routes | Medium | High |
 | P2 | H6: Swagger UI exposure | Low | High |
 | P3 | M1-M10: Medium findings | Varies | Medium |
