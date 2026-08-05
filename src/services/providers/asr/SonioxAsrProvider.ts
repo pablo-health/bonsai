@@ -143,12 +143,10 @@ export class SonioxAsrProvider extends AsrProviderBase<SonioxAsrProviderConfig> 
     });
 
     this.session.on('token', (token: RealtimeToken) => {
-      logger.info(`KEK1: ${JSON.stringify(token)}`);
       this.accumulateFinalToken(token);
     });
 
     this.session.on('result', (result: RealtimeResult) => {
-      logger.info(`KEK1: ${JSON.stringify(result)}`);
       this.handleResult(result);
     });
 
