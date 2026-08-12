@@ -281,25 +281,30 @@ class ImapMailboxSession {
       // This prevents duplicate processing on the next IMAP poll cycle when
       // processing deferral is active (the email would otherwise stay in the
       // inbox until the AI response is sent, getting re-queued every 30s).
-      this.moveMessage(imap, uid, this.processedFolder);
+      await this.moveMessage(imap, uid, this.processedFolder);
 
     } catch (error) {
       logger.error({ error, uid, providerId: this.providerId }, 'Failed to process email');
     }
   }
 
-  private moveMessage(imap: ImapConnection, uid: number, folder: string): void {
-    try {
-      (imap as any).move([uid], folder, (err: Error | null) => {
-        if (err) {
-          logger.error({ error: err, uid, folder, providerId: this.providerId }, 'Failed to move message to processed folder');
-          return;
-        }
-        logger.info({ uid, folder, providerId: this.providerId }, 'Message moved to processed folder');
-      });
-    } catch (error) {
-      logger.error({ error, uid, folder, providerId: this.providerId }, 'Exception during message move');
-    }
+  private moveMessage(imap: ImapConnection, uid: number, folder: string): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        (imap as any).move([uid], folder, (err: Error | null) => {
+          if (err) {
+            logger.error({ error: err, uid, folder, providerId: this.providerId }, 'Failed to move message to processed folder');
+            resolve();
+            return;
+          }
+          logger.info({ uid, folder, providerId: this.providerId }, 'Message moved to processed folder');
+          resolve();
+        });
+      } catch (error) {
+        logger.error({ error, uid, folder, providerId: this.providerId }, 'Exception during message move');
+        resolve();
+      }
+    });
   }
 
   private async ensureProcessedFolder(imap: ImapConnection): Promise<void> {
