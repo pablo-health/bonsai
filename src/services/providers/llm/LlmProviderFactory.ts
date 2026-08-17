@@ -18,12 +18,13 @@ import { XAILlmProvider, XAILlmProviderConfig, xAILlmProviderConfigSchema, XAILl
 import { OllamaLlmProvider, OllamaLlmProviderConfig, ollamaLlmProviderConfigSchema, OllamaLlmSettings } from './OllamaLlmProvider';
 import { OVHLlmProvider, OVHLlmProviderConfig, ovhLlmProviderConfigSchema, OVHLlmSettings } from './OVHLlmProvider';
 import { ScalewayLlmProvider, ScalewayLlmProviderConfig, scalewayLlmProviderConfigSchema, ScalewayLlmSettings } from './ScalewayLlmProvider';
+import { BedrockLlmProvider, BedrockLlmProviderConfig, bedrockLlmProviderConfigSchema, BedrockLlmSettings } from './BedrockLlmProvider';
 import { SecretRefUtils } from '../../secrets/SecretRefUtils';
 
 /**
  * Supported LLM provider API types
  */
-export type LlmProviderApiType = 'openai' | 'openai-legacy' | 'anthropic' | 'gemini' | 'groq' | 'mistral' | 'deepseek' | 'openrouter' | 'together-ai' | 'fireworks-ai' | 'perplexity' | 'cohere' | 'xai' | 'ollama' | 'ovh' | 'scaleway';
+export type LlmProviderApiType = 'openai' | 'openai-legacy' | 'anthropic' | 'gemini' | 'groq' | 'mistral' | 'deepseek' | 'openrouter' | 'together-ai' | 'fireworks-ai' | 'perplexity' | 'cohere' | 'xai' | 'ollama' | 'ovh' | 'scaleway' | 'bedrock';
 
 /**
  * Union type for all LLM provider settings
@@ -144,8 +145,11 @@ export class LlmProviderFactory {
       case 'scaleway':
         return new ScalewayLlmProvider(scalewayLlmProviderConfigSchema.parse(provider.config), settings as ScalewayLlmSettings);
 
+      case 'bedrock':
+        return new BedrockLlmProvider(bedrockLlmProviderConfigSchema.parse(provider.config), settings as BedrockLlmSettings);
+
       default: {
-        const errorMessage = `Unsupported LLM provider API type: ${provider.apiType}. Supported types: openai, openai-legacy, anthropic, gemini, groq, mistral, deepseek, openrouter, together-ai, fireworks-ai, perplexity, cohere, xai, ollama, ovh, scaleway`;
+        const errorMessage = `Unsupported LLM provider API type: ${provider.apiType}. Supported types: openai, openai-legacy, anthropic, gemini, groq, mistral, deepseek, openrouter, together-ai, fireworks-ai, perplexity, cohere, xai, ollama, ovh, scaleway, bedrock`;
         logger.error(errorMessage);
         throw new Error(errorMessage);
       }
@@ -162,7 +166,7 @@ export class LlmProviderFactory {
       return false;
     }
 
-    const supportedApiTypes: LlmProviderApiType[] = ['openai', 'openai-legacy', 'anthropic', 'gemini', 'groq', 'mistral', 'deepseek', 'openrouter', 'together-ai', 'fireworks-ai', 'perplexity', 'cohere', 'xai', 'ollama', 'ovh', 'scaleway'];
+    const supportedApiTypes: LlmProviderApiType[] = ['openai', 'openai-legacy', 'anthropic', 'gemini', 'groq', 'mistral', 'deepseek', 'openrouter', 'together-ai', 'fireworks-ai', 'perplexity', 'cohere', 'xai', 'ollama', 'ovh', 'scaleway', 'bedrock'];
     return supportedApiTypes.includes(provider.apiType as LlmProviderApiType);
   }
 
@@ -171,6 +175,6 @@ export class LlmProviderFactory {
    * @returns Array of supported API types
    */
   getSupportedApiTypes(): LlmProviderApiType[] {
-    return ['openai', 'openai-legacy', 'anthropic', 'gemini', 'groq', 'mistral', 'deepseek', 'openrouter', 'together-ai', 'fireworks-ai', 'perplexity', 'cohere', 'xai', 'ollama', 'ovh', 'scaleway'];
+    return ['openai', 'openai-legacy', 'anthropic', 'gemini', 'groq', 'mistral', 'deepseek', 'openrouter', 'together-ai', 'fireworks-ai', 'perplexity', 'cohere', 'xai', 'ollama', 'ovh', 'scaleway', 'bedrock'];
   }
 }
