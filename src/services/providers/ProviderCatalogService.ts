@@ -259,6 +259,34 @@ export class ProviderCatalogService {
   private getAsrProviders(): AsrProviderInfo[] {
     return [
       {
+        apiType: 'transcribe',
+        displayName: 'Amazon Transcribe',
+        description: 'Amazon Transcribe streaming speech-to-text. HIPAA eligible, so it keeps speech recognition inside the same AWS BAA that covers Bedrock, Polly and S3.',
+        models: [
+          {
+            id: 'default',
+            displayName: 'Transcribe Streaming',
+            description: 'Real-time streaming transcription with partial results stabilization and optional PII redaction',
+            recommended: true,
+            languages: ['en', 'es', 'fr', 'de', 'it', 'pt', 'ja', 'ko', 'zh', 'ar', 'hi', 'nl', 'sv', 'da', 'no', 'pl', 'ru', 'tr'],
+            supportedAudioFormats: ['pcm_8000', 'pcm_16000', 'pcm_24000', 'pcm_48000'],
+            supportsCustomVocabulary: true,
+            supportsStreaming: true,
+          },
+        ],
+        languages: [
+          { code: 'en', displayName: 'English' },
+          { code: 'es', displayName: 'Spanish' },
+          { code: 'fr', displayName: 'French' },
+          { code: 'de', displayName: 'German' },
+          { code: 'it', displayName: 'Italian' },
+          { code: 'pt', displayName: 'Portuguese' },
+          { code: 'ja', displayName: 'Japanese' },
+          { code: 'ko', displayName: 'Korean' },
+          { code: 'zh', displayName: 'Chinese' },
+        ],
+      },
+      {
         apiType: 'azure',
         displayName: 'Azure Speech Services',
         description: 'Microsoft Azure Cognitive Services Speech-to-Text API with support for multiple languages and custom vocabulary',
