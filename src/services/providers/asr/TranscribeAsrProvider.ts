@@ -48,6 +48,12 @@ export const transcribeAsrSettingsSchema = z.looseObject({
 
 export type TranscribeAsrSettings = z.infer<typeof transcribeAsrSettingsSchema>;
 
+/** How long an idle stream waits before emitting keepalive silence. Transcribe's limit is 15s. */
+const KEEPALIVE_INTERVAL_MS = 4000;
+
+/** Duration of each keepalive silence frame. */
+const KEEPALIVE_FRAME_MS = 100;
+
 /** Maps the settings stability enum onto the SDK enum. */
 const STABILITY_MAP: Record<string, PartialResultsStability> = {
   high: PartialResultsStability.HIGH,
@@ -250,7 +256,12 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   private async *buildAudioStream(): AsyncGenerator<AudioStream> {
     while (!this.ended) {
       if (this.queue.length === 0) {
-        await new Promise<void>((resolve) => { this.waiter = resolve; });
+        // Transcribe closes any stream that goes 15 seconds without audio, and a caller who is
+        // listening to the agent is legitimately silent for longer than that. Rather than let the
+        // stream die mid-conversation, wait a bounded interval and emit a frame of silence to keep
+        // it open. Silence costs a few hundred bytes and does not affect the transcript.
+        const gotAudio = await this.waitForAudio(KEEPALIVE_INTERVAL_MS);
+        if (!gotAudio && !this.ended) yield { AudioEvent: { AudioChunk: this.silenceFrame() } };
         continue;
       }
 
@@ -301,5 +312,35 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     const waiter = this.waiter;
     this.waiter = null;
     waiter?.();
+  }
+
+  /**
+   * Waits for audio to be queued, or for the timeout to elapse.
+   * @param timeoutMs - How long to wait before giving up.
+   * @returns True if audio arrived, false if the wait timed out.
+   */
+  private waitForAudio(timeoutMs: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.waiter = null;
+        resolve(false);
+      }, timeoutMs);
+
+      this.waiter = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      };
+    });
+  }
+
+  /** A short buffer of PCM silence, used to keep an idle Transcribe stream alive. */
+  private silenceFrame(): Buffer {
+    const samples = Math.round((pcmSampleRate(this.audioFormat) * KEEPALIVE_FRAME_MS) / 1000);
+    return Buffer.alloc(samples * 2);
   }
 }
