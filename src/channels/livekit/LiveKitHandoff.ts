@@ -153,6 +153,8 @@ export class LiveKitHandoff {
     room.on(RoomEvent.DtmfReceived, onDtmf);
 
     const asr = await this.openAsr(projectId, roomName);
+    // Started after the recogniser is constructed, so the clock measures how long the answering
+    // party has been given to speak - not how long a provider took to wake up.
     const startedAt = Date.now();
     let speechMs = 0;
     let silenceMs = 0;
@@ -166,7 +168,15 @@ export class LiveKitHandoff {
         const frame = next.value;
 
         const buffer = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
-        await asr?.sendAudio(buffer);
+
+        // Deliberately NOT awaited. Transcribe opens its stream lazily on the first chunk, and
+        // awaiting that put seconds of connection latency inside the frame loop: the energy gate
+        // stopped advancing through the audio in real time, so the turn spent its whole budget
+        // still chewing on the first second and never reached the reply. Fire the audio at the
+        // recogniser and keep reading.
+        void asr?.sendAudio(buffer).catch((error) => {
+          logger.debug({ error, roomName }, 'LiveKit: dropped an audio chunk on the way to recognition');
+        });
 
         if (this.frameRms(frame.data) > HANDOFF_SPEECH_RMS) {
           speechMs += LEG_FRAME_SIZE_MS;
