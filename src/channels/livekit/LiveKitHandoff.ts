@@ -1,7 +1,7 @@
 import { inject, singleton } from 'tsyringe';
 import { and, eq } from 'drizzle-orm';
-import { AudioStream, RoomEvent } from '@livekit/rtc-node';
-import type { RemoteParticipant, RemoteTrack, Room } from '@livekit/rtc-node';
+import { RoomEvent } from '@livekit/rtc-node';
+import type { AudioFrame, RemoteParticipant, Room } from '@livekit/rtc-node';
 import { db } from '../../db/index';
 import { projects, providers, stages } from '../../db/schema';
 import { AsrProviderFactory } from '../../services/providers/asr/AsrProviderFactory';
@@ -10,10 +10,7 @@ import type { IAsrProvider } from '../../services/providers/asr/IAsrProvider';
 import { extractTextFromContent } from '../../utils/llm';
 import { logger } from '../../utils/logger';
 
-/** Sample rate the answered leg is read at, matching the rest of the LiveKit path. */
-const LEG_SAMPLE_RATE = 16000;
-
-/** Frame granularity requested from the leg's audio stream. */
+/** Frame granularity of the leg's audio stream, matching how the channel opened it. */
 const LEG_FRAME_SIZE_MS = 20;
 
 /** Frame energy above this counts as speech. Same gate voicemail detection uses. */
@@ -61,8 +58,16 @@ export type HandoffDecision = {
 /** Everything needed to run one decision turn against an answered leg. */
 export type HandoffRequest = {
   room: Room;
-  /** The answered leg's audio track. */
-  track: RemoteTrack;
+  /**
+   * Reader over the answered leg's audio, already open and already partly consumed.
+   *
+   * Deliberately an iterator handed in rather than a stream opened here. Cancelling an
+   * AudioStream detaches the FFI handle for the whole track, so the voicemail detector closing
+   * its own reader left any later stream on that track silent forever - the decision turn opened
+   * a Transcribe session, received not one frame, and concluded "nothing heard" two milliseconds
+   * after connecting. One reader, passed between phases, is the only arrangement that works.
+   */
+  frames: AsyncIterator<AudioFrame>;
   /** Participant identity of the answered leg. */
   identity: string;
   roomName: string;
@@ -136,7 +141,7 @@ export class LiveKitHandoff {
    * @param request - The answered leg and its routing context.
    */
   private async listen(request: HandoffRequest): Promise<{ digit: string | null; transcript: string | null }> {
-    const { room, track, identity, roomName, projectId } = request;
+    const { room, frames, identity, roomName, projectId } = request;
 
     let digit: string | null = null;
     const onDtmf = (_code: number, pressed: string, participant: RemoteParticipant): void => {
@@ -148,14 +153,17 @@ export class LiveKitHandoff {
     room.on(RoomEvent.DtmfReceived, onDtmf);
 
     const asr = await this.openAsr(projectId, roomName);
-    const stream = new AudioStream(track, { sampleRate: LEG_SAMPLE_RATE, numChannels: 1, frameSizeMs: LEG_FRAME_SIZE_MS });
     const startedAt = Date.now();
     let speechMs = 0;
     let silenceMs = 0;
 
     try {
-      for await (const frame of stream) {
+      while (true) {
         if (digit) break;
+
+        const next = await frames.next();
+        if (next.done) break;
+        const frame = next.value;
 
         const buffer = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
         await asr?.sendAudio(buffer);
@@ -178,9 +186,8 @@ export class LiveKitHandoff {
       }
     } finally {
       room.off(RoomEvent.DtmfReceived, onDtmf);
-      // Unsubscribing a track never produces an end-of-stream, so an abandoned reader would keep
-      // being fed frames for the life of the call.
-      await stream.cancel().catch(() => undefined);
+      // The reader is NOT closed here. It belongs to the caller, which opened it before voicemail
+      // detection and closes it once the bridge is settled.
     }
 
     const transcript = asr ? await this.closeAsr(asr, roomName) : null;

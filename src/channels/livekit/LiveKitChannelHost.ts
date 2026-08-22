@@ -14,7 +14,7 @@ import {
   TrackPublishOptions,
   TrackSource,
 } from '@livekit/rtc-node';
-import type { RemoteParticipant, RemoteTrack } from '@livekit/rtc-node';
+import type { AudioFrame, RemoteParticipant, RemoteTrack } from '@livekit/rtc-node';
 import { AccessToken, WebhookReceiver, SipClient, RoomServiceClient } from 'livekit-server-sdk';
 import { db } from '../../db/index';
 import { providers, apiKeys, users } from '../../db/schema';
@@ -392,6 +392,7 @@ export class LiveKitChannelHost {
     // Captured once, before the leg answers: these are the tracks it must not hear yet.
     const held = [...this.trackSidsOf(room, callerIdentity), ...(ctx.agentTrackSid ? [ctx.agentTrackSid] : [])];
     let legTrackSid: string | undefined;
+    let frames: AsyncIterator<AudioFrame> | null = null;
 
     try {
       // Applied straight after the dial rather than on answer. The participant exists from the
@@ -401,6 +402,15 @@ export class LiveKitChannelHost {
       const track = await this.waitForTrack(room, identity, VM_DECIDE_BY_MS);
       legTrackSid = track?.sid;
 
+      // ONE reader over the leg, opened here and shared by every phase that listens to it.
+      // Voicemail detection and the decision turn are the same listening problem separated by an
+      // announcement, and a second AudioStream on this track would receive nothing: cancelling
+      // the first detaches the FFI handle for the track itself.
+      const stream = track
+        ? new AudioStream(track, { sampleRate: INBOUND_SAMPLE_RATE, numChannels: 1, frameSizeMs: INBOUND_FRAME_SIZE_MS })
+        : null;
+      frames = stream ? stream[Symbol.asyncIterator]() : null;
+
       // The caller must not hear the far end being classified: a voicemail greeting, or a
       // "hello?" that is about to be answered by an announcement they cannot hear. The leg's
       // track only exists once it answers, so unlike the hold above this cannot be pre-empted and
@@ -409,7 +419,7 @@ export class LiveKitChannelHost {
 
       if (!track) {
         logger.info({ roomName, identity }, 'LiveKit: no audio from the answered leg, treating as human');
-      } else if (await this.classifyAnsweredLeg(track, identity, roomName)) {
+      } else if (frames && await this.classifyAnsweredLeg(frames, identity, roomName)) {
         await rooms.removeParticipant(roomName, identity);
         logger.warn({ roomName, identity }, 'LiveKit: answered leg was voicemail, hung it up and left the caller with the agent');
         return;
@@ -422,8 +432,8 @@ export class LiveKitChannelHost {
       // Having been told who is calling, the answering party gets a say in whether the call
       // connects. Only reachable while they are still held apart from the caller, which is why
       // it lives here rather than anywhere further downstream.
-      if (ctx.config.handoffDecision && track) {
-        const decision = await this.handoff.ask({ room, track, identity, roomName, projectId: ctx.projectId, stageId: ctx.stageId });
+      if (ctx.config.handoffDecision && frames) {
+        const decision = await this.handoff.ask({ room, frames, identity, roomName, projectId: ctx.projectId, stageId: ctx.stageId });
         logger.info({ roomName, identity, accept: decision.accept, via: decision.via }, 'LiveKit: the answering party decided');
 
         if (!decision.accept) {
@@ -441,6 +451,8 @@ export class LiveKitChannelHost {
         logger.error({ error: joinError, roomName, identity }, 'LiveKit: could not join the legs after a failed hold');
       });
     } finally {
+      // Closed exactly once, here, after every phase that listens to the leg is done with it.
+      await frames?.return?.().catch(() => undefined);
       await this.closeWhisper(room, whisper);
     }
   }
@@ -661,17 +673,17 @@ export class LiveKitChannelHost {
    * @param identity - Participant identity of the outbound leg.
    * @param roomName - For log context.
    */
-  private async classifyAnsweredLeg(track: RemoteTrack, identity: string, roomName: string): Promise<boolean> {
-    const stream = new AudioStream(track, { sampleRate: INBOUND_SAMPLE_RATE, numChannels: 1, frameSizeMs: INBOUND_FRAME_SIZE_MS });
+  private async classifyAnsweredLeg(frames: AsyncIterator<AudioFrame>, identity: string, roomName: string): Promise<boolean> {
     const startedAt = Date.now();
     let speechRunMs = 0;
     let silenceRunMs = 0;
     let heardAnything = false;
 
-    // Every exit below is early. Unsubscribing a track never produces an end-of-stream, so an
-    // abandoned reader would keep being fed frames for the rest of the call.
-    try {
-      for await (const frame of stream) {
+    while (true) {
+      const next = await frames.next();
+      if (next.done) break;
+      {
+        const frame = next.value;
         const speaking = this.frameRms(frame.data) > VM_SPEECH_RMS;
 
         if (speaking) {
@@ -711,8 +723,6 @@ export class LiveKitChannelHost {
           return false;
         }
       }
-    } finally {
-      await stream.cancel().catch(() => undefined);
     }
 
     return false;
