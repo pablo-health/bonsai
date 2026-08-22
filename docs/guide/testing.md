@@ -69,6 +69,12 @@ A scenario conversation **passes** when:
 - All `dataExtraction` entries pass their comparison assertions
 - All `dataPostProcessingExpected` entries pass their comparison assertions
 
+::: warning An assertion on a variable that is never set is not an assertion
+`dataExtraction` reads stage variables. If the stage never populates the variable you named — because no action writes it, or the name is misspelled — the entry is compared against nothing rather than reported as unconfigured. Depending on the comparison mode that is a silent pass or a confusing failure, and either way the suite is no longer testing what you think.
+
+Before trusting a green suite, confirm the variables you assert on are actually written during a real conversation. See [Asserting on routing instead of variables](#asserting-on-routing-instead-of-variables) for an assertion that does not depend on variables at all.
+:::
+
 A conversation **fails** when:
 - `maxTurns` is reached before the conversation ends
 - Any comparison assertion fails
@@ -189,7 +195,7 @@ Each **Scenario Conversation** represents one individual conversation executed w
 | `scenarioId` | Scenario being tested |
 | `testerId` | Tester used for this conversation |
 | `projectId` | Parent project |
-| `conversationId` | Linked conversation ID (set once the conversation starts) |
+| `conversationId` | Linked conversation ID (set once the conversation starts). A reference only — the transcript is **not** included on this object, see the note below |
 | `status` | Conversation status |
 | `testRunStatus` | How the test ended: `conversation_ended`, `conversation_aborted`, `conversation_failed`, `max_turns_reached`, `tester_hung_up` |
 | `testStatistics` | Object with `passedTests` and `failedTests` counts |
@@ -197,6 +203,62 @@ Each **Scenario Conversation** represents one individual conversation executed w
 | `dataTransformationResults` | Results after any post-processing |
 
 Use the `scenarioRunId` query parameter on the list endpoint to retrieve all conversations belonging to a specific run.
+
+::: warning The scenario conversation contains no dialogue
+A scenario conversation records the *outcome* of a test — status, extraction results, statistics — and a `conversationId` pointing at the conversation itself. **It does not contain the messages.**
+
+This matters if you write your own assertions over what the AI said. Reading the scenario conversation object and searching it for expected phrases finds nothing, so every "must not say" check passes and every "must say" check fails, regardless of what actually happened. Follow `conversationId` and read the conversation's events instead, and treat an empty transcript as a failed test rather than a passed one.
+:::
+
+## Testing behaviour that is not a variable
+
+Not every thing worth testing ends up in a stage variable. Two common cases are worth calling out
+because the mechanism is not obvious.
+
+### Asserting on routing instead of variables
+
+Often the question is not "did the AI collect the right value" but "did the conversation go to
+the right place" — did a frustrated caller reach the escalation stage, did a known customer skip
+the identification stage, did an off-topic request get routed away.
+
+`endingStageIds` expresses this directly. Set it to the stage or stages that represent the
+outcome you want, and the conversation passes only if it gets there. This is worth preferring
+over a `dataExtraction` assertion where both would work, because it does not depend on any
+variable being populated.
+
+To assert the opposite — that a conversation must **not** escalate — give the scenario a
+`maxTurns` budget large enough for the escalation to happen if it were going to, list the
+escalation stage in `endingStageIds`, and treat reaching it as the failure. Reading
+`testRunStatus` distinguishes the two endings: `conversation_ended` means it finished normally,
+`max_turns_reached` means it ran out of turns.
+
+### Actions require a classifier to be dispatched
+
+An action is never selected by the model that is replying to the user. Actions are enumerated to
+a **classifier**, and a stage with no classifier has no way to trigger any of its actions.
+
+For a stage's actions to fire, the stage needs `defaultClassifierId` set, or the individual action
+needs `overrideClassifierId`. The classifier is what receives the available actions — each with
+its `name`, its `classificationTrigger` and its `examples` — and returns which one applies:
+
+```json
+{ "actions": { "<classificationTrigger>": { } } }
+```
+
+::: tip The symptom of a missing classifier is distinctive
+If a stage has actions but no classifier, the conversation still works and nothing errors. The
+replying model, seeing the action described in its own prompt, tends to **narrate** it instead —
+producing a turn like *"I need to use the Escalate to a human action"* as literal dialogue to the
+user, while no action is dispatched and no stage transition happens.
+
+If a test fails because a transition never occurred, and the transcript contains the AI talking
+about the action rather than taking it, check `defaultClassifierId` on the stage before looking
+anywhere else.
+:::
+
+Because the classifier is a separate LLM call per turn, adding one to a stage that previously had
+none also adds latency and cost to every turn on that stage. That is worth knowing before adding
+a classifier purely to make one test pass.
 
 ## Common Operations
 
