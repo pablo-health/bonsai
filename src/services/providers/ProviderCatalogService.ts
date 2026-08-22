@@ -12060,6 +12060,18 @@ export class ProviderCatalogService {
           { id: 'mixtral-8x7b-instruct-v0.1', displayName: 'Mixtral 8x7B Instruct', description: 'Mistral Mixtral MoE model for balanced performance', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsReasoning: false, contextWindow: 32768 },
         ],
       },
+      {
+        apiType: 'bedrock',
+        displayName: 'Amazon Bedrock',
+        description: 'Amazon Bedrock via the Converse API, giving one request shape across Anthropic Claude, Amazon Nova, Meta Llama and other hosted families. Model IDs are region- and account-specific and most current models require a regional inference profile prefix ("us.", "eu.", "apac.") — use GET /api/providers/:id/models for the live list.',
+        models: [
+          { id: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', displayName: 'Claude Sonnet 4.5', recommended: true, description: 'Balanced speed and intelligence with extended reasoning', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsVision: true, supportsReasoning: true, contextWindow: 200000 },
+          { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', displayName: 'Claude Haiku 4.5', description: 'Fastest Claude model, a good fit for low-latency voice turns', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsVision: true, supportsReasoning: true, contextWindow: 200000 },
+          { id: 'us.amazon.nova-pro-v1:0', displayName: 'Amazon Nova Pro', description: 'Amazon multimodal model with a large context window', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsVision: true, supportsReasoning: false, contextWindow: 300000 },
+          { id: 'us.amazon.nova-lite-v1:0', displayName: 'Amazon Nova Lite', description: 'Low-cost Amazon multimodal model', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsVision: true, supportsReasoning: false, contextWindow: 300000 },
+          { id: 'us.meta.llama3-3-70b-instruct-v1:0', displayName: 'Llama 3.3 70B Instruct', description: 'Meta Llama 3.3 70B instruction-tuned model', supportsToolCalling: true, supportsJsonOutput: true, supportsStreaming: true, supportsVision: false, supportsReasoning: false, contextWindow: 128000 },
+        ],
+      },
     ];
   }
 
