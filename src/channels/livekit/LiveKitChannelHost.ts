@@ -103,11 +103,31 @@ const DIRECT_LEG_PREFIX = 'direct_';
 /** Variable the relayed message is written to when the provider does not name one. */
 const DEFAULT_RELAY_VARIABLE = 'handoffMessage';
 
+/**
+ * Longest the caller is left in silence waiting for a bridge to resolve.
+ *
+ * Shorter than the voicemail detector's own hard cap on purpose. Detection may legitimately take
+ * 45 seconds to decide, but nobody will sit through 45 seconds of nothing wondering if the call
+ * dropped. If the bridge has not resolved by now the caller gets the agent back and screening
+ * resumes; if it resolves later they are joined anyway, so releasing early costs nothing.
+ */
+const HOLD_MAX_MS = 30000;
+
 /** Per-room state tracked for cleanup. */
 type ActiveCall = {
   room: Room;
   connection: LiveKitConnection;
   sessionId: string;
+  /**
+   * True while a dialed leg is ringing and the caller should be waiting, not being interviewed.
+   *
+   * Implemented by withholding the caller's audio from the runner rather than by telling the
+   * model to be quiet. A prompt saying "keep it short" is a suggestion the model can talk itself
+   * out of, and it demonstrably did: a known caller was asked screening questions for the whole
+   * 20-odd seconds her phone was ringing. With no input arriving there is nothing to respond to,
+   * so the silence is structural.
+   */
+  holding: boolean;
 };
 
 /**
@@ -388,6 +408,8 @@ export class LiveKitChannelHost {
         throw error;
       }
 
+      // From here the caller is waiting to be put through, not being screened.
+      this.setHolding(roomName, true);
       logger.info({ roomName, userId, destination, announced: Boolean(whisper) }, 'LiveKit: dialed a direct-connect leg for a known caller');
 
       void this.completeBridge({ ...params, rooms, identity, whisper, announcement });
@@ -473,9 +495,39 @@ export class LiveKitChannelHost {
         logger.error({ error: joinError, roomName, identity }, 'LiveKit: could not join the legs after a failed hold');
       });
     } finally {
+      // Whatever happened - joined, voicemail, refused, thrown - the caller stops waiting.
+      this.setHolding(roomName, false);
       // Closed exactly once, here, after every phase that listens to the leg is done with it.
       await frames?.return?.().catch(() => undefined);
       await this.closeWhisper(room, whisper);
+    }
+  }
+
+  /**
+   * Starts or stops withholding the caller's audio from the runner.
+   *
+   * The release is also scheduled independently, so a bridge that never resolves cannot strand
+   * the caller in silence: whichever comes first wins, and releasing twice is harmless.
+   * @param roomName - Room whose caller is waiting.
+   * @param holding - True to hold, false to release.
+   */
+  private setHolding(roomName: string, holding: boolean): void {
+    const call = this.activeCalls.get(roomName);
+    if (!call || call.holding === holding) return;
+
+    call.holding = holding;
+    logger.info({ roomName, holding }, holding
+      ? 'LiveKit: holding the caller while the bridge rings'
+      : 'LiveKit: releasing the caller, the bridge has resolved');
+
+    if (holding) {
+      setTimeout(() => {
+        const current = this.activeCalls.get(roomName);
+        if (current?.holding) {
+          logger.warn({ roomName }, 'LiveKit: bridge did not resolve in time, giving the caller the agent back');
+          this.setHolding(roomName, false);
+        }
+      }, HOLD_MAX_MS).unref?.();
     }
   }
 
@@ -919,7 +971,7 @@ export class LiveKitChannelHost {
     connection.attachSession(session);
     this.sessionManager.setSessionProjectAndSettings(sessionId, projectId, VOICE_SESSION_SETTINGS, null, null);
 
-    this.activeCalls.set(roomName, { room, connection, sessionId });
+    this.activeCalls.set(roomName, { room, connection, sessionId, holding: false });
 
     const { stageId, agentId } = this.resolveRouting(config, roomMetadata);
     const userId = this.toUserId(callerIdentity);
@@ -989,6 +1041,12 @@ export class LiveKitChannelHost {
       // end the pump permanently and the agent would never hear the caller.
       const call = this.activeCalls.get(roomName);
       if (!call) continue;
+
+      // Dropped, not buffered. Replaying twenty seconds of held speech at the moment the caller
+      // is put through would have the agent answer questions nobody is still asking, over the top
+      // of the person who just picked up.
+      if (call.holding) continue;
+
       const session = this.sessionManager.getSession(call.sessionId);
       if (!session?.conversationId || !session.runner) continue;
 
