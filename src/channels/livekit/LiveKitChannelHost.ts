@@ -23,6 +23,7 @@ import type { Session } from '../SessionManager';
 import { ChannelHandlerDispatcher } from '../ChannelHandlerDispatcher';
 import { LiveKitConnection, pcmToAudioFrame } from './LiveKitConnection';
 import { LiveKitAnnouncer } from './LiveKitAnnouncer';
+import { LiveKitHandoff } from './LiveKitHandoff';
 import { liveKitChannelProviderConfigSchema, liveKitRoomMetadataSchema } from '../../services/providers/channel/LiveKitChannelProvider';
 import type { LiveKitChannelProviderConfig } from '../../services/providers/channel/LiveKitChannelProvider';
 import { sessionSettingsSchema } from '../websocket/contracts/auth';
@@ -90,6 +91,9 @@ const VM_DECIDE_BY_MS = 45000;
  * there. Generous enough that a normal one-line announcement never trips it.
  */
 const ANNOUNCE_TIMEOUT_MS = 15000;
+
+/** Variable the relayed message is written to when the provider does not name one. */
+const DEFAULT_RELAY_VARIABLE = 'handoffMessage';
 
 /** Per-room state tracked for cleanup. */
 type ActiveCall = {
@@ -168,6 +172,7 @@ export class LiveKitChannelHost {
     @inject(SessionManager) private readonly sessionManager: SessionManager,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
     @inject(LiveKitAnnouncer) private readonly announcer: LiveKitAnnouncer,
+    @inject(LiveKitHandoff) private readonly handoff: LiveKitHandoff,
   ) {}
 
   /**
@@ -406,6 +411,20 @@ export class LiveKitChannelHost {
         await this.announceTo(whisper, announcement, ctx);
       }
 
+      // Having been told who is calling, the answering party gets a say in whether the call
+      // connects. Only reachable while they are still held apart from the caller, which is why
+      // it lives here rather than anywhere further downstream.
+      if (ctx.config.handoffDecision && track) {
+        const decision = await this.handoff.ask({ room, track, identity, roomName, projectId: ctx.projectId, stageId: ctx.stageId });
+        logger.info({ roomName, identity, accept: decision.accept, via: decision.via }, 'LiveKit: the answering party decided');
+
+        if (!decision.accept) {
+          await rooms.removeParticipant(roomName, identity);
+          if (decision.relay) await this.relayToCaller(ctx, decision.relay);
+          return;
+        }
+      }
+
       await this.joinLegs(rooms, roomName, identity, held, callerIdentity, legTrackSid);
       logger.info({ roomName, identity, announced: Boolean(whisper && announcement) }, 'LiveKit: joined the caller and the answered leg');
     } catch (error) {
@@ -415,6 +434,52 @@ export class LiveKitChannelHost {
       });
     } finally {
       await this.closeWhisper(room, whisper);
+    }
+  }
+
+  /**
+   * Passes on what the answering party asked the caller to be told.
+   *
+   * The words are written to a stage variable and the conversation is moved to the relay stage;
+   * the caller then hears the substance from the agent, in the agent's voice, phrased by the
+   * project's own prompt. Nothing said on the private leg is piped through to the caller
+   * verbatim, and the ordinary guardrails still stand between the two.
+   *
+   * Silent when no relay stage is configured: the caller simply carries on being screened, which
+   * is what happens when the answering party declines without a message.
+   * @param ctx - The bridge context, carrying the project's relay configuration.
+   * @param relay - What to pass on, in the answering party's own words.
+   */
+  private async relayToCaller(ctx: BridgeContext, relay: string): Promise<void> {
+    const stageId = ctx.config.handoffRelayStageId;
+    if (!stageId) {
+      logger.info({ roomName: ctx.roomName }, 'LiveKit: no relay stage configured, the declined message was not passed on');
+      return;
+    }
+
+    const call = this.activeCalls.get(ctx.roomName);
+    const session = call ? this.sessionManager.getSession(call.sessionId) : undefined;
+    const conversationId = session?.conversationId;
+    if (!session || !conversationId) {
+      logger.warn({ roomName: ctx.roomName }, 'LiveKit: the caller conversation is gone, the declined message was not passed on');
+      return;
+    }
+
+    try {
+      const context = this.buildContext(session);
+      await this.dispatcher.dispatch({
+        type: 'set_var',
+        conversationId,
+        stageId,
+        variableName: ctx.config.handoffRelayVariable ?? DEFAULT_RELAY_VARIABLE,
+        variableValue: relay,
+        correlationId: undefined,
+      }, context);
+      await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, context);
+
+      logger.info({ roomName: ctx.roomName, stageId }, 'LiveKit: moved the caller to the relay stage');
+    } catch (error) {
+      logger.error({ error, roomName: ctx.roomName, stageId }, 'LiveKit: failed to pass the declined message to the caller');
     }
   }
 
@@ -591,37 +656,43 @@ export class LiveKitChannelHost {
     let silenceRunMs = 0;
     let heardAnything = false;
 
-    for await (const frame of stream) {
-      const speaking = this.frameRms(frame.data) > VM_SPEECH_RMS;
+    // Every exit below is early. Unsubscribing a track never produces an end-of-stream, so an
+    // abandoned reader would keep being fed frames for the rest of the call.
+    try {
+      for await (const frame of stream) {
+        const speaking = this.frameRms(frame.data) > VM_SPEECH_RMS;
 
-      if (speaking) {
-        heardAnything = true;
-        speechRunMs += INBOUND_FRAME_SIZE_MS;
-        silenceRunMs = 0;
+        if (speaking) {
+          heardAnything = true;
+          speechRunMs += INBOUND_FRAME_SIZE_MS;
+          silenceRunMs = 0;
 
-        // One long unbroken stretch of speech is a recording. People do not do this on answering.
-        if (speechRunMs >= VM_MONOLOGUE_MS) {
-          logger.info({ roomName, identity, speechRunMs }, 'LiveKit: continuous speech past the monologue threshold, treating as voicemail');
+          // One long unbroken stretch of speech is a recording. People do not do this on answering.
+          if (speechRunMs >= VM_MONOLOGUE_MS) {
+            logger.info({ roomName, identity, speechRunMs }, 'LiveKit: continuous speech past the monologue threshold, treating as voicemail');
+            return true;
+          }
+        } else {
+          // A pause after speech is the signature of a person waiting for a reply.
+          if (heardAnything && speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) {
+            logger.info({ roomName, identity, speechRunMs }, 'LiveKit: speech then a pause, treating as a person');
+            return false;
+          }
+          silenceRunMs += INBOUND_FRAME_SIZE_MS;
+          if (speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) speechRunMs = 0;
+        }
+
+        if (!heardAnything && Date.now() - startedAt > VM_SILENCE_MS) {
+          logger.info({ roomName, identity }, 'LiveKit: nothing heard from the answered leg, treating as voicemail');
           return true;
         }
-      } else {
-        // A pause after speech is the signature of a person waiting for a reply.
-        if (heardAnything && speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) {
-          logger.info({ roomName, identity, speechRunMs }, 'LiveKit: speech then a pause, treating as a person');
+        if (Date.now() - startedAt > VM_DECIDE_BY_MS) {
+          logger.info({ roomName, identity }, 'LiveKit: voicemail detection timed out, defaulting to human');
           return false;
         }
-        silenceRunMs += INBOUND_FRAME_SIZE_MS;
-        if (speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) speechRunMs = 0;
       }
-
-      if (!heardAnything && Date.now() - startedAt > VM_SILENCE_MS) {
-        logger.info({ roomName, identity }, 'LiveKit: nothing heard from the answered leg, treating as voicemail');
-        return true;
-      }
-      if (Date.now() - startedAt > VM_DECIDE_BY_MS) {
-        logger.info({ roomName, identity }, 'LiveKit: voicemail detection timed out, defaulting to human');
-        return false;
-      }
+    } finally {
+      await stream.cancel().catch(() => undefined);
     }
 
     return false;

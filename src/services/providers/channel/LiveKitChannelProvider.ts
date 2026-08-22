@@ -24,6 +24,9 @@ export const liveKitChannelProviderConfigSchema = z.strictObject({
   outboundTrunkId: z.string().optional().describe('LiveKit outbound SIP trunk used to dial a second leg into the room. Required only for direct-connect callers; omit to disable outbound entirely.'),
   neverDial: z.array(z.string()).optional().describe('Destinations the channel must refuse to dial, in E.164. Put any number that forwards INTO this channel here: dialing it would loop the call straight back to the agent.'),
   announceTemplate: z.string().optional().describe('Spoken privately to whoever answers a dialed leg, before the two legs are joined. "{caller}" is replaced with the calling party\'s profile name. Omit to bridge silently; the announcement is also skipped when the caller has no name on file.'),
+  handoffDecision: z.boolean().optional().describe('Ask whoever answers a dialed leg whether they want the call before joining the two legs. They may answer in speech, or press 1 to accept and 2 to decline. Defaults to false, which joins the legs as soon as the announcement finishes.'),
+  handoffRelayStageId: z.string().optional().describe('Stage the conversation moves to when the answering party declines but asked for something to be passed on. Its prompt should speak the relay variable to the caller. Omit to decline silently and carry on screening.'),
+  handoffRelayVariable: z.string().optional().describe('Variable on the relay stage the passed-on message is written to. Defaults to "handoffMessage".'),
   stageId: z.string().optional().describe('Stage to start conversations in. Overridable per room via room metadata.'),
   agentId: z.string().optional().describe('Agent to start conversations with. Overridable per room via room metadata.'),
 }).openapi('LiveKitChannelConfig');
