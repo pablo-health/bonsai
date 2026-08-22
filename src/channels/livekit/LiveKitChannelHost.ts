@@ -15,7 +15,7 @@ import {
   TrackSource,
 } from '@livekit/rtc-node';
 import type { RemoteParticipant, RemoteTrack } from '@livekit/rtc-node';
-import { AccessToken, WebhookReceiver, SipClient } from 'livekit-server-sdk';
+import { AccessToken, WebhookReceiver, SipClient, RoomServiceClient } from 'livekit-server-sdk';
 import { db } from '../../db/index';
 import { providers, apiKeys, users } from '../../db/schema';
 import { SessionManager } from '../SessionManager';
@@ -55,6 +55,24 @@ const INBOUND_SAMPLE_RATE = 16000;
 
 /** Frame size requested from the inbound audio stream. Matches typical VAD frame granularity. */
 const INBOUND_FRAME_SIZE_MS = 20;
+
+/**
+ * Voicemail detection thresholds for an answered outbound leg.
+ *
+ * Carriers answer for voicemail exactly as they answer for a person - 200 OK and media - so the
+ * only way to tell them apart is to listen. A person says "hello?" in well under two seconds and
+ * then STOPS, waiting. A voicemail greeting is one uninterrupted monologue many seconds long.
+ * That difference is large enough that frame energy alone separates them; no model is needed.
+ */
+const VM_SPEECH_RMS = 500;
+/** Continuous speech longer than this is a recording, not a greeting from a person. */
+const VM_MONOLOGUE_MS = 6000;
+/** A person answering pauses within this long. Used to conclude "this is a human" early. */
+const VM_HUMAN_PAUSE_MS = 1500;
+/** Give up and treat the leg as unusable if nothing is heard at all in this long. */
+const VM_SILENCE_MS = 10000;
+/** Hard cap on how long detection may run before deciding. */
+const VM_DECIDE_BY_MS = 20000;
 
 /** Per-room state tracked for cleanup. */
 type ActiveCall = {
@@ -236,7 +254,7 @@ export class LiveKitChannelHost {
    * @param userId - Caller identity, normally their E.164 number.
    * @param roomName - Room to dial the second leg into.
    */
-  private async tryDirectConnect(config: LiveKitChannelProviderConfig, projectId: string, userId: string, roomName: string): Promise<boolean> {
+  private async tryDirectConnect(config: LiveKitChannelProviderConfig, projectId: string, userId: string, roomName: string, room: Room): Promise<boolean> {
     if (!config.outboundTrunkId) return false;
 
     try {
@@ -260,11 +278,113 @@ export class LiveKitChannelHost {
       });
 
       logger.info({ roomName, userId, destination }, 'LiveKit: dialed a direct-connect leg for a known caller');
+
+      const identity = `direct_${destination}`;
+      void this.watchForVoicemail(room, identity, roomName).then(async (isVoicemail) => {
+        if (!isVoicemail) return;
+        try {
+          const rooms = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
+          await rooms.removeParticipant(roomName, identity);
+          logger.warn({ roomName, destination }, 'LiveKit: answered leg was voicemail, hung it up and left the caller with the agent');
+        } catch (error) {
+          logger.error({ error, roomName, identity }, 'LiveKit: failed to remove the voicemail leg');
+        }
+      });
+
       return true;
     } catch (error) {
       logger.error({ error, roomName, userId }, 'LiveKit: direct connect failed, falling back to screening');
       return false;
     }
+  }
+
+  /**
+   * Listens to an answered outbound leg and decides whether a person or a recording picked up.
+   *
+   * Returns true when the leg looks like voicemail. Errs towards "human": a wrong answer that
+   * keeps a real person connected is far cheaper than one that hangs up on them.
+   * @param room - The connected room.
+   * @param identity - Participant identity of the outbound leg.
+   * @param roomName - For log context.
+   */
+  private async watchForVoicemail(room: Room, identity: string, roomName: string): Promise<boolean> {
+    const track = await this.waitForTrack(room, identity, VM_DECIDE_BY_MS);
+    if (!track) {
+      logger.info({ roomName, identity }, 'LiveKit: no audio from the answered leg, treating as human');
+      return false;
+    }
+
+    const stream = new AudioStream(track, { sampleRate: INBOUND_SAMPLE_RATE, numChannels: 1, frameSizeMs: INBOUND_FRAME_SIZE_MS });
+    const startedAt = Date.now();
+    let speechRunMs = 0;
+    let silenceRunMs = 0;
+    let heardAnything = false;
+
+    for await (const frame of stream) {
+      const speaking = this.frameRms(frame.data) > VM_SPEECH_RMS;
+
+      if (speaking) {
+        heardAnything = true;
+        speechRunMs += INBOUND_FRAME_SIZE_MS;
+        silenceRunMs = 0;
+
+        // One long unbroken stretch of speech is a recording. People do not do this on answering.
+        if (speechRunMs >= VM_MONOLOGUE_MS) {
+          logger.info({ roomName, identity, speechRunMs }, 'LiveKit: continuous speech past the monologue threshold, treating as voicemail');
+          return true;
+        }
+      } else {
+        // A pause after speech is the signature of a person waiting for a reply.
+        if (heardAnything && speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) {
+          logger.info({ roomName, identity, speechRunMs }, 'LiveKit: speech then a pause, treating as a person');
+          return false;
+        }
+        silenceRunMs += INBOUND_FRAME_SIZE_MS;
+        if (speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) speechRunMs = 0;
+      }
+
+      if (!heardAnything && Date.now() - startedAt > VM_SILENCE_MS) {
+        logger.info({ roomName, identity }, 'LiveKit: nothing heard from the answered leg, treating as voicemail');
+        return true;
+      }
+      if (Date.now() - startedAt > VM_DECIDE_BY_MS) {
+        logger.info({ roomName, identity }, 'LiveKit: voicemail detection timed out, defaulting to human');
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Waits for a named participant to publish a subscribed audio track.
+   * @param room - The connected room.
+   * @param identity - Participant identity to wait for.
+   * @param timeoutMs - How long to wait before giving up.
+   */
+  private async waitForTrack(room: Room, identity: string, timeoutMs: number): Promise<RemoteTrack | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const participant = room.remoteParticipants.get(identity);
+      if (participant) {
+        for (const publication of participant.trackPublications.values()) {
+          if (publication.track) return publication.track as RemoteTrack;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return null;
+  }
+
+  /**
+   * Root-mean-square amplitude of a PCM frame, used as a cheap speech/silence gate.
+   * @param samples - Signed 16-bit PCM samples.
+   */
+  private frameRms(samples: Int16Array): number {
+    if (samples.length === 0) return 0;
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    return Math.sqrt(sum / samples.length);
   }
 
   /**
@@ -395,10 +515,10 @@ export class LiveKitChannelHost {
     // A caller the project has marked for direct connection is bridged to a second leg instead of
     // being screened. The destination comes from that user's profile, never from channel code, so
     // this stays transport-agnostic and no phone number is baked in here.
-    const bridged = await this.tryDirectConnect(config, projectId, userId, roomName);
-    if (bridged) {
-      logger.info({ roomName, userId, sessionId }, 'LiveKit: caller bridged directly, skipping screening');
-    }
+    // The bridge is attempted in the background and the conversation always starts. If the leg
+    // turns out to be voicemail, the agent is already talking to the caller and screening
+    // continues - rather than the caller being dropped into a recording with no explanation.
+    void this.tryDirectConnect(config, projectId, userId, roomName, room);
 
     logger.info({ sessionId, projectId, roomName, userId, stageId, agentId }, 'LiveKit: new voice session created');
 
