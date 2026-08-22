@@ -65,6 +65,8 @@ export class LiveKitConnection implements IClientConnection {
    */
   private generation = 0;
   private closed = false;
+  /** True while the agent's voice is withheld from the room. See {@link setMuted}. */
+  private muted = false;
 
   constructor(
     /** The connected LiveKit room for this call. */
@@ -102,6 +104,9 @@ export class LiveKitConnection implements IClientConnection {
         break;
       }
       case 'send_ai_voice_chunk': {
+        // Dropped rather than queued: the point of muting is that nothing generated while the
+        // room belongs to someone else plays out when it is handed back.
+        if (this.muted) return;
         if (!isPcmFormat(msg.audioFormat)) {
           logger.warn({ audioFormat: msg.audioFormat, sessionId: this.session?.id }, 'LiveKit: received non-PCM audio chunk, dropping');
           return;
@@ -160,6 +165,28 @@ export class LiveKitConnection implements IClientConnection {
     }
 
     logger.info({ sessionId: this.session?.id }, 'LiveKit: close() completed');
+  }
+
+  /**
+   * Withholds the agent's voice from the room, or gives it back, without ending the call.
+   *
+   * Used when the conversation stops being the agent's: once two people are bridged, the agent is
+   * still a publishing participant - which is what lets it whisper to one side or take the call
+   * back later - but nothing it generates belongs in their conversation.
+   *
+   * Muting both drops what is already queued AND discards chunks that arrive afterwards. Only
+   * flushing would not be enough: a greeting whose TTS is still streaming when the call connects
+   * would carry on arriving chunk by chunk and play over the top of the person who just picked
+   * up. The pending playout wait is invalidated with the flush, so a turn cut off here cannot
+   * open a user input turn behind the bridge.
+   * @param muted - True to silence the agent, false to give it the room back.
+   */
+  setMuted(muted: boolean): void {
+    if (this.muted === muted) return;
+
+    this.muted = muted;
+    logger.info({ sessionId: this.session?.id, muted }, 'LiveKit: agent voice muted state changed');
+    if (muted) this.flush();
   }
 
   /**
