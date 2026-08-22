@@ -3,7 +3,7 @@ import { z } from 'zod';
 import express from 'express';
 import type { Request, Response } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   AudioSource,
   AudioStream,
@@ -15,9 +15,9 @@ import {
   TrackSource,
 } from '@livekit/rtc-node';
 import type { RemoteParticipant, RemoteTrack } from '@livekit/rtc-node';
-import { AccessToken, WebhookReceiver } from 'livekit-server-sdk';
+import { AccessToken, WebhookReceiver, SipClient } from 'livekit-server-sdk';
 import { db } from '../../db/index';
-import { providers, apiKeys } from '../../db/schema';
+import { providers, apiKeys, users } from '../../db/schema';
 import { SessionManager } from '../SessionManager';
 import type { Session } from '../SessionManager';
 import { ChannelHandlerDispatcher } from '../ChannelHandlerDispatcher';
@@ -217,6 +217,57 @@ export class LiveKitChannelHost {
   }
 
   /**
+   * Bridges a known caller to a second phone leg in the same room, when their profile asks for it.
+   *
+   * Looks up the caller's user record and reads `profile.transferTo`. When present, dials that
+   * number into the same room so caller and destination hear each other. Returns true when a leg
+   * was placed.
+   *
+   * Two safeguards, both learned the hard way:
+   * - The destination is refused if it appears in the provider's `neverDial` list. Any number that
+   *   forwards INTO this channel must be listed there, because dialing it sends the call straight
+   *   back to the agent and loops.
+   * - The dial carries a timeout. An unattended outbound leg does not hang up by itself; one was
+   *   left connected to a voicemail box for two minutes during development.
+   *
+   * A failure here is never fatal - the caller falls through to normal screening.
+   * @param config - Validated provider config.
+   * @param projectId - Project owning the caller record.
+   * @param userId - Caller identity, normally their E.164 number.
+   * @param roomName - Room to dial the second leg into.
+   */
+  private async tryDirectConnect(config: LiveKitChannelProviderConfig, projectId: string, userId: string, roomName: string): Promise<boolean> {
+    if (!config.outboundTrunkId) return false;
+
+    try {
+      const record = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
+      const profile = (record?.profile ?? {}) as Record<string, unknown>;
+      const destination = typeof profile.transferTo === 'string' ? profile.transferTo.trim() : '';
+      if (!destination) return false;
+
+      const refused = (config.neverDial ?? []).map((n) => n.trim());
+      if (refused.includes(destination)) {
+        logger.warn({ roomName, userId, destination }, 'LiveKit: refusing to dial a number on the neverDial list');
+        return false;
+      }
+
+      const httpUrl = config.url.replace(/^ws/, 'http');
+      const sip = new SipClient(httpUrl, config.apiKey, config.apiSecret);
+      await sip.createSipParticipant(config.outboundTrunkId, destination, roomName, {
+        participantIdentity: `direct_${destination}`,
+        participantName: (typeof profile.name === 'string' ? profile.name : 'Direct') + ' line',
+        waitUntilAnswered: false,
+      });
+
+      logger.info({ roomName, userId, destination }, 'LiveKit: dialed a direct-connect leg for a known caller');
+      return true;
+    } catch (error) {
+      logger.error({ error, roomName, userId }, 'LiveKit: direct connect failed, falling back to screening');
+      return false;
+    }
+  }
+
+  /**
    * Returns the exact bytes of the request body as a string, for signature verification.
    * @param req - The inbound Express request.
    */
@@ -340,6 +391,14 @@ export class LiveKitChannelHost {
 
     const { stageId, agentId } = this.resolveRouting(config, roomMetadata);
     const userId = this.toUserId(callerIdentity);
+
+    // A caller the project has marked for direct connection is bridged to a second leg instead of
+    // being screened. The destination comes from that user's profile, never from channel code, so
+    // this stays transport-agnostic and no phone number is baked in here.
+    const bridged = await this.tryDirectConnect(config, projectId, userId, roomName);
+    if (bridged) {
+      logger.info({ roomName, userId, sessionId }, 'LiveKit: caller bridged directly, skipping screening');
+    }
 
     logger.info({ sessionId, projectId, roomName, userId, stageId, agentId }, 'LiveKit: new voice session created');
 

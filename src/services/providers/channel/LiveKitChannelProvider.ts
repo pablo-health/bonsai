@@ -21,6 +21,8 @@ export const liveKitChannelProviderConfigSchema = z.strictObject({
   identity: z.string().optional().describe('Participant identity Bonsai joins rooms under. Defaults to "bonsai-agent".'),
   roomPrefix: z.string().optional().describe('Only join rooms whose name starts with this prefix. Omit to join every room the webhook reports.'),
   apiKeyValue: z.string().describe('Bonsai API key whose project owns these conversations. Rooms have no way to carry credentials, so routing is bound to the provider.'),
+  outboundTrunkId: z.string().optional().describe('LiveKit outbound SIP trunk used to dial a second leg into the room. Required only for direct-connect callers; omit to disable outbound entirely.'),
+  neverDial: z.array(z.string()).optional().describe('Destinations the channel must refuse to dial, in E.164. Put any number that forwards INTO this channel here: dialing it would loop the call straight back to the agent.'),
   stageId: z.string().optional().describe('Stage to start conversations in. Overridable per room via room metadata.'),
   agentId: z.string().optional().describe('Agent to start conversations with. Overridable per room via room metadata.'),
 }).openapi('LiveKitChannelConfig');
