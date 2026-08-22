@@ -290,7 +290,11 @@ export class LiveKitHandoff {
         const result = await llm.generate([
           { role: 'system', content: HANDOFF_PROMPT },
           { role: 'user', content: transcript },
-        ], { outputFormat: 'json', maxTokens: 200 });
+          // Deliberately NOT outputFormat: 'json'. The Bedrock provider hard-parses the whole
+          // response and throws when a model wraps its JSON in a fence or a line of prose, which
+          // discarded a perfectly usable answer and defaulted the call to "connect". parseDecision
+          // below extracts the object itself and tolerates both.
+        ], { maxTokens: 200 });
 
         const parsed = this.parseDecision(extractTextFromContent(result.content));
         if (!parsed) {
