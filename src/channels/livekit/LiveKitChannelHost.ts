@@ -100,6 +100,24 @@ const ANNOUNCE_TIMEOUT_MS = 15000;
  */
 const DIRECT_LEG_PREFIX = 'direct_';
 
+/**
+ * The identity this agent joins a room under, made unique PER ROOM.
+ *
+ * Every room previously used the bare configured identity, so two concurrent calls put a
+ * participant called `bonsai-agent` in each of two rooms. LiveKit only guarantees identity
+ * uniqueness WITHIN a room, so that is legal - but it makes two simultaneous calls
+ * indistinguishable by identity anywhere that matters, and it is a live suspect for the
+ * two-agents-talking-over-each-other symptom seen on a real call.
+ *
+ * Both the join and the webhook's skip-my-own-join check derive from here. Changing one without
+ * the other would have the agent fail to recognise its own arrival and screen itself.
+ * @param configured - The provider's `identity`, if set.
+ * @param roomName - Room being joined.
+ */
+function agentIdentityFor(configured: string | undefined, roomName: string): string {
+  return `${configured ?? 'bonsai-agent'}--${roomName}`;
+}
+
 /** Variable the relayed message is written to when the provider does not name one. */
 const DEFAULT_RELAY_VARIABLE = 'handoffMessage';
 
@@ -307,8 +325,7 @@ export class LiveKitChannelHost {
       switch (event.event) {
         case 'participant_joined': {
           const identity = event.participant?.identity ?? '';
-          const agentIdentity = config.identity ?? 'bonsai-agent';
-          if (identity === agentIdentity) break;
+          if (identity === agentIdentityFor(config.identity, roomName)) break;
 
           // A leg WE dialed is not an inbound caller and must never be screened. LiveKit adds a
           // SIP participant to the room when the call is DIALED, not when it is answered, so this
@@ -903,7 +920,7 @@ export class LiveKitChannelHost {
    * @param roomMetadata - Raw room metadata, optionally carrying stage/agent overrides.
    */
   private async joinRoom(config: LiveKitChannelProviderConfig, projectId: string, roomName: string, callerIdentity: string, roomMetadata: string): Promise<void> {
-    const agentIdentity = config.identity ?? 'bonsai-agent';
+    const agentIdentity = agentIdentityFor(config.identity, roomName);
 
     const token = new AccessToken(config.apiKey, config.apiSecret, { identity: agentIdentity });
     token.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
