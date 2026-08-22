@@ -12,18 +12,21 @@ import { geminiLlmProviderConfigSchema } from '../../services/providers/llm/Gemi
 import { ollamaLlmProviderConfigSchema } from '../../services/providers/llm/OllamaLlmProvider';
 import { ovhLlmProviderConfigSchema } from '../../services/providers/llm/OVHLlmProvider';
 import { scalewayLlmProviderConfigSchema } from '../../services/providers/llm/ScalewayLlmProvider';
+import { bedrockLlmProviderConfigSchema } from '../../services/providers/llm/BedrockLlmProvider';
 import { elevenLabsTtsProviderConfigSchema } from '../../services/providers/tts/ElevenLabsTtsProvider';
 import { openAiTtsProviderConfigSchema } from '../../services/providers/tts/OpenAiTtsProvider';
 import { deepgramTtsProviderConfigSchema } from '../../services/providers/tts/DeepgramTtsProvider';
 import { cartesiaTtsProviderConfigSchema } from '../../services/providers/tts/CartesiaTtsProvider';
 import { azureTtsProviderConfigSchema } from '../../services/providers/tts/AzureTtsProvider';
 import { sonioxTtsProviderConfigSchema } from '../../services/providers/tts/SonioxTtsProvider';
+import { amazonPollyTtsProviderConfigSchema } from '../../services/providers/tts/AmazonPollyTtsProvider';
 import { azureAsrProviderConfigSchema } from '../../services/providers/asr/AzureAsrProvider';
 import { elevenLabsAsrProviderConfigSchema } from '../../services/providers/asr/ElevenLabsAsrProvider';
 import { deepgramAsrProviderConfigSchema } from '../../services/providers/asr/DeepgramAsrProvider';
 import { assemblyAiAsrProviderConfigSchema } from '../../services/providers/asr/AssemblyAiAsrProvider';
 import { speechmaticsAsrProviderConfigSchema } from '../../services/providers/asr/SpeechmaticsAsrProvider';
 import { sonioxAsrProviderConfigSchema } from '../../services/providers/asr/SonioxAsrProvider';
+import { transcribeAsrProviderConfigSchema } from '../../services/providers/asr/TranscribeAsrProvider';
 import { s3StorageProviderConfigSchema } from '../../services/providers/storage/S3StorageProvider';
 import { azureBlobStorageProviderConfigSchema } from '../../services/providers/storage/AzureBlobStorageProvider';
 import { gcsStorageProviderConfigSchema } from '../../services/providers/storage/GcsStorageProvider';
@@ -35,6 +38,7 @@ import { whatsAppChannelProviderConfigSchema } from '../../services/providers/ch
 // import { sendGridChannelProviderConfigSchema } from '../../services/providers/channel/SendGridChannelProvider';
 // import { sesChannelProviderConfigSchema } from '../../services/providers/channel/SesChannelProvider';
 import { smtpImapChannelProviderConfigSchema } from '../../services/providers/channel/SmtpImapChannelProvider';
+import { liveKitChannelProviderConfigSchema } from '../../services/providers/channel/LiveKitChannelProvider';
 
 extendZodWithOpenApi(z);
 
@@ -51,6 +55,7 @@ export const llmProviderConfigSchema = z.union([
   ollamaLlmProviderConfigSchema,
   ovhLlmProviderConfigSchema,
   scalewayLlmProviderConfigSchema,
+  bedrockLlmProviderConfigSchema,
 ]).describe('LLM provider configuration');
 
 /**
@@ -63,6 +68,7 @@ export const ttsProviderConfigSchema = z.union([
   cartesiaTtsProviderConfigSchema,
   azureTtsProviderConfigSchema,
   sonioxTtsProviderConfigSchema,
+  amazonPollyTtsProviderConfigSchema,
 ]).describe('TTS provider configuration');
 
 /**
@@ -75,6 +81,7 @@ export const asrProviderConfigSchema = z.union([
   assemblyAiAsrProviderConfigSchema,
   speechmaticsAsrProviderConfigSchema,
   sonioxAsrProviderConfigSchema,
+  transcribeAsrProviderConfigSchema,
 ]).describe('ASR provider configuration');
 
 /**
@@ -100,6 +107,7 @@ export const channelProviderConfigSchema = z.union([
   // sendGridChannelProviderConfigSchema,
   // sesChannelProviderConfigSchema,
   smtpImapChannelProviderConfigSchema,
+  liveKitChannelProviderConfigSchema,
 ]).describe('Channel provider configuration');
 
 export type ChannelProviderConfig = z.infer<typeof channelProviderConfigSchema>;
