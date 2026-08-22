@@ -852,7 +852,16 @@ export class LiveKitChannelHost {
     };
     room.on(RoomEvent.TrackSubscribed, onTrack);
 
-    room.on(RoomEvent.ParticipantDisconnected, () => {
+    room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+      // A leg WE dialed leaving is not the call ending. Both the voicemail path and a declined
+      // handoff remove that participant deliberately, and tearing the room down on it hung up on
+      // the caller too - the relay reached a conversation that had been closed 100ms earlier, and
+      // "hung up the voicemail leg and left the caller with the agent" had never actually done
+      // that. Only the party who dialed IN ending the call ends the call.
+      if (participant.identity.startsWith(DIRECT_LEG_PREFIX)) {
+        logger.info({ roomName, participant: participant.identity }, 'LiveKit: dialed leg left, the caller is still on the line');
+        return;
+      }
       this.teardown(roomName).catch((error) => logger.error({ error, roomName }, 'LiveKit: teardown after participant disconnect failed'));
     });
 
