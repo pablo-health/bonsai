@@ -81,6 +81,8 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   /** Set once the session should wind down; makes the generator return. */
   private ended = false;
   private isRecognizing = false;
+  /** Whether the Transcribe stream has been opened. Opening is deferred until the first frame. */
+  private streamOpen = false;
   /** Text of the most recent partial result, promoted to a final chunk if the stream ends abruptly. */
   private lastPartial = '';
 
@@ -113,10 +115,13 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   }
 
   /**
-   * Opens a Transcribe streaming session and begins consuming results.
+   * Marks the session ready to receive audio.
    *
-   * The command promise is not awaited to completion here: it resolves once the stream is
-   * established, after which results are drained in the background until the session ends.
+   * The Transcribe stream itself is opened lazily, on the first audio frame. Transcribe closes a
+   * stream that receives no audio for 15 seconds, and the runner pre-warms the ASR session before
+   * the caller has said anything - often before the agent has even finished its own turn. Opening
+   * eagerly meant the stream reliably died of that timeout just as real audio began arriving.
+   * Deferring also avoids being billed for an idle stream.
    */
   async start(): Promise<void> {
     if (this.isRecognizing) return;
@@ -128,6 +133,20 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     this.lastPartial = '';
     this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
     this.isRecognizing = true;
+    this.streamOpen = false;
+
+    this.onRecognitionStartedCallback?.();
+  }
+
+  /**
+   * Opens the Transcribe streaming session and begins consuming results.
+   *
+   * The command promise resolves once the stream is established, after which results are drained
+   * in the background until the session ends.
+   */
+  private async openStream(): Promise<void> {
+    if (this.streamOpen || !this.isRecognizing) return;
+    this.streamOpen = true;
 
     const sampleRate = pcmSampleRate(this.audioFormat);
 
@@ -146,13 +165,13 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
 
     try {
       const response = await this.client!.send(command);
-      logger.info(`Transcribe ASR session started at ${sampleRate} Hz for language ${this.settings.language}`);
-      this.onRecognitionStartedCallback?.();
+      logger.info(`Transcribe ASR stream opened at ${sampleRate} Hz for language ${this.settings.language}`);
 
       if (response.TranscriptResultStream) {
         void this.consume(response.TranscriptResultStream);
       }
     } catch (error) {
+      this.streamOpen = false;
       this.isRecognizing = false;
       await this.handleError(error instanceof Error ? error : new Error(String(error)));
     }
@@ -167,6 +186,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   async stop(): Promise<void> {
     if (!this.isRecognizing) return;
     this.isRecognizing = false;
+    this.streamOpen = false;
     this.ended = true;
     this.wake();
 
@@ -193,6 +213,9 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
 
     this.queue.push(audio);
     this.wake();
+
+    // First frame of the turn opens the stream. Queued above first so it is not lost.
+    if (!this.streamOpen) await this.openStream();
   }
 
   /** @inheritdoc */

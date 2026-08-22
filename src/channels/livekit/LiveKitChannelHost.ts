@@ -282,9 +282,18 @@ export class LiveKitChannelHost {
     // already published by the time we join, so TrackSubscribed can fire during connect().
     // Registering afterwards misses it permanently and the agent never hears anything.
     let inputTurnId: string | null = null;
+    // A track can reach us twice: once via TrackSubscribed and once via the post-connect scan for
+    // tracks that were already subscribed. Pumping both would feed the runner duplicate audio.
+    const pumped = new Set<string>();
     const onTrack = (remoteTrack: RemoteTrack, _publication: unknown, participant: RemoteParticipant): void => {
       logger.info({ roomName, participant: participant.identity, kind: participant.kind }, 'LiveKit: track subscribed');
       if (participant.kind === ParticipantKind.AGENT) return;
+      const key = remoteTrack.sid ?? `${participant.identity}:${remoteTrack.name}`;
+      if (pumped.has(key)) {
+        logger.debug({ roomName, key }, 'LiveKit: track already being pumped, ignoring duplicate');
+        return;
+      }
+      pumped.add(key);
       this.pumpInboundAudio(remoteTrack, roomName, () => inputTurnId).catch((error) => {
         logger.error({ error, roomName }, 'LiveKit: inbound audio pump failed');
       });
