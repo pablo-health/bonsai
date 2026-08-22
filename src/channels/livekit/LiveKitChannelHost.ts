@@ -349,6 +349,23 @@ export class LiveKitChannelHost {
   }
 
   /**
+   * Reads a caller's stored profile, or null when they are not someone the project knows.
+   * @param projectId - Project owning the caller record.
+   * @param userId - Caller identity as the project knows it, normally their E.164 number.
+   */
+  private async lookupProfile(projectId: string, userId: string): Promise<Record<string, unknown> | null> {
+    try {
+      const record = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
+      const profile = (record?.profile ?? null) as Record<string, unknown> | null;
+      if (profile && Object.keys(profile).length > 0) return profile;
+      return null;
+    } catch (error) {
+      logger.warn({ error, projectId, userId }, 'LiveKit: could not read the caller profile, treating them as unknown');
+      return null;
+    }
+  }
+
+  /**
    * Bridges a known caller to a second phone leg in the same room, when their profile asks for it.
    *
    * Looks up the caller's user record and reads `profile.transferTo`. When present, dials that
@@ -997,7 +1014,23 @@ export class LiveKitChannelHost {
 
     logger.info({ sessionId, projectId, roomName, userId, stageId, agentId }, 'LiveKit: new voice session created');
 
-    const startMsg: CALInputMessage = { type: 'start_conversation', userId, stageId, agentId, correlationId: undefined };
+    // The caller's profile is passed EXPLICITLY rather than left for the runner to find.
+    //
+    // A known caller was greeted as a stranger on every real call - "he couldn't pick up, is
+    // there something you'd like me to tell him?" - to someone close to them, while the channel had
+    // already read the same record and dialed his second line off it. The stage prompt asks the
+    // model to check the profile; without this the profile it checks is empty, so the model
+    // correctly concludes the caller is unknown and screens them.
+    //
+    // It went unnoticed because the scenario suite passes a tester's userProfile in on this same
+    // field, so the eval exercised the populated path while every real call took the empty one.
+    // The field deep-merges into the stored record, so sending what we just read back is a no-op.
+    const callerProfile = await this.lookupProfile(projectId, userId);
+
+    const startMsg: CALInputMessage = {
+      type: 'start_conversation', userId, stageId, agentId, correlationId: undefined,
+      ...(callerProfile ? { userProfile: callerProfile } : {}),
+    };
     await this.dispatcher.dispatch(startMsg, this.buildContext(session));
 
     // Deliberately NOT opening a user voice turn here. start_conversation kicks off the
