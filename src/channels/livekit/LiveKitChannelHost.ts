@@ -1,5 +1,6 @@
 import { inject, singleton } from 'tsyringe';
 import { z } from 'zod';
+import express from 'express';
 import type { Request, Response } from 'express';
 import type { RouteConfig } from '@asteasolutions/zod-to-openapi';
 import { eq } from 'drizzle-orm';
@@ -130,7 +131,16 @@ export class LiveKitChannelHost {
    * @param app - The Express application or router.
    */
   registerRoutes(app: any): void {
-    app.post('/api/livekit/webhook/:channelProviderId', asyncHandler(this.handleWebhook.bind(this)));
+    // LiveKit posts with Content-Type: application/webhook+json, which the global express.json()
+    // does not match, so its rawBody verify hook never fires and the body is left unparsed. A
+    // route-level text parser accepting any content type captures the exact bytes the signature
+    // is computed over. The stream is still readable here precisely because the global parser
+    // skipped it.
+    app.post(
+      '/api/livekit/webhook/:channelProviderId',
+      express.text({ type: '*/*', limit: '1mb' }),
+      asyncHandler(this.handleWebhook.bind(this)),
+    );
   }
 
   /**
@@ -157,6 +167,7 @@ export class LiveKitChannelHost {
     // hook, so use that; the other branches are only fallbacks for a differently-mounted route.
     const rawBody = this.readRawBody(req);
     const authHeader = req.get('Authorization') ?? '';
+    logger.debug({ contentType: req.get('Content-Type'), bodyType: typeof req.body, rawLength: rawBody.length, hasAuth: authHeader.length > 0 }, 'LiveKit webhook: received');
 
     let event;
     try {
