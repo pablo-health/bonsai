@@ -44,6 +44,9 @@ export type AmazonPollyTtsSettings = z.infer<typeof amazonPollyTtsSettingsSchema
  * when end() is called (or per-sentence when useSentenceSplitter is enabled).
  */
 export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProviderConfig> {
+  /** Set once cleanup has run, so late synthesis calls are ignored rather than fatal. */
+  private cleanedUp = false;
+
   /** Amazon Polly client instance */
   private pollyClient: PollyClient | null = null;
 
@@ -123,6 +126,15 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * Starts the speech generation session
    */
   async start(): Promise<void> {
+    // Synthesis requested after cleanup is a race, not a misuse: a caller can hang up while a
+    // response is still being generated, cleanup runs, and the in-flight generation then arrives
+    // here. Throwing turns that ordinary race into an unhandled rejection, which on Node 24 kills
+    // the whole process and drops every other call in flight. Ignore it instead - there is no
+    // longer anyone listening.
+    if (this.cleanedUp) {
+      logger.info('[Amazon Polly TTS] start() after cleanup, ignoring - the call has already ended');
+      return;
+    }
     if (!this.pollyClient) {
       throw new Error('Amazon Polly client not initialized. Call init() first.');
     }
@@ -243,6 +255,10 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * @param text The text to synthesize
    */
   private async performSynthesis(text: string): Promise<void> {
+    if (this.cleanedUp) {
+      logger.info('[Amazon Polly TTS] synthesis after cleanup, ignoring - the call has already ended');
+      return;
+    }
     if (!this.pollyClient) {
       throw new Error('Amazon Polly client not initialized');
     }
@@ -425,6 +441,7 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
       this.sentenceSplitter = null;
     }
 
+    this.cleanedUp = true;
     this.pollyClient = null;
     this.textBuffer = '';
     this.isStarted = false;
