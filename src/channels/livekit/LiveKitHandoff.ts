@@ -79,9 +79,9 @@ export type HandoffRequest = {
 /**
  * Asks whoever answered a dialed leg whether they want the call, and what to tell the caller.
  *
- * This is the turn that makes an announcement worth making. Having heard "I have someone for
- * you", the person holding the phone can say "yes", or "not now - tell her I'll call back in an
- * hour", and the second answer is the one that carries the product: it declines the bridge AND
+ * This is the turn that makes an announcement worth making. Having heard who is calling, the
+ * person holding the phone can say "yes", or "not now - tell them I'll call back in an hour",
+ * and the second answer is the one that carries the product: it declines the bridge AND
  * hands the agent something to say. Both arrive as speech, are transcribed, and are read by the
  * project's own model; the caller then hears the substance in the agent's voice, not a recording
  * of the person who declined.

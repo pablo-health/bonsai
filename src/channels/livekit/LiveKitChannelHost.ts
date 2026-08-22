@@ -377,8 +377,8 @@ export class LiveKitChannelHost {
           // A leg WE dialed is not an inbound caller and must never be screened. Dialed legs now
           // land in a bridge room the check above already discarded, so this should be
           // unreachable - it stays because the failure it prevents is the agent opening a second
-          // conversation and greeting the number it just rang with "this is the assistant, is
-          // there something you'd like me to tell him?", and that is worth two lines.
+          // conversation and greeting the number it just rang as though IT were the caller, and
+          // that is worth two lines.
           if (identity.startsWith(DIRECT_LEG_PREFIX)) {
             logger.info({ roomName, identity }, 'LiveKit webhook: dialed leg joined, not a caller');
             break;
@@ -1191,11 +1191,11 @@ export class LiveKitChannelHost {
 
     // The caller's profile is passed EXPLICITLY rather than left for the runner to find.
     //
-    // A known caller was greeted as a stranger on every real call - "he couldn't pick up, is
-    // there something you'd like me to tell him?" - to someone close to them, while the channel had
-    // already read the same record and dialed his second line off it. The stage prompt asks the
-    // model to check the profile; without this the profile it checks is empty, so the model
-    // correctly concludes the caller is unknown and screens them.
+    // A known caller was greeted as a stranger on every real call - offered the option of
+    // leaving a message for the very person they are closest to - while the channel had already
+    // read the same record and dialed the second line off it. The stage prompt asks the model to
+    // check the profile; without this the profile it checks is empty, so the model correctly
+    // concludes the caller is unknown and screens them.
     //
     // It went unnoticed because the scenario suite passes a tester's userProfile in on this same
     // field, so the eval exercised the populated path while every real call took the empty one.
