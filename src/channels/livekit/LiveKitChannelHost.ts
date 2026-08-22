@@ -21,7 +21,8 @@ import { providers, apiKeys, users } from '../../db/schema';
 import { SessionManager } from '../SessionManager';
 import type { Session } from '../SessionManager';
 import { ChannelHandlerDispatcher } from '../ChannelHandlerDispatcher';
-import { LiveKitConnection } from './LiveKitConnection';
+import { LiveKitConnection, pcmToAudioFrame } from './LiveKitConnection';
+import { LiveKitAnnouncer } from './LiveKitAnnouncer';
 import { liveKitChannelProviderConfigSchema, liveKitRoomMetadataSchema } from '../../services/providers/channel/LiveKitChannelProvider';
 import type { LiveKitChannelProviderConfig } from '../../services/providers/channel/LiveKitChannelProvider';
 import { sessionSettingsSchema } from '../websocket/contracts/auth';
@@ -82,11 +83,60 @@ const VM_SILENCE_MS = 32000;
 /** Hard cap on how long detection may run before deciding. Must exceed VM_SILENCE_MS. */
 const VM_DECIDE_BY_MS = 45000;
 
+/**
+ * How long the announcement gets to synthesize and play before the legs are joined regardless.
+ *
+ * Two people are already connected and silent at this point, so a wedged voice must not hold them
+ * there. Generous enough that a normal one-line announcement never trips it.
+ */
+const ANNOUNCE_TIMEOUT_MS = 15000;
+
 /** Per-room state tracked for cleanup. */
 type ActiveCall = {
   room: Room;
   connection: LiveKitConnection;
   sessionId: string;
+};
+
+/**
+ * A second agent track published for one dialed leg only.
+ *
+ * Everything in a LiveKit room is heard by everyone subscribed to it, so speaking privately to one
+ * participant means publishing somewhere the others are not listening. The caller is unsubscribed
+ * from this track before a single frame is written to it.
+ */
+type WhisperTrack = {
+  /** Audio source backing the private track. */
+  source: AudioSource;
+  /** SID the subscription calls are made against. */
+  trackSid: string;
+};
+
+/** Everything needed to place a second leg and hold it apart until it is introduced. */
+type DirectConnectParams = {
+  config: LiveKitChannelProviderConfig;
+  projectId: string;
+  /** Calling party's identity as the room knows it, used for subscription control. */
+  callerIdentity: string;
+  /** Calling party's identity as the project knows it, normally their E.164 number. */
+  userId: string;
+  roomName: string;
+  room: Room;
+  /** SID of the agent's conversational track, which the dialed leg must not hear while held. */
+  agentTrackSid: string | undefined;
+  stageId: string | undefined;
+  agentId: string | undefined;
+};
+
+/** {@link DirectConnectParams} plus the leg that was actually placed. */
+type BridgeContext = DirectConnectParams & {
+  rooms: RoomServiceClient;
+  /** Participant identity of the dialed leg. */
+  identity: string;
+  /** The private track to announce over, when one could be opened. */
+  whisper: WhisperTrack | null;
+  /** The rendered line to speak, when the project configured one. */
+  announcement: string | null;
 };
 
 /**
@@ -117,6 +167,7 @@ export class LiveKitChannelHost {
     @inject(ChannelHandlerDispatcher) private readonly dispatcher: ChannelHandlerDispatcher,
     @inject(SessionManager) private readonly sessionManager: SessionManager,
     @inject(SecretRefUtils) private readonly secretRefUtils: SecretRefUtils,
+    @inject(LiveKitAnnouncer) private readonly announcer: LiveKitAnnouncer,
   ) {}
 
   /**
@@ -249,6 +300,11 @@ export class LiveKitChannelHost {
    * number into the same room so caller and destination hear each other. Returns true when a leg
    * was placed.
    *
+   * The two legs are NOT joined the moment the second one answers. The answered leg is held apart
+   * from the caller while it is classified as a person or a recording and, when a person picked
+   * up, while the agent tells them who is calling. Only then are they subscribed to each other.
+   * See {@link completeBridge}.
+   *
    * Two safeguards, both learned the hard way:
    * - The destination is refused if it appears in the provider's `neverDial` list. Any number that
    *   forwards INTO this channel must be listed there, because dialing it sends the call straight
@@ -257,12 +313,10 @@ export class LiveKitChannelHost {
    *   left connected to a voicemail box for two minutes during development.
    *
    * A failure here is never fatal - the caller falls through to normal screening.
-   * @param config - Validated provider config.
-   * @param projectId - Project owning the caller record.
-   * @param userId - Caller identity, normally their E.164 number.
-   * @param roomName - Room to dial the second leg into.
+   * @param params - Caller, room and routing context for the leg.
    */
-  private async tryDirectConnect(config: LiveKitChannelProviderConfig, projectId: string, userId: string, roomName: string, room: Room): Promise<boolean> {
+  private async tryDirectConnect(params: DirectConnectParams): Promise<boolean> {
+    const { config, projectId, userId, roomName, room } = params;
     if (!config.outboundTrunkId) return false;
 
     try {
@@ -278,26 +332,30 @@ export class LiveKitChannelHost {
       }
 
       const httpUrl = config.url.replace(/^ws/, 'http');
-      const sip = new SipClient(httpUrl, config.apiKey, config.apiSecret);
-      await sip.createSipParticipant(config.outboundTrunkId, destination, roomName, {
-        participantIdentity: `direct_${destination}`,
-        participantName: (typeof profile.name === 'string' ? profile.name : 'Direct') + ' line',
-        waitUntilAnswered: false,
-      });
-
-      logger.info({ roomName, userId, destination }, 'LiveKit: dialed a direct-connect leg for a known caller');
-
+      const rooms = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
       const identity = `direct_${destination}`;
-      void this.watchForVoicemail(room, identity, roomName).then(async (isVoicemail) => {
-        if (!isVoicemail) return;
-        try {
-          const rooms = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
-          await rooms.removeParticipant(roomName, identity);
-          logger.warn({ roomName, destination }, 'LiveKit: answered leg was voicemail, hung it up and left the caller with the agent');
-        } catch (error) {
-          logger.error({ error, roomName, identity }, 'LiveKit: failed to remove the voicemail leg');
-        }
-      });
+
+      // Opened before the dial so the private path exists from the moment the leg does. It is a
+      // second published track rather than a gap in the main one because "the caller cannot hear
+      // this" is then a property of the subscription graph, not of getting the timing right.
+      const announcement = this.renderAnnouncement(config.announceTemplate, profile);
+      const whisper = announcement ? await this.openWhisper(room, rooms, roomName, params.callerIdentity) : null;
+
+      try {
+        const sip = new SipClient(httpUrl, config.apiKey, config.apiSecret);
+        await sip.createSipParticipant(config.outboundTrunkId, destination, roomName, {
+          participantIdentity: identity,
+          participantName: (typeof profile.name === 'string' ? profile.name : 'Direct') + ' line',
+          waitUntilAnswered: false,
+        });
+      } catch (error) {
+        await this.closeWhisper(room, whisper);
+        throw error;
+      }
+
+      logger.info({ roomName, userId, destination, announced: Boolean(whisper) }, 'LiveKit: dialed a direct-connect leg for a known caller');
+
+      void this.completeBridge({ ...params, rooms, identity, whisper, announcement });
 
       return true;
     } catch (error) {
@@ -307,21 +365,226 @@ export class LiveKitChannelHost {
   }
 
   /**
+   * Holds the dialed leg apart from the caller, decides who answered, announces, then joins them.
+   *
+   * Runs in the background: the conversation with the caller is already under way, and screening
+   * must keep working whatever this concludes. Every exit path ends with the two legs subscribed
+   * to each other or the leg removed, so a failure degrades to the unannounced bridge that
+   * existed before rather than to two people who cannot hear each other.
+   * @param ctx - The dialed leg plus everything needed to speak to it.
+   */
+  private async completeBridge(ctx: BridgeContext): Promise<void> {
+    const { room, rooms, roomName, identity, whisper, announcement, callerIdentity } = ctx;
+
+    // Captured once, before the leg answers: these are the tracks it must not hear yet.
+    const held = [...this.trackSidsOf(room, callerIdentity), ...(ctx.agentTrackSid ? [ctx.agentTrackSid] : [])];
+    let legTrackSid: string | undefined;
+
+    try {
+      // Applied straight after the dial rather than on answer. The participant exists from the
+      // moment it is dialed and nothing reaches a ringing handset, so this is free to be early.
+      await this.setSubscribed(rooms, roomName, identity, held, false);
+
+      const track = await this.waitForTrack(room, identity, VM_DECIDE_BY_MS);
+      legTrackSid = track?.sid;
+
+      // The caller must not hear the far end being classified: a voicemail greeting, or a
+      // "hello?" that is about to be answered by an announcement they cannot hear. The leg's
+      // track only exists once it answers, so unlike the hold above this cannot be pre-empted and
+      // a fraction of the first syllable can reach the caller.
+      if (legTrackSid) await this.setSubscribed(rooms, roomName, callerIdentity, [legTrackSid], false);
+
+      if (!track) {
+        logger.info({ roomName, identity }, 'LiveKit: no audio from the answered leg, treating as human');
+      } else if (await this.classifyAnsweredLeg(track, identity, roomName)) {
+        await rooms.removeParticipant(roomName, identity);
+        logger.warn({ roomName, identity }, 'LiveKit: answered leg was voicemail, hung it up and left the caller with the agent');
+        return;
+      }
+
+      if (whisper && announcement) {
+        await this.announceTo(whisper, announcement, ctx);
+      }
+
+      await this.joinLegs(rooms, roomName, identity, held, callerIdentity, legTrackSid);
+      logger.info({ roomName, identity, announced: Boolean(whisper && announcement) }, 'LiveKit: joined the caller and the answered leg');
+    } catch (error) {
+      logger.error({ error, roomName, identity }, 'LiveKit: holding the answered leg failed, joining the legs unannounced');
+      await this.joinLegs(rooms, roomName, identity, held, callerIdentity, legTrackSid).catch((joinError) => {
+        logger.error({ error: joinError, roomName, identity }, 'LiveKit: could not join the legs after a failed hold');
+      });
+    } finally {
+      await this.closeWhisper(room, whisper);
+    }
+  }
+
+  /**
+   * Subscribes the caller and the dialed leg to each other, restoring the ordinary room mesh.
+   * @param rooms - Room service client for the LiveKit deployment.
+   * @param roomName - Room both legs are in.
+   * @param identity - Participant identity of the dialed leg.
+   * @param held - Track SIDs the leg was held away from, including the agent's own.
+   * @param callerIdentity - Participant identity of the calling party.
+   * @param legTrackSid - The leg's audio track, once it has published one.
+   */
+  private async joinLegs(rooms: RoomServiceClient, roomName: string, identity: string, held: string[], callerIdentity: string, legTrackSid: string | undefined): Promise<void> {
+    await this.setSubscribed(rooms, roomName, identity, held, true);
+    if (legTrackSid) await this.setSubscribed(rooms, roomName, callerIdentity, [legTrackSid], true);
+  }
+
+  /**
+   * Speaks the announcement into the private track and waits for it to finish playing.
+   *
+   * Bounded by {@link ANNOUNCE_TIMEOUT_MS}: a slow or wedged voice must not leave two connected
+   * people waiting in silence, so the bridge proceeds regardless once the budget is spent.
+   * @param whisper - The private track only the answered leg is subscribed to.
+   * @param text - The rendered announcement.
+   * @param ctx - Routing context, used to find the agent's configured voice.
+   */
+  private async announceTo(whisper: WhisperTrack, text: string, ctx: BridgeContext): Promise<void> {
+    const format = VOICE_SESSION_SETTINGS.receiveAudioFormat;
+
+    const spoken = (async (): Promise<void> => {
+      const audio = await this.announcer.synthesize(ctx.projectId, ctx.stageId, ctx.agentId, text, format);
+      if (!audio) return;
+
+      const frame = pcmToAudioFrame(audio, pcmSampleRate(format));
+      if (!frame) return;
+
+      await whisper.source.captureFrame(frame);
+      await whisper.source.waitForPlayout();
+    })();
+
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        logger.warn({ roomName: ctx.roomName, identity: ctx.identity }, 'LiveKit: the announcement did not finish in time, joining the legs anyway');
+        resolve();
+      }, ANNOUNCE_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([spoken, budget]);
+    } catch (error) {
+      logger.error({ error, roomName: ctx.roomName }, 'LiveKit: the announcement failed, joining the legs unannounced');
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Fills in the configured announcement template for this caller.
+   *
+   * Returns null when there is nothing safe to say - no template configured, or a known caller
+   * with no name on file. The channel never invents wording and never learns a caller's details:
+   * both come from the project's own records.
+   * @param template - The provider's `announceTemplate`, if set.
+   * @param profile - The calling party's stored profile.
+   */
+  private renderAnnouncement(template: string | undefined, profile: Record<string, unknown>): string | null {
+    if (!template) return null;
+
+    const name = typeof profile.name === 'string' ? profile.name.trim() : '';
+    if (!name) return null;
+
+    return template.replace(/\{caller\}/g, name);
+  }
+
+  /**
+   * Publishes a second agent track that only the dialed leg will be subscribed to.
+   *
+   * The caller is unsubscribed from it before anything is ever played, and the track is abandoned
+   * if that call fails: a whisper the caller can hear is worse than no whisper at all.
+   * @param room - The connected room.
+   * @param rooms - Room service client for the LiveKit deployment.
+   * @param roomName - Room to publish into.
+   * @param callerIdentity - Participant identity of the calling party.
+   */
+  private async openWhisper(room: Room, rooms: RoomServiceClient, roomName: string, callerIdentity: string): Promise<WhisperTrack | null> {
+    const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1);
+
+    try {
+      const track = LocalAudioTrack.createAudioTrack('agent-announce', source);
+      const publication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
+      const trackSid = publication?.sid;
+      if (!trackSid) throw new Error('LiveKit returned no SID for the announcement track');
+
+      try {
+        await rooms.updateSubscriptions(roomName, callerIdentity, [trackSid], false);
+      } catch (error) {
+        await room.localParticipant?.unpublishTrack(trackSid, true);
+        throw error;
+      }
+
+      return { source, trackSid };
+    } catch (error) {
+      logger.error({ error, roomName }, 'LiveKit: could not open a private announcement track, the bridge will be silent');
+      await source.close().catch(() => undefined);
+      return null;
+    }
+  }
+
+  /**
+   * Retires the announcement track once the legs are joined or the leg is gone.
+   * @param room - The connected room.
+   * @param whisper - The track to retire, if one was opened.
+   */
+  private async closeWhisper(room: Room, whisper: WhisperTrack | null): Promise<void> {
+    if (!whisper) return;
+
+    try {
+      await room.localParticipant?.unpublishTrack(whisper.trackSid, true);
+    } catch (error) {
+      logger.warn({ error, trackSid: whisper.trackSid }, 'LiveKit: failed to unpublish the announcement track');
+    }
+
+    try {
+      await whisper.source.close();
+    } catch (error) {
+      logger.warn({ error }, 'LiveKit: failed to close the announcement audio source');
+    }
+  }
+
+  /**
+   * Sets an explicit subscription for one participant over a set of tracks.
+   *
+   * Participants join with autoSubscribe, so this is always an override of that default rather
+   * than the first word on the subject.
+   * @param rooms - Room service client for the LiveKit deployment.
+   * @param roomName - Room the participant is in.
+   * @param identity - Participant whose subscriptions are being changed.
+   * @param trackSids - Tracks to change. An empty list is a no-op.
+   * @param subscribed - Whether the participant should hear them.
+   */
+  private async setSubscribed(rooms: RoomServiceClient, roomName: string, identity: string, trackSids: string[], subscribed: boolean): Promise<void> {
+    if (trackSids.length === 0) return;
+    await rooms.updateSubscriptions(roomName, identity, trackSids, subscribed);
+  }
+
+  /**
+   * Track SIDs a remote participant is currently publishing.
+   * @param room - The connected room.
+   * @param identity - Participant to read.
+   */
+  private trackSidsOf(room: Room, identity: string): string[] {
+    const participant = room.remoteParticipants.get(identity);
+    if (!participant) return [];
+
+    return [...participant.trackPublications.values()]
+      .map((publication) => publication.sid)
+      .filter((sid): sid is string => Boolean(sid));
+  }
+
+  /**
    * Listens to an answered outbound leg and decides whether a person or a recording picked up.
    *
    * Returns true when the leg looks like voicemail. Errs towards "human": a wrong answer that
    * keeps a real person connected is far cheaper than one that hangs up on them.
-   * @param room - The connected room.
+   * @param track - The answered leg's audio track.
    * @param identity - Participant identity of the outbound leg.
    * @param roomName - For log context.
    */
-  private async watchForVoicemail(room: Room, identity: string, roomName: string): Promise<boolean> {
-    const track = await this.waitForTrack(room, identity, VM_DECIDE_BY_MS);
-    if (!track) {
-      logger.info({ roomName, identity }, 'LiveKit: no audio from the answered leg, treating as human');
-      return false;
-    }
-
+  private async classifyAnsweredLeg(track: RemoteTrack, identity: string, roomName: string): Promise<boolean> {
     const stream = new AudioStream(track, { sampleRate: INBOUND_SAMPLE_RATE, numChannels: 1, frameSizeMs: INBOUND_FRAME_SIZE_MS });
     const startedAt = Date.now();
     let speechRunMs = 0;
@@ -363,7 +626,6 @@ export class LiveKitChannelHost {
 
     return false;
   }
-
   /**
    * Waits for a named participant to publish a subscribed audio track.
    * @param room - The connected room.
@@ -492,7 +754,7 @@ export class LiveKitChannelHost {
     const outboundSampleRate = pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat);
     const audioSource = new AudioSource(outboundSampleRate, 1);
     const track = LocalAudioTrack.createAudioTrack('agent-voice', audioSource);
-    await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
+    const agentPublication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
 
     const onAiTurnEnd = async (): Promise<void> => {
       const current = this.activeCalls.get(roomName);
@@ -521,12 +783,23 @@ export class LiveKitChannelHost {
     const userId = this.toUserId(callerIdentity);
 
     // A caller the project has marked for direct connection is bridged to a second leg instead of
-    // being screened. The destination comes from that user's profile, never from channel code, so
-    // this stays transport-agnostic and no phone number is baked in here.
+    // being screened. The destination and the name spoken in the announcement come from that
+    // user's profile, never from channel code, so this stays transport-agnostic and no phone
+    // number or caller-specific wording is baked in here.
     // The bridge is attempted in the background and the conversation always starts. If the leg
     // turns out to be voicemail, the agent is already talking to the caller and screening
     // continues - rather than the caller being dropped into a recording with no explanation.
-    void this.tryDirectConnect(config, projectId, userId, roomName, room);
+    void this.tryDirectConnect({
+      config,
+      projectId,
+      callerIdentity,
+      userId,
+      roomName,
+      room,
+      agentTrackSid: agentPublication?.sid,
+      stageId,
+      agentId,
+    });
 
     logger.info({ sessionId, projectId, roomName, userId, stageId, agentId }, 'LiveKit: new voice session created');
 

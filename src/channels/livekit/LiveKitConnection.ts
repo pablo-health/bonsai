@@ -7,6 +7,29 @@ import { isPcmFormat, pcmSampleRate } from '../../services/audio/AudioFormatUtil
 import { logger } from '../../utils/logger';
 
 /**
+ * Converts a little-endian signed 16-bit PCM buffer into a LiveKit {@link AudioFrame}.
+ *
+ * The samples are copied rather than viewed in place: a Node `Buffer` is a slice of a shared pool
+ * and its `byteOffset` is frequently odd, which would make an `Int16Array` view over it throw.
+ * Returns `null` for an empty or odd-length payload.
+ *
+ * Shared with the channel host, which publishes announcement audio onto a second track of its own.
+ * @param audioData - Raw PCM16LE bytes.
+ * @param sampleRate - Sample rate the payload was produced at.
+ */
+export function pcmToAudioFrame(audioData: Buffer, sampleRate: number): AudioFrame | null {
+  const sampleCount = Math.floor(audioData.byteLength / 2);
+  if (sampleCount === 0) return null;
+
+  const samples = new Int16Array(sampleCount);
+  for (let i = 0; i < sampleCount; i++) {
+    samples[i] = audioData.readInt16LE(i * 2);
+  }
+
+  return new AudioFrame(samples, sampleRate, 1, sampleCount);
+}
+
+/**
  * LiveKit-backed implementation of {@link IClientConnection}.
  *
  * Each instance represents one call session inside a LiveKit room. Agent audio is published to
@@ -152,23 +175,11 @@ export class LiveKitConnection implements IClientConnection {
   }
 
   /**
-   * Converts a little-endian signed 16-bit PCM buffer into a LiveKit {@link AudioFrame}.
-   *
-   * The samples are copied rather than viewed in place: a Node `Buffer` is a slice of a shared
-   * pool and its `byteOffset` is frequently odd, which would make an `Int16Array` view over it
-   * throw. Returns `null` for an empty or odd-length payload.
+   * Converts a PCM payload into a frame this connection can capture.
    * @param audioData - Raw PCM16LE bytes.
    * @param sampleRate - Sample rate the payload was produced at.
    */
   private toAudioFrame(audioData: Buffer, sampleRate: number): AudioFrame | null {
-    const sampleCount = Math.floor(audioData.byteLength / 2);
-    if (sampleCount === 0) return null;
-
-    const samples = new Int16Array(sampleCount);
-    for (let i = 0; i < sampleCount; i++) {
-      samples[i] = audioData.readInt16LE(i * 2);
-    }
-
-    return new AudioFrame(samples, sampleRate, 1, sampleCount);
+    return pcmToAudioFrame(audioData, sampleRate);
   }
 }
