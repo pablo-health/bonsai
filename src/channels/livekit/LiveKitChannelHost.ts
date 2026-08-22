@@ -289,11 +289,33 @@ export class LiveKitChannelHost {
           const identity = event.participant?.identity ?? '';
           const agentIdentity = config.identity ?? 'bonsai-agent';
           if (identity === agentIdentity) break;
+
+          // A leg WE dialed is not an inbound caller and must never be screened. LiveKit adds a
+          // SIP participant to the room when the call is DIALED, not when it is answered, so this
+          // webhook fires on every single bridge - and without this guard the agent opened a
+          // second conversation and greeted the number it had just rung with "this is the
+          // assistant, is there something you'd like me to tell him?".
+          if (identity.startsWith(DIRECT_LEG_PREFIX)) {
+            logger.info({ roomName, identity }, 'LiveKit webhook: dialed leg joined, not a caller');
+            break;
+          }
+
           if (this.activeCalls.has(roomName)) break;
           await this.joinRoom(config, projectId, roomName, identity, event.room?.metadata ?? '');
           break;
         }
-        case 'participant_left':
+        case 'participant_left': {
+          // Same rule as the in-room handler: a dialed leg leaving is not the call ending. Tearing
+          // down here also deleted the room from activeCalls, which then let the NEXT dialed-leg
+          // join slip past the guard above and start its own session.
+          const identity = event.participant?.identity ?? '';
+          if (identity.startsWith(DIRECT_LEG_PREFIX)) {
+            logger.info({ roomName, identity }, 'LiveKit webhook: dialed leg left, the caller is still on the line');
+            break;
+          }
+          await this.teardown(roomName);
+          break;
+        }
         case 'room_finished': {
           await this.teardown(roomName);
           break;
