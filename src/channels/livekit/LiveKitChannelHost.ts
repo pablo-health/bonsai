@@ -1241,6 +1241,13 @@ export class LiveKitChannelHost {
     logger.info({ roomName }, 'LiveKit: inbound audio pump started');
 
     let delivered = 0;
+    /**
+     * Frames sent ACROSS to the answering party, counted separately from those delivered to the
+     * runner. Without this the caller-to-leg half of the crossing is invisible: the leg-to-caller
+     * half logs its first frame and its total, so a one-sided bridge looked exactly like a
+     * working one in the logs, and only the far end's own ears could tell the difference.
+     */
+    let crossed = 0;
 
     for await (const frame of stream) {
       // Frames can arrive before the session is registered: subscribing happens as soon as we
@@ -1261,7 +1268,11 @@ export class LiveKitChannelHost {
           await source.captureFrame(frame);
         } catch (error) {
           logger.warn({ error, roomName }, 'LiveKit: dropped a frame on the way to the answering party');
+          continue;
         }
+
+        crossed++;
+        if (crossed === 1) logger.info({ roomName, identity: call.bridge?.identity }, 'LiveKit: the answering party is hearing the caller');
         continue;
       }
 
@@ -1283,7 +1294,7 @@ export class LiveKitChannelHost {
       if (delivered === 1) logger.info({ roomName }, 'LiveKit: first inbound audio frame delivered to the runner');
     }
 
-    logger.info({ roomName, delivered }, 'LiveKit: inbound audio pump ended');
+    logger.info({ roomName, delivered, crossed }, 'LiveKit: inbound audio pump ended');
   }
 
   /**
