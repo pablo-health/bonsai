@@ -14,8 +14,9 @@ extendZodWithOpenApi(z);
  */
 export const amazonPollyTtsProviderConfigSchema = z.strictObject({
   region: z.string().describe('AWS region where Amazon Polly is available (e.g., "us-east-1", "eu-west-1")'),
-  accessKeyId: z.string().describe('AWS access key ID for authenticating with Amazon Polly'),
-  secretAccessKey: z.string().describe('AWS secret access key for authenticating with Amazon Polly'),
+  accessKeyId: z.string().optional().describe('AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)'),
+  secretAccessKey: z.string().optional().describe('AWS secret access key. Omit to use the default credential provider chain'),
+  sessionToken: z.string().optional().describe('AWS session token, when using temporary credentials'),
 });
 
 export type AmazonPollyTtsProviderConfig = z.infer<typeof amazonPollyTtsProviderConfigSchema>;
@@ -81,22 +82,27 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * Initializes the Amazon Polly client with configured credentials
    */
   async init(): Promise<void> {
-    if (!this.config.region || !this.config.accessKeyId || !this.config.secretAccessKey) {
-      const errorMessage = 'Missing required Amazon Polly configuration (region, accessKeyId, or secretAccessKey)';
+    if (!this.config.region) {
+      const errorMessage = 'Missing required Amazon Polly configuration (region)';
       logger.error(`[Amazon Polly TTS] ${errorMessage}`);
       await this.handleError(new Error(errorMessage));
       throw new Error(errorMessage);
     }
 
-    this.pollyClient = new PollyClient({
-      region: this.config.region,
-      credentials: {
+    // Static credentials are optional. Omitting them falls back to the AWS default credential
+    // chain, which resolves an EC2 instance role or ECS task role and keeps long-lived keys out
+    // of the database entirely. This matches the Bedrock and Transcribe providers.
+    const credentials = this.config.accessKeyId && this.config.secretAccessKey
+      ? {
         accessKeyId: this.config.accessKeyId,
         secretAccessKey: this.config.secretAccessKey,
-      },
-    });
+        sessionToken: this.config.sessionToken,
+      }
+      : undefined;
 
-    logger.info(`[Amazon Polly TTS] Initialized with region: ${this.config.region}`);
+    this.pollyClient = new PollyClient({ region: this.config.region, credentials });
+
+    logger.info(`[Amazon Polly TTS] Initialized with region: ${this.config.region} using ${credentials ? 'static credentials' : 'the default credential chain'}`);
   }
 
   /**

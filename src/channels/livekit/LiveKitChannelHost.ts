@@ -34,10 +34,10 @@ import { logger } from '../../utils/logger';
 /**
  * Default session settings for a voice-only LiveKit call.
  *
- * Inbound audio is taken at 48 kHz because that is what LiveKit decodes Opus to natively, and
- * `VadProcessor` accepts 48 kHz directly, so no inbound resampling is needed. Outbound TTS is
- * requested at 16 kHz, which every PCM-capable TTS provider supports; LiveKit resamples it up to
- * the wire codec internally.
+ * The whole path runs at 16 kHz. LiveKit decodes Opus to 48 kHz natively and will resample on
+ * request, but telephony carries no information above ~4 kHz, so 48 kHz would cost CPU and
+ * bandwidth to move upsampled silence. 16 kHz is also what ASR engines are tuned for and is
+ * accepted directly by `VadProcessor`, so nothing downstream has to resample either.
  */
 const VOICE_SESSION_SETTINGS = sessionSettingsSchema.parse({
   sendVoiceInput: true,
@@ -45,12 +45,12 @@ const VOICE_SESSION_SETTINGS = sessionSettingsSchema.parse({
   receiveVoiceOutput: true,
   receiveTranscriptionUpdates: false,
   receiveEvents: false,
-  sendAudioFormat: 'pcm_48000',
+  sendAudioFormat: 'pcm_16000',
   receiveAudioFormat: 'pcm_16000',
 });
 
-/** Sample rate LiveKit delivers inbound audio at, matching `sendAudioFormat` above. */
-const INBOUND_SAMPLE_RATE = 48000;
+/** Sample rate inbound audio is taken at, matching `sendAudioFormat` above. */
+const INBOUND_SAMPLE_RATE = 16000;
 
 /** Frame size requested from the inbound audio stream. Matches typical VAD frame granularity. */
 const INBOUND_FRAME_SIZE_MS = 20;
