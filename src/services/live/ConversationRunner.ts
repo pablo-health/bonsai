@@ -1357,6 +1357,16 @@ export class ConversationRunner {
       }
     }
 
+    // Flush before destroying, otherwise buffered audio is discarded. Cleanup is reached
+    // directly when the far end hangs up - the session closes without a terminal state change -
+    // so relying on changeState() to flush loses the recording on every ordinary call.
+    // flush() is idempotent via its isFlushing guard, so a double call here is harmless.
+    try {
+      await this.recorder?.flush();
+    } catch (error) {
+      logger.warn({ conversationId, error: error instanceof Error ? error.message : String(error) }, 'Failed to flush recording during cleanup');
+    }
+
     this.recorder?.destroy();
     this.recorder = null;
 
