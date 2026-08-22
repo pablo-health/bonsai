@@ -124,8 +124,9 @@ export class LiveKitChannelHost {
   /**
    * Registers the LiveKit webhook route on the given Express application.
    *
-   * The route needs the raw request body for signature verification, so it is mounted with a text
-   * body parser rather than the JSON parser used elsewhere.
+   * No special body parser is needed: the application's global `express.json()` is configured with
+   * a `verify` hook that stashes the untouched request buffer on `req.rawBody`, which is what the
+   * signature is computed over.
    * @param app - The Express application or router.
    */
   registerRoutes(app: any): void {
@@ -150,7 +151,11 @@ export class LiveKitChannelHost {
     }
     const { config, projectId } = resolved;
 
-    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    // The webhook signature covers the RAW request bytes. Re-serialising the parsed body with
+    // JSON.stringify produces different bytes (key order, spacing) and the sha256 check fails.
+    // The global express.json() parser stashes the original buffer on req.rawBody via its verify
+    // hook, so use that; the other branches are only fallbacks for a differently-mounted route.
+    const rawBody = this.readRawBody(req);
     const authHeader = req.get('Authorization') ?? '';
 
     let event;
@@ -198,6 +203,18 @@ export class LiveKitChannelHost {
     } catch (error) {
       logger.error({ error, roomName, event: event.event }, 'LiveKit webhook: failed to handle event');
     }
+  }
+
+  /**
+   * Returns the exact bytes of the request body as a string, for signature verification.
+   * @param req - The inbound Express request.
+   */
+  private readRawBody(req: Request): string {
+    const raw = (req as Request & { rawBody?: Buffer | string }).rawBody;
+    if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+    if (typeof raw === 'string') return raw;
+    if (typeof req.body === 'string') return req.body;
+    return JSON.stringify(req.body);
   }
 
   /**
