@@ -69,10 +69,18 @@ const VM_SPEECH_RMS = 500;
 const VM_MONOLOGUE_MS = 6000;
 /** A person answering pauses within this long. Used to conclude "this is a human" early. */
 const VM_HUMAN_PAUSE_MS = 1500;
-/** Give up and treat the leg as unusable if nothing is heard at all in this long. */
-const VM_SILENCE_MS = 10000;
-/** Hard cap on how long detection may run before deciding. */
-const VM_DECIDE_BY_MS = 20000;
+/**
+ * Give up if nothing is heard at all in this long.
+ *
+ * This MUST exceed the destination's ring time. The participant joins the room when the call is
+ * DIALED, not when it is answered, so the first seconds of the stream are ringing - which is
+ * silence. A window shorter than the ring time hangs up on a real person before they can pick up;
+ * an early version used ten seconds and abandoned a call at eleven, while the phone was still
+ * ringing. US carriers typically ring for 20-25 seconds before voicemail.
+ */
+const VM_SILENCE_MS = 32000;
+/** Hard cap on how long detection may run before deciding. Must exceed VM_SILENCE_MS. */
+const VM_DECIDE_BY_MS = 45000;
 
 /** Per-room state tracked for cleanup. */
 type ActiveCall = {

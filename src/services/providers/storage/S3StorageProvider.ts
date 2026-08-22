@@ -12,8 +12,9 @@ extendZodWithOpenApi(z);
  * S3 storage provider configuration schema
  */
 export const s3StorageProviderConfigSchema = z.strictObject({
-  accessKeyId: z.string().describe('AWS access key ID'),
-  secretAccessKey: z.string().describe('AWS secret access key'),
+  accessKeyId: z.string().optional().describe('AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)'),
+  secretAccessKey: z.string().optional().describe('AWS secret access key. Omit to use the default credential provider chain'),
+  sessionToken: z.string().optional().describe('AWS session token, when using temporary credentials'),
   region: z.string().describe('AWS region (e.g., us-east-1)'),
   endpoint: z.string().optional().describe('Custom endpoint for S3-compatible services (e.g., MinIO)'),
 }).openapi('S3StorageConfig');
@@ -45,11 +46,19 @@ export class S3StorageProvider extends StorageProviderBase<S3StorageProviderConf
 
   async init(): Promise<void> {
     await super.init();
-    this.client = new S3Client({
-      credentials: {
+    // Static credentials are optional. Omitting them falls back to the AWS default credential
+    // chain, which resolves an EC2 instance role or ECS task role and keeps long-lived keys out
+    // of the database. Matches the Bedrock, Transcribe and Polly providers.
+    const credentials = this.config!.accessKeyId && this.config!.secretAccessKey
+      ? {
         accessKeyId: this.config!.accessKeyId,
         secretAccessKey: this.config!.secretAccessKey,
-      },
+        sessionToken: this.config!.sessionToken,
+      }
+      : undefined;
+
+    this.client = new S3Client({
+      credentials,
       region: this.config!.region,
       endpoint: this.config!.endpoint,
       forcePathStyle: !!this.config!.endpoint, // Required for MinIO and other S3-compatible services
