@@ -283,6 +283,7 @@ export class LiveKitChannelHost {
     // Registering afterwards misses it permanently and the agent never hears anything.
     let inputTurnId: string | null = null;
     const onTrack = (remoteTrack: RemoteTrack, _publication: unknown, participant: RemoteParticipant): void => {
+      logger.info({ roomName, participant: participant.identity, kind: participant.kind }, 'LiveKit: track subscribed');
       if (participant.kind === ParticipantKind.AGENT) return;
       this.pumpInboundAudio(remoteTrack, roomName, () => inputTurnId).catch((error) => {
         logger.error({ error, roomName }, 'LiveKit: inbound audio pump failed');
@@ -366,10 +367,17 @@ export class LiveKitChannelHost {
    */
   private async pumpInboundAudio(remoteTrack: RemoteTrack, roomName: string, getInputTurnId: () => string | null): Promise<void> {
     const stream = new AudioStream(remoteTrack, { sampleRate: INBOUND_SAMPLE_RATE, numChannels: 1, frameSizeMs: INBOUND_FRAME_SIZE_MS });
+    logger.info({ roomName }, 'LiveKit: inbound audio pump started');
+
+    let delivered = 0;
 
     for await (const frame of stream) {
+      // Frames can arrive before the session is registered: subscribing happens as soon as we
+      // publish, which is the very thing that makes the SIP side answer, and registration happens
+      // a few statements later. Skip those early frames rather than exiting - breaking here would
+      // end the pump permanently and the agent would never hear the caller.
       const call = this.activeCalls.get(roomName);
-      if (!call) break;
+      if (!call) continue;
       const session = this.sessionManager.getSession(call.sessionId);
       if (!session?.conversationId || !session.runner) continue;
 
@@ -378,7 +386,12 @@ export class LiveKitChannelHost {
 
       const buffer = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
       await session.runner.receiveUserVoiceData(activeInputTurnId ?? '', buffer);
+
+      delivered++;
+      if (delivered === 1) logger.info({ roomName }, 'LiveKit: first inbound audio frame delivered to the runner');
     }
+
+    logger.info({ roomName, delivered }, 'LiveKit: inbound audio pump ended');
   }
 
   /**
