@@ -6,6 +6,7 @@ import { transformEffectValue } from './effectValueTransformer';
 import type { ModifyUserProfileEffect } from '../../types/actions';
 import type { EffectOutcome } from './ActionsExecutor';
 import type { ConversationContext } from './ConversationContextBuilder';
+import { isProtectedProfileField, refuseProtectedWrite } from './ProtectedProfileFields';
 
 /**
  * Executor for the `modify_user_profile` effect.
@@ -33,6 +34,14 @@ export class ModifyUserProfileEffectExecutor {
     try {
       for (const modification of effect.modifications) {
         let { fieldName, value } = modification;
+
+        // Refused before the value is even resolved, and for every operation rather than just
+        // `set`: a `reset` of `known` is as much a change to who may be bridged as a `set` is.
+        if (isProtectedProfileField(fieldName)) {
+          refuseProtectedWrite(fieldName, context.conversationId);
+          continue;
+        }
+
         logger.info({ conversationId: context.conversationId, fieldName, operation: modification.operation }, `Processing user profile modification`);
         value = await transformEffectValue(value, context, this.scriptRunner, this.templatingEngine);
 

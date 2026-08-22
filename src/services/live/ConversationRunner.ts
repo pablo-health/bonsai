@@ -23,6 +23,7 @@ import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
 import { TtsProviderFactory } from "../providers/tts/TtsProviderFactory";
+import { GuardedTtsProvider, VoiceOutputGuard } from "./VoiceOutputGuard";
 import { UserInputProcessor } from "./UserInputProcessor";
 import { TtsSettings } from "../providers/tts/TtsProviderFactory";
 import { ActionsExecutionOutcome, ActionsExecutor, EffectEventCallback } from "./ActionsExecutor";
@@ -572,7 +573,11 @@ export class ConversationRunner {
     if (project.generateVoice && agent.ttsProviderId && this.session.sessionSettings.receiveVoiceOutput) {
       const voiceProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, agent.ttsProviderId) });
       if (voiceProviderEntity && ttsSettings) {
-        stageData.ttsProvider = await this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
+        // Wrapped at the single point the provider is built, so every sendText call site is
+        // covered by construction rather than by remembering. TTS only exists when there is voice
+        // output, which is also the only place the rule matters.
+        const rawTts = await this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
+        stageData.ttsProvider = new GuardedTtsProvider(rawTts, new VoiceOutputGuard());
       }
     }
 
