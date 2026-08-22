@@ -93,9 +93,16 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
   }
 
-  /** @inheritdoc */
+  /**
+   * Supported input formats, best first.
+   *
+   * Order matters: the runner picks the first entry it can supply, so listing 8 kHz first made it
+   * downsample 16 kHz telephony audio before Transcribe ever saw it, measurably hurting accuracy
+   * for nothing. 16 kHz is the sweet spot for Transcribe and is what the LiveKit channel already
+   * delivers, so no conversion happens at all.
+   */
   getSupportedInputFormats(): AudioFormat[] {
-    return ['pcm_8000', 'pcm_16000', 'pcm_24000', 'pcm_48000'];
+    return ['pcm_16000', 'pcm_8000', 'pcm_24000', 'pcm_48000'];
   }
 
   /** @inheritdoc */
