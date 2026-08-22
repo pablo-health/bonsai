@@ -15836,6 +15836,7 @@
               "enum": [
                 "websocket",
                 "webrtc",
+                "livekit",
                 "twilio_voice",
                 "twilio_messaging",
                 "whatsapp",
@@ -16003,6 +16004,7 @@
                   "enum": [
                     "websocket",
                     "webrtc",
+                    "livekit",
                     "twilio_voice",
                     "twilio_messaging",
                     "whatsapp",
@@ -16122,6 +16124,7 @@
                         "enum": [
                           "websocket",
                           "webrtc",
+                          "livekit",
                           "twilio_voice",
                           "twilio_messaging",
                           "whatsapp",
@@ -53959,6 +53962,7 @@
                             "enum": [
                               "websocket",
                               "webrtc",
+                              "livekit",
                               "twilio_voice",
                               "twilio_messaging",
                               "whatsapp",
@@ -54231,6 +54235,7 @@
                                   "enum": [
                                     "websocket",
                                     "webrtc",
+                                    "livekit",
                                     "twilio_voice",
                                     "twilio_messaging",
                                     "whatsapp",
@@ -54398,6 +54403,7 @@
                             "enum": [
                               "websocket",
                               "webrtc",
+                              "livekit",
                               "twilio_voice",
                               "twilio_messaging",
                               "whatsapp",
@@ -54599,6 +54605,7 @@
                             "enum": [
                               "websocket",
                               "webrtc",
+                              "livekit",
                               "twilio_voice",
                               "twilio_messaging",
                               "whatsapp",
@@ -54932,6 +54939,7 @@
                                   "enum": [
                                     "websocket",
                                     "webrtc",
+                                    "livekit",
                                     "twilio_voice",
                                     "twilio_messaging",
                                     "whatsapp",
@@ -59684,6 +59692,39 @@
           },
           "500": {
             "description": "Failed to create peer connection or generate ICE answer"
+          }
+        }
+      }
+    },
+    "/api/livekit/webhook/{channelProviderId}": {
+      "post": {
+        "tags": [
+          "LiveKit"
+        ],
+        "summary": "Receive LiveKit room lifecycle webhooks",
+        "description": "Endpoint for LiveKit server webhooks. Configure this URL in the LiveKit server webhook settings. The request body is a signed JWT-authenticated protobuf/JSON payload; the Authorization header is verified against the API key and secret stored on the referenced channel provider. When a non-agent participant joins a room whose name matches the provider roomPrefix, Bonsai joins the room and starts a conversation.",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Channel provider id holding the LiveKit credentials"
+            },
+            "required": true,
+            "description": "Channel provider id holding the LiveKit credentials",
+            "name": "channelProviderId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event accepted"
+          },
+          "401": {
+            "description": "Webhook signature verification failed"
+          },
+          "404": {
+            "description": "Channel provider not found"
           }
         }
       }

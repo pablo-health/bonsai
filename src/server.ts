@@ -50,6 +50,7 @@ import { getOpenAPISpec } from './swagger';
 import { setSpecProvider } from './services/VersionService';
 import { WebSocketChannelHost } from './channels/websocket/WebSocketChannelHost';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
+import { LiveKitChannelHost } from './channels/livekit/LiveKitChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
@@ -343,6 +344,7 @@ export async function createApp(): Promise<express.Application> {
   projectSnapshotController.registerRoutes(app);
 
   container.resolve(WebRTCChannelHost).registerRoutes(app);
+  container.resolve(LiveKitChannelHost).registerRoutes(app);
   container.resolve(TwilioMessagingChannelHost).registerRoutes(app);
   container.resolve(TwilioVoiceChannelHost).registerRoutes(app);
   container.resolve(WhatsAppChannelHost).registerRoutes(app);

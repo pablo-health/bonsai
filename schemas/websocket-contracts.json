@@ -315,6 +315,7 @@
           "enum": [
             "websocket",
             "webrtc",
+            "livekit",
             "twilio_voice",
             "twilio_messaging",
             "whatsapp",

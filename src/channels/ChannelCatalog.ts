@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { ICommunicationChannel } from './IChannelDescriptor';
 import { WebSocketCommunicationChannel } from './websocket/WebSocketCommunicationChannel';
 import { WebRTCCommunicationChannel } from './webrtc/WebRTCCommunicationChannel';
+import { LiveKitCommunicationChannel } from './livekit/LiveKitCommunicationChannel';
 import { TwilioMessagingCommunicationChannel } from './twilio-messaging/TwilioMessagingCommunicationChannel';
 import { TwilioVoiceCommunicationChannel } from './twilio-voice/TwilioVoiceCommunicationChannel';
 import { WhatsAppCommunicationChannel } from './whatsapp/WhatsAppCommunicationChannel';
@@ -25,6 +26,7 @@ export class ChannelCatalog {
   constructor(
     @inject(WebSocketCommunicationChannel) websocket: WebSocketCommunicationChannel,
     @inject(WebRTCCommunicationChannel) webrtc: WebRTCCommunicationChannel,
+    @inject(LiveKitCommunicationChannel) livekit: LiveKitCommunicationChannel,
     @inject(TwilioMessagingCommunicationChannel) twilioMessaging: TwilioMessagingCommunicationChannel,
     @inject(TwilioVoiceCommunicationChannel) twilioVoice: TwilioVoiceCommunicationChannel,
     @inject(WhatsAppCommunicationChannel) whatsApp: WhatsAppCommunicationChannel,
@@ -33,7 +35,7 @@ export class ChannelCatalog {
     // @inject(SesCommunicationChannel) ses: SesCommunicationChannel,
     @inject(SmtpImapCommunicationChannel) smtpImap: SmtpImapCommunicationChannel,
   ) {
-    const entries: ICommunicationChannel[] = [websocket, webrtc, twilioMessaging, twilioVoice, whatsApp, telegram, smtpImap];
+    const entries: ICommunicationChannel[] = [websocket, webrtc, livekit, twilioMessaging, twilioVoice, whatsApp, telegram, smtpImap];
     this.channels = new Map(entries.map((c) => [c.getType(), c]));
   }
 

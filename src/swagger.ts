@@ -123,6 +123,7 @@ import { ProjectSnapshotController } from './http/controllers/ProjectSnapshotCon
 import { createQuickPromptSchema, createProjectQuickPromptSchema, updateQuickPromptBodySchema, deleteQuickPromptBodySchema, cloneQuickPromptSchema, quickPromptResponseSchema, quickPromptListResponseSchema, quickPromptRouteParamsSchema, quickPromptProjectRouteParamsSchema } from './http/contracts/quickPrompt';
 import { deferredProcessingResponseSchema, deferredProcessingListResponseSchema, rescheduleDeferredProcessingBodySchema, cancelDeferredProcessingBodySchema } from './http/contracts/deferredProcessing';
 import { WebRTCChannelHost } from './channels/webrtc/WebRTCChannelHost';
+import { LiveKitChannelHost } from './channels/livekit/LiveKitChannelHost';
 import { TwilioVoiceChannelHost } from './channels/twilio-voice/TwilioVoiceChannelHost';
 import { TwilioMessagingChannelHost } from './channels/twilio-messaging/TwilioMessagingChannelHost';
 import { WhatsAppChannelHost } from './channels/whatsapp/WhatsAppChannelHost';
@@ -654,6 +655,12 @@ export function getOpenAPISpec(): any {
   // Register WebRTC signaling routes
   const webRTCPaths = WebRTCChannelHost.getOpenAPIPaths();
   for (const path of webRTCPaths) {
+    registry.registerPath(path);
+  }
+
+  // Register LiveKit webhook route
+  const liveKitPaths = LiveKitChannelHost.getOpenAPIPaths();
+  for (const path of liveKitPaths) {
     registry.registerPath(path);
   }
 
