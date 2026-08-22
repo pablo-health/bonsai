@@ -277,14 +277,33 @@ export class LiveKitChannelHost {
     const jwt = await token.toJwt();
 
     const room = new Room();
+
+    // Handlers must be attached BEFORE connect. With autoSubscribe the caller's track is often
+    // already published by the time we join, so TrackSubscribed can fire during connect().
+    // Registering afterwards misses it permanently and the agent never hears anything.
+    let inputTurnId: string | null = null;
+    const onTrack = (remoteTrack: RemoteTrack, _publication: unknown, participant: RemoteParticipant): void => {
+      if (participant.kind === ParticipantKind.AGENT) return;
+      this.pumpInboundAudio(remoteTrack, roomName, () => inputTurnId).catch((error) => {
+        logger.error({ error, roomName }, 'LiveKit: inbound audio pump failed');
+      });
+    };
+    room.on(RoomEvent.TrackSubscribed, onTrack);
+
+    room.on(RoomEvent.ParticipantDisconnected, () => {
+      this.teardown(roomName).catch((error) => logger.error({ error, roomName }, 'LiveKit: teardown after participant disconnect failed'));
+    });
+
+    room.on(RoomEvent.Disconnected, () => {
+      this.teardown(roomName).catch((error) => logger.error({ error, roomName }, 'LiveKit: teardown after room disconnect failed'));
+    });
+
     await room.connect(config.url, jwt, { autoSubscribe: true, dynacast: false });
 
     const outboundSampleRate = pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat);
     const audioSource = new AudioSource(outboundSampleRate, 1);
     const track = LocalAudioTrack.createAudioTrack('agent-voice', audioSource);
     await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
-
-    let inputTurnId: string | null = null;
 
     const onAiTurnEnd = async (): Promise<void> => {
       const current = this.activeCalls.get(roomName);
@@ -317,22 +336,22 @@ export class LiveKitChannelHost {
     const startMsg: CALInputMessage = { type: 'start_conversation', userId, stageId, agentId, correlationId: undefined };
     await this.dispatcher.dispatch(startMsg, this.buildContext(session));
 
-    inputTurnId = await this.dispatchStartUserVoiceInput(session);
+    // Deliberately NOT opening a user voice turn here. start_conversation kicks off the
+    // greeting, so the runner is in generating_response and would reject it. The turn opens in
+    // onAiTurnEnd once the greeting has finished playing out.
 
-    room.on(RoomEvent.TrackSubscribed, (remoteTrack: RemoteTrack, _publication, participant: RemoteParticipant) => {
-      if (participant.kind === ParticipantKind.AGENT) return;
-      this.pumpInboundAudio(remoteTrack, roomName, () => inputTurnId).catch((error) => {
-        logger.error({ error, roomName }, 'LiveKit: inbound audio pump failed');
-      });
-    });
-
-    room.on(RoomEvent.ParticipantDisconnected, () => {
-      this.teardown(roomName).catch((error) => logger.error({ error, roomName }, 'LiveKit: teardown after participant disconnect failed'));
-    });
-
-    room.on(RoomEvent.Disconnected, () => {
-      this.teardown(roomName).catch((error) => logger.error({ error, roomName }, 'LiveKit: teardown after room disconnect failed'));
-    });
+    // Catch tracks that were already subscribed before the handlers above were attached, which
+    // happens whenever the caller published before we joined.
+    for (const participant of room.remoteParticipants.values()) {
+      if (participant.kind === ParticipantKind.AGENT) continue;
+      for (const publication of participant.trackPublications.values()) {
+        const existing = publication.track;
+        if (existing) {
+          logger.info({ roomName, participant: participant.identity }, 'LiveKit: picking up an already-subscribed track');
+          onTrack(existing as RemoteTrack, publication, participant);
+        }
+      }
+    }
   }
 
   /**
