@@ -92,6 +92,14 @@ const VM_DECIDE_BY_MS = 45000;
  */
 const ANNOUNCE_TIMEOUT_MS = 15000;
 
+/**
+ * Identity prefix for a leg this channel dialed out, as opposed to a caller who dialed in.
+ *
+ * The channel names these participants itself, so matching on the prefix keeps the distinction
+ * inside the channel and out of any phone number.
+ */
+const DIRECT_LEG_PREFIX = 'direct_';
+
 /** Variable the relayed message is written to when the provider does not name one. */
 const DEFAULT_RELAY_VARIABLE = 'handoffMessage';
 
@@ -338,7 +346,7 @@ export class LiveKitChannelHost {
 
       const httpUrl = config.url.replace(/^ws/, 'http');
       const rooms = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
-      const identity = `direct_${destination}`;
+      const identity = `${DIRECT_LEG_PREFIX}${destination}`;
 
       // Opened before the dial so the private path exists from the moment the leg does. It is a
       // second published track rather than a gap in the main one because "the caller cannot hear
@@ -570,7 +578,11 @@ export class LiveKitChannelHost {
 
     try {
       const track = LocalAudioTrack.createAudioTrack('agent-announce', source);
-      const publication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
+      // Deliberately NOT SOURCE_MICROPHONE. That slot already holds the agent's conversational
+      // track, and publishing a second microphone track under the same participant left the
+      // first one in a state where captureFrame threw InvalidState - the agent went silent to
+      // the caller for the rest of the call while the announcement itself worked fine.
+      const publication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_UNKNOWN }));
       const trackSid = publication?.sid;
       if (!trackSid) throw new Error('LiveKit returned no SID for the announcement track');
 
@@ -673,13 +685,21 @@ export class LiveKitChannelHost {
             return true;
           }
         } else {
+          silenceRunMs += INBOUND_FRAME_SIZE_MS;
+
           // A pause after speech is the signature of a person waiting for a reply.
+          //
+          // The increment has to come FIRST and nothing may reset speechRunMs here. An earlier
+          // version tested before incrementing and then zeroed speechRunMs on the very frame
+          // where the pause reached its threshold - so by the next frame the `speechRunMs > 0`
+          // guard was false and this branch could never fire at all. Detection then ran to its
+          // 45-second cap on every call. That was survivable while the bridge connected
+          // immediately and only used the verdict to hang up on voicemail; it became fatal the
+          // moment the announcement started waiting on it.
           if (heardAnything && speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) {
             logger.info({ roomName, identity, speechRunMs }, 'LiveKit: speech then a pause, treating as a person');
             return false;
           }
-          silenceRunMs += INBOUND_FRAME_SIZE_MS;
-          if (speechRunMs > 0 && silenceRunMs >= VM_HUMAN_PAUSE_MS) speechRunMs = 0;
         }
 
         if (!heardAnything && Date.now() - startedAt > VM_SILENCE_MS) {
@@ -800,6 +820,16 @@ export class LiveKitChannelHost {
     const onTrack = (remoteTrack: RemoteTrack, _publication: unknown, participant: RemoteParticipant): void => {
       logger.info({ roomName, participant: participant.identity, kind: participant.kind }, 'LiveKit: track subscribed');
       if (participant.kind === ParticipantKind.AGENT) return;
+
+      // A dialed leg is not the user. Pumping it into the runner would put whatever the
+      // answering party says - including a private "not now, tell her I'll call back" that the
+      // caller is deliberately not subscribed to - into the caller's own transcript, and from
+      // there into the call summary. The agent listens to this leg through the bridge path
+      // instead, which reads the track directly.
+      if (participant.identity.startsWith(DIRECT_LEG_PREFIX)) {
+        logger.info({ roomName, participant: participant.identity }, 'LiveKit: dialed leg, not routing it into the conversation');
+        return;
+      }
       const key = remoteTrack.sid ?? `${participant.identity}:${remoteTrack.name}`;
       if (pumped.has(key)) {
         logger.debug({ roomName, key }, 'LiveKit: track already being pumped, ignoring duplicate');
