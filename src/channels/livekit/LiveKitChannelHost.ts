@@ -1457,6 +1457,12 @@ export class LiveKitChannelHost {
       // never addressed to it, over the top of a real conversation. It is still publishing into
       // this room and can be given the call back at any point - see `dropBridge`.
       if (call.state === 'bridged') {
+        // Once the leg has been MOVED there is nothing to pump: the two are in one room and the
+        // SFU forwards between them. Copying frames into the bridge room's source would be worse
+        // than useless - that room has no listener left in it, and the log line it emits claims
+        // an audio path that is not the one carrying the call.
+        if (call.bridge?.moved) continue;
+
         const source = call.bridge?.toLeg;
         if (!source) continue;
         try {
