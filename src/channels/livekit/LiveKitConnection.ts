@@ -93,6 +93,14 @@ export class LiveKitConnection implements IClientConnection {
     private readonly sessionManager: SessionManager,
     /** Called once buffered agent audio has finished playing, to open the next user input turn. */
     private readonly onAiTurnEnd: () => Promise<void>,
+    /**
+     * Called for every conversation event the runner emits.
+     *
+     * The runner forwards all of them here - classifications, stage jumps, transformations - and
+     * the channel watches for the ones that mean something to a phone call. A stage change is how
+     * the conversation tells the channel to do something it cannot do itself, like dial.
+     */
+    private readonly onConversationEvent?: (eventType: string, eventData: Record<string, unknown>) => void,
   ) {}
 
   /**
@@ -150,6 +158,12 @@ export class LiveKitConnection implements IClientConnection {
         break;
       }
       case 'conversation_event': {
+        try {
+          this.onConversationEvent?.(msg.eventType, (msg.eventData ?? {}) as Record<string, unknown>);
+        } catch (error) {
+          logger.warn({ error, eventType: msg.eventType }, 'LiveKit: conversation event handler failed');
+        }
+
         // The runner has ended the conversation. On a phone call that has to mean HANGING UP -
         // there is no window to close and no client to navigate away, so a caller who has said
         // goodbye is otherwise left holding a live line, working out whether they are supposed

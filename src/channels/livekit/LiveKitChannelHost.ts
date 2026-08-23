@@ -289,6 +289,14 @@ type BridgeLeg = {
 type DirectConnectParams = {
   config: LiveKitChannelProviderConfig;
   projectId: string;
+  /**
+   * Where to dial, when the line decides it rather than the caller's profile.
+   *
+   * A known-caller line reads `profile.transferTo` - the destination belongs to the person
+   * calling. A line that screens strangers has no profile to read, so the destination belongs to
+   * the LINE and is passed in.
+   */
+  destination?: string;
   /** Calling party's identity as the project knows it, normally their E.164 number. */
   userId: string;
   /** The caller's room, which is the key every call is tracked under. */
@@ -538,7 +546,8 @@ export class LiveKitChannelHost {
     try {
       const record = await db.query.users.findFirst({ where: and(eq(users.projectId, projectId), eq(users.id, userId)) });
       const profile = (record?.profile ?? {}) as Record<string, unknown>;
-      const destination = typeof profile.transferTo === 'string' ? profile.transferTo.trim() : '';
+      const fromProfile = typeof profile.transferTo === 'string' ? profile.transferTo.trim() : '';
+      const destination = (params.destination ?? '').trim() || fromProfile;
       if (!destination) return false;
 
       const refused = (config.neverDial ?? []).map((n) => n.trim());
@@ -1440,7 +1449,9 @@ export class LiveKitChannelHost {
       // Waiting is also simply the right order. The promise should land before the ringing
       // starts, which is what a human transfer sounds like: you are told you are being put
       // through, and then you hear the phone ring. The cost is the length of one greeting.
-      if (!bridgeAttempted) {
+      // A line that ESCALATES decides mid-conversation, not on sight - dialling at the end of the
+      // greeting would put every stranger through before they had said a word.
+      if (!bridgeAttempted && !config.escalateStageId) {
         bridgeAttempted = true;
         void this.tryDirectConnect({
           config, projectId, userId, roomName, room, stageId, agentId,
@@ -1451,7 +1462,29 @@ export class LiveKitChannelHost {
       if (newId) inputTurnId = newId;
     };
 
-    const connection = new LiveKitConnection(room, audioSource, this.sessionManager, onAiTurnEnd);
+    /**
+     * Watches for the conversation asking to be put through.
+     *
+     * A stranger has no profile and therefore no `transferTo`, so nothing about the caller can
+     * decide this - only the conversation can, once they have said who they are and why they
+     * called. It says so by moving to the escalation stage, which is a thing the model can be
+     * given an action for; dialling is not.
+     */
+    const onConversationEvent = (eventType: string, eventData: Record<string, unknown>): void => {
+      if (eventType !== 'jump_to_stage') return;
+      const escalateStageId = config.escalateStageId;
+      if (!escalateStageId || eventData.toStageId !== escalateStageId) return;
+      if (bridgeAttempted) return;
+
+      bridgeAttempted = true;
+      logger.info({ roomName, escalateStageId }, 'LiveKit: the conversation asked to put this caller through');
+      void this.tryDirectConnect({
+        config, projectId, userId, roomName, room, stageId, agentId,
+        destination: config.escalateTo,
+      });
+    };
+
+    const connection = new LiveKitConnection(room, audioSource, this.sessionManager, onAiTurnEnd, onConversationEvent);
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     if (!session) {
