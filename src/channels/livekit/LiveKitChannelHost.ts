@@ -60,6 +60,26 @@ const INBOUND_SAMPLE_RATE = 16000;
 const INBOUND_FRAME_SIZE_MS = 20;
 
 /**
+ * Jitter buffer for the two sources that carry a live conversation between two people.
+ *
+ * `AudioSource` defaults to a ONE SECOND queue. That is a reasonable default for speech
+ * synthesis, which arrives in bursts and wants somewhere to sit, and a terrible one for a bridge:
+ * with a source in each direction it puts up to two seconds into a round trip, and it does not
+ * recover. `AudioStream` delivers in bursts, the queue absorbs them, and playout is real time -
+ * so once the queue has filled it simply stays that far behind for the rest of the call. Two
+ * people in the same room heard each other through their handsets a second and a half late.
+ *
+ * 100ms is five frames: enough to absorb ordinary network jitter, short enough that the delay it
+ * can accumulate is inaudible. Telephony budgets around 150ms one way in total, so this is the
+ * only part of the path we control that could have spent it.
+ *
+ * The producer is not starved by the smaller queue - `captureFrame` simply applies backpressure
+ * sooner, which is correct for a real-time source and harmless for the announcement, since
+ * `waitForPlayout` still reports the queue draining.
+ */
+const BRIDGE_QUEUE_MS = 100;
+
+/**
  * Voicemail detection thresholds for an answered outbound leg.
  *
  * Carriers answer for voicemail exactly as they answer for a person - 200 OK and media - so the
@@ -632,7 +652,7 @@ export class LiveKitChannelHost {
     const { room, roomName, leg } = ctx;
 
     try {
-      const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1);
+      const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1, BRIDGE_QUEUE_MS);
       const track = LocalAudioTrack.createAudioTrack('bridge-voice', source);
       // Deliberately NOT SOURCE_MICROPHONE. That slot already holds the agent's conversational
       // track in this room, and publishing a second microphone track under one participant left
@@ -723,7 +743,7 @@ export class LiveKitChannelHost {
     const agentIdentity = agentIdentityFor(config.identity, roomName);
 
     const room = new Room();
-    const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1);
+    const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1, BRIDGE_QUEUE_MS);
     const leg: BridgeLeg = {
       room, roomName, identity, rooms, callerRoom, callerRoomName,
       toLeg: source, toCaller: null, toCallerSid: undefined, closed: false,
