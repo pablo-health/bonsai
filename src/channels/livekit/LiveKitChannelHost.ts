@@ -1449,13 +1449,18 @@ export class LiveKitChannelHost {
       // Waiting is also simply the right order. The promise should land before the ringing
       // starts, which is what a human transfer sounds like: you are told you are being put
       // through, and then you hear the phone ring. The cost is the length of one greeting.
-      // A line that ESCALATES decides mid-conversation, not on sight - dialling at the end of the
-      // greeting would put every stranger through before they had said a word.
-      if (!bridgeAttempted && !config.escalateStageId) {
-        bridgeAttempted = true;
-        void this.tryDirectConnect({
+      // BOTH SHAPES COEXIST ON ONE LINE. Someone the project knows has a transferTo and is put
+      // through on sight - they should not have to explain themselves to reach a person they
+      // already know. A stranger has no transferTo, so this attempt declines, and the decision
+      // moves to the conversation, which escalates them if they earn it.
+      //
+      // The flag is therefore set by the RESULT, not by having tried: marking the attempt done
+      // when nothing was dialled would block the escalation that is the whole point of the line.
+      if (!bridgeAttempted) {
+        const placed = await this.tryDirectConnect({
           config, projectId, userId, roomName, room, stageId, agentId,
         });
+        if (placed) bridgeAttempted = true;
       }
 
       const newId = await this.dispatchStartUserVoiceInput(session);

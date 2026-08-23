@@ -94,7 +94,7 @@ describe('VoiceOutputGuard', () => {
       const inner = new RecordingTts();
       const wrapped = new GuardedTtsProvider(inner, new VoiceOutputGuard());
       await wrapped.start();
-      await wrapped.sendText('Hi, this is Kurt.s assistant. Can I take a message?');
+      await wrapped.sendText('Hi, this is the assistant. Can I take a message?');
       await wrapped.end();
       expect(inner.all()).to.include('Can I take a message?');
     });
@@ -108,6 +108,41 @@ describe('VoiceOutputGuard', () => {
       await wrapped.end();
       expect(inner.all()).to.not.include('half a sentence');
     });
+  });
+});
+
+describe('VoiceOutputGuard caller echo', () => {
+  it('reads back a number the caller just gave', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerSpeech('You can reach me at 404-555-0182.');
+    const spoken = guard.screen('Let me read that back: 404-555-0182?');
+    expect(spoken).to.contain('404-555-0182');
+  });
+
+  it('still refuses a number the caller never said', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerSpeech('You can reach me at 404-555-0182.');
+    // The number the agent would be disclosing is not the caller's, so the exemption must not
+    // apply just because SOME number was heard earlier in the call.
+    expect(guard.screen('You can call the office on 404-555-0199.')).to.not.contain('0199');
+  });
+
+  it('refuses when the caller has said nothing at all', () => {
+    const guard = new VoiceOutputGuard();
+    expect(guard.screen('The reference is 8891 2247.')).to.not.contain('8891');
+  });
+
+  it('matches across grouping and spelling', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerSpeech('my number is five five five, oh one eight two');
+    expect(guard.screen('So that is 555-0182?')).to.contain('555-0182');
+  });
+
+  it('blocks a sentence that pairs the caller.s number with an unknown one', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerSpeech('reach me at 404-555-0182');
+    const spoken = guard.screen('I have 404-555-0182, and the direct line is 404-555-0143.');
+    expect(spoken).to.not.contain('0143');
   });
 });
 

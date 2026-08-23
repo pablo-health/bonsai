@@ -14,6 +14,8 @@ type OutputRule = {
   name: string;
   test: RegExp;
   replacement: string;
+  /** When true, the sentence is allowed if every digit run in it was spoken by the caller. */
+  allowCallerEcho?: boolean;
 };
 
 /**
@@ -52,13 +54,40 @@ const RULES: OutputRule[] = [
     name: 'digits',
     test: DIGIT_RUN,
     replacement: "I'm not able to give out numbers on this call.",
+    allowCallerEcho: true,
   },
   {
     name: 'digits-spelled',
     test: SPELLED_DIGIT_RUN,
     replacement: "I'm not able to give out numbers on this call.",
+    allowCallerEcho: true,
   },
 ];
+
+/** Number words to digits, so a run written either way normalises to the same string. */
+const WORD_DIGITS: Record<string, string> = {
+  zero: '0', oh: '0', one: '1', two: '2', three: '3', four: '4',
+  five: '5', six: '6', seven: '7', eight: '8', nine: '9',
+};
+
+/**
+ * Every long digit run in a piece of text, each reduced to bare digits.
+ *
+ * Grouping and spelling are noise here: a number read back as "555-0182", "555 0182" or
+ * "five five five oh one eight two" is the same number, and a comparison that treats them as
+ * different would defeat the echo exemption exactly when a caller speaks naturally.
+ */
+function digitRuns(text: string): string[] {
+  const normalised = text
+    .toLowerCase()
+    .replace(/\b(zero|oh|one|two|three|four|five|six|seven|eight|nine)\b/g, (w) => WORD_DIGITS[w]);
+  // Commas count as separators HERE but not in DIGIT_RUN, and the asymmetry is deliberate. For
+  // detection a comma-tolerant pattern would swallow "in 2024, 15 minutes" as one long run and
+  // refuse a perfectly ordinary sentence. For comparison the opposite is true: a caller reading
+  // a number aloud is transcribed with commas in it, and splitting there makes their own number
+  // look like two shorter ones that match nothing.
+  return (normalised.match(/(?:\d[\s.,\-()]*){4,}/g) ?? []).map((run) => run.replace(/\D/g, ''));
+}
 
 /** What the guard did to one sentence, for logging and for the call record. */
 export type GuardViolation = {
@@ -70,9 +99,15 @@ export type GuardViolation = {
 /**
  * Deterministic gate on everything the agent says out loud.
  *
- * Scoped tightly on purpose. It holds exactly one rule - never read a long digit sequence aloud -
- * because that rule is exactly expressible as a pattern, and anything exactly expressible should
- * be certain rather than probable. Judgement calls stay in the prompt where they belong.
+ * Scoped tightly on purpose. It holds exactly one rule - never say a long digit sequence the
+ * caller did not say first - because that rule is exactly expressible as a pattern, and anything
+ * exactly expressible should be certain rather than probable. Judgement calls stay in the prompt
+ * where they belong.
+ *
+ * The echo exemption is what makes the rule usable on a line that takes messages rather than
+ * screens them. Without it the guard is not merely strict, it is wrong: it fires on the single
+ * most important sentence a reception line says, the one reading a caller's number back to check
+ * it, and substitutes a refusal that sounds like a policy the practice chose.
  *
  * A regex and not a classifier, for the same reason. Bonsai's own guardrails are
  * classifier-driven, which is a second model rather than no model, and "the guard usually fires"
@@ -84,6 +119,24 @@ export type GuardViolation = {
  */
 export class VoiceOutputGuard {
   private readonly violations: GuardViolation[] = [];
+  /** Digit runs the CALLER has spoken this conversation, normalised to bare digits. */
+  private readonly callerDigits = new Set<string>();
+
+  /**
+   * Records what the caller said, so the guard can tell an echo from a disclosure.
+   *
+   * Called for each finalised caller turn. Only digit runs are kept - the guard has no use for
+   * the rest of the sentence, and not keeping it means the guard never becomes a second copy of
+   * the transcript.
+   */
+  noteCallerSpeech(text: string): void {
+    // Bounded: a long call should not let the set grow without limit, and a caller who has
+    // recited sixty-four distinct numbers is not the case this exemption exists for.
+    for (const run of digitRuns(text)) {
+      if (this.callerDigits.size >= 64) return;
+      this.callerDigits.add(run);
+    }
+  }
 
   /**
    * Screens one complete sentence, returning what should be spoken in its place.
@@ -94,12 +147,31 @@ export class VoiceOutputGuard {
 
     for (const rule of RULES) {
       if (!rule.test.test(sentence)) continue;
+      if (rule.allowCallerEcho && this.isCallerEcho(sentence)) continue;
 
       this.record(rule.name, sentence, rule.replacement);
       return rule.replacement;
     }
 
     return sentence;
+  }
+
+  /**
+   * True when every long digit run in the sentence is one the caller themselves spoke.
+   *
+   * The rule this preserves is "never volunteer or invent a number", not "never say digits". A
+   * reception line has to read a callback number back to check it, and refusing to is both
+   * useless and conspicuous. Repeating what the caller just said discloses nothing they do not
+   * already know, while a number the agent produced from anywhere else - the operator's own
+   * details, a fabricated card number - still cannot be spoken.
+   *
+   * EVERY run must match, so a sentence that pairs the caller's number with an unknown one is
+   * still blocked rather than smuggled through on the strength of the half that checks out.
+   */
+  private isCallerEcho(sentence: string): boolean {
+    const runs = digitRuns(sentence);
+    if (runs.length === 0) return false;
+    return runs.every((run) => this.callerDigits.has(run));
   }
 
   /** Everything the guard changed this session. */

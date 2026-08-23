@@ -256,6 +256,14 @@ export class ConversationRunner {
   }
 
   /** Per-turn runtime data: correlation IDs, timing markers, and event tracking for the active input/output turn */
+  /**
+   * Held rather than discarded at construction so each finalised caller turn can be fed to
+   * it. The guard has to know what the caller said in order to tell a read-back from a
+   * disclosure; without the feed its echo exemption can never fire and it silently reverts
+   * to refusing every number.
+   */
+  private voiceOutputGuard: VoiceOutputGuard | null = null;
+
   private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
   /**
@@ -577,7 +585,8 @@ export class ConversationRunner {
         // covered by construction rather than by remembering. TTS only exists when there is voice
         // output, which is also the only place the rule matters.
         const rawTts = await this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
-        stageData.ttsProvider = new GuardedTtsProvider(rawTts, new VoiceOutputGuard());
+        this.voiceOutputGuard = new VoiceOutputGuard();
+        stageData.ttsProvider = new GuardedTtsProvider(rawTts, this.voiceOutputGuard);
       }
     }
 
@@ -2460,6 +2469,10 @@ export class ConversationRunner {
     await this.changeState('processing_user_input');
 
     // Let's save the message event to fill data about timing and user input after moderation and processing
+    // Before anything else does: the guard needs the caller's own words to distinguish reading a
+    // number back from giving one out.
+    this.voiceOutputGuard?.noteCallerSpeech(userInput || '');
+
     const preliminaryMessageEventData: MessageEventData = {
       role: 'user',
       text: userInput || '',
