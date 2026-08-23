@@ -716,6 +716,17 @@ export class LiveKitChannelHost {
   private async pumpLegToCaller(leg: BridgeLeg, frames: AsyncIterator<AudioFrame>): Promise<void> {
     const roomName = leg.callerRoomName;
     let delivered = 0;
+    /**
+     * How much audio is sitting in each direction's queue, sampled while the call runs.
+     *
+     * This is the part of the delay we own, measured rather than assumed. The default queue was
+     * one second and nobody knew until two people in the same apartment heard each other late;
+     * the fix was picked by reading a default, not by reading a number. Peak matters more than
+     * mean - a queue that fills once and stays full is exactly the failure mode here, and an
+     * average hides it.
+     */
+    let peakToCallerMs = 0;
+    let peakToLegMs = 0;
 
     try {
       while (!leg.closed) {
@@ -735,12 +746,25 @@ export class LiveKitChannelHost {
 
         delivered++;
         if (delivered === 1) logger.info({ roomName, identity: leg.identity }, 'LiveKit: the caller is hearing the answering party');
+
+        // Sampled once a second rather than per frame: this is diagnostics on a live call, and
+        // the queue cannot change meaningfully inside 20ms.
+        if (delivered % 50 === 0) {
+          peakToCallerMs = Math.max(peakToCallerMs, Math.round((source.queuedDuration ?? 0) * 1000));
+          peakToLegMs = Math.max(peakToLegMs, Math.round((leg.toLeg.queuedDuration ?? 0) * 1000));
+        }
       }
     } catch (error) {
       logger.error({ error, roomName, identity: leg.identity }, 'LiveKit: the leg-to-caller audio path failed');
     } finally {
       await frames.return?.().catch(() => undefined);
-      logger.info({ roomName, identity: leg.identity, delivered }, 'LiveKit: leg-to-caller audio ended');
+      logger.info({
+        roomName, identity: leg.identity, delivered,
+        // The delay this bridge added, per direction, at its worst.
+        peakQueueToCallerMs: peakToCallerMs,
+        peakQueueToLegMs: peakToLegMs,
+        queueCapMs: BRIDGE_QUEUE_MS,
+      }, 'LiveKit: leg-to-caller audio ended');
     }
   }
 
