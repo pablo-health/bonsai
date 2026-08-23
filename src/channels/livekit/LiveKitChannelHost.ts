@@ -198,6 +198,52 @@ const BRIDGE_ROOM_PREFIX = 'bridge_';
  * @param configured - The provider's `identity`, if set.
  * @param roomName - Room being joined.
  */
+/**
+ * Everything the carrier said about a caller, recorded once when they arrive.
+ *
+ * The SIP gateway puts its metadata on the participant as `sip.*` attributes. Those carry the
+ * carrier's call id, which is the ONLY value that appears in both Twilio's records and ours -
+ * without it, reconstructing a single call means grepping three systems and matching on
+ * timestamps.
+ *
+ * Two fields deserve naming:
+ *
+ *   name           Where a caller ID NAME would appear. In North America it never does on an
+ *                  inbound trunk: CNAM is looked up by the receiving carrier at delivery time
+ *                  and does not travel in the signalling, so the gateway synthesises a display
+ *                  name from the number instead. Captured anyway - the field costs nothing, and
+ *                  a carrier that starts sending one should show up here rather than be noticed
+ *                  a month later.
+ *
+ *   attestation    STIR/SHAKEN, when the trunk is configured to pass it through. Worth more to a
+ *                  screener than a name would be: 'A' means the originating carrier vouches that
+ *                  this caller is entitled to the number they are displaying, and a spoofed
+ *                  number is most of what a screener exists to catch. It is also free, which
+ *                  CNAM is not.
+ */
+function logCallerMetadata(roomName: string, participant: { identity?: string; name?: string; attributes?: Record<string, string> } | undefined): void {
+  if (!participant) return;
+
+  const attributes = participant.attributes ?? {};
+  const sip: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key.startsWith('sip.')) sip[key] = value;
+  }
+
+  // A synthesised "Phone +1..." is the absence of a name, not a name. Reporting it as one would
+  // make every call look like it carried caller ID.
+  const rawName = participant.name ?? '';
+  const carrierName = rawName && !rawName.replace(/^Phone\s+/, '').startsWith('+') ? rawName : null;
+
+  logger.info({
+    roomName,
+    identity: participant.identity,
+    carrierName,
+    attestation: attributes['sip.attestation'] ?? attributes['sip.verstat'] ?? null,
+    sip,
+  }, 'LiveKit: inbound caller metadata');
+}
+
 function agentIdentityFor(configured: string | undefined, roomName: string): string {
   return `${configured ?? 'bonsai-agent'}--${roomName}`;
 }
@@ -461,6 +507,20 @@ export class LiveKitChannelHost {
         case 'participant_joined': {
           const identity = event.participant?.identity ?? '';
           if (identity === agentIdentityFor(config.identity, roomName)) break;
+
+          // Everything the carrier told us about this caller, in one line.
+          //
+          // Recorded because answering "who called me" otherwise means grepping three systems -
+          // Twilio's call log, the SIP gateway's, and our own - and joining them by hand on a
+          // call id that only appears in two of them. The attributes carry that id, so this line
+          // is the join.
+          //
+          // It is also where a caller NAME would appear if one were ever delivered. None has
+          // been: North American CNAM is looked up by the receiving carrier at delivery and does
+          // not travel in the signalling, so the display name is synthesised from the number.
+          // Capturing the field anyway costs nothing and means the day a carrier does send one,
+          // it is already in the record rather than being noticed a month later.
+          logCallerMetadata(roomName, event.participant);
 
           // A leg WE dialed is not an inbound caller and must never be screened. Dialed legs now
           // land in a bridge room the check above already discarded, so this should be

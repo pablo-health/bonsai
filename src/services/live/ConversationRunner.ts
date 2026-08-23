@@ -23,6 +23,7 @@ import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
 import { TtsProviderFactory } from "../providers/tts/TtsProviderFactory";
+import { CachedTtsProvider } from "./CachedTtsProvider";
 import { GuardedTtsProvider, VoiceOutputGuard } from "./VoiceOutputGuard";
 import { UserInputProcessor } from "./UserInputProcessor";
 import { TtsSettings } from "../providers/tts/TtsProviderFactory";
@@ -585,8 +586,25 @@ export class ConversationRunner {
         // covered by construction rather than by remembering. TTS only exists when there is voice
         // output, which is also the only place the rule matters.
         const rawTts = await this.ttsProviderFactory.createProvider(voiceProviderEntity, ttsSettings);
+
+        // Cache INSIDE the guard, so what is stored is what was actually spoken. Caching the
+        // model's text instead would let a sentence the guard rewrote be replayed later in its
+        // original form, quietly turning a control into a suggestion.
+        //
+        // The key covers the voice as well as the words: two lines can say the same thing in
+        // different voices, and serving one line's audio to the other would be baffling to
+        // diagnose and would look like a configuration error rather than a cache bug.
+        const cacheDir = process.env.TTS_CACHE_DIR;
+        const voiced = cacheDir
+          ? new CachedTtsProvider(
+              rawTts,
+              `${voiceProviderEntity.apiType}|${JSON.stringify(ttsSettings)}`,
+              cacheDir,
+            )
+          : rawTts;
+
         this.voiceOutputGuard = new VoiceOutputGuard();
-        stageData.ttsProvider = new GuardedTtsProvider(rawTts, this.voiceOutputGuard);
+        stageData.ttsProvider = new GuardedTtsProvider(voiced, this.voiceOutputGuard);
       }
     }
 
