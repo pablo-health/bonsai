@@ -138,14 +138,19 @@ function agentIdentityFor(configured: string | undefined, roomName: string): str
 const DEFAULT_RELAY_VARIABLE = 'handoffMessage';
 
 /**
- * Longest the caller is left in silence waiting for a bridge to resolve.
+ * Backstop for a bridge that never resolves at all. NOT the normal way a hold ends.
  *
- * Shorter than the voicemail detector's own hard cap on purpose. Detection may legitimately take
- * 45 seconds to decide, but nobody will sit through 45 seconds of nothing wondering if the call
- * dropped. If the bridge has not resolved by now the caller gets the agent back and screening
- * resumes; if it resolves later they are joined anyway, so releasing early costs nothing.
+ * Deliberately longer than {@link VM_DECIDE_BY_MS}, because the two are racing and this one
+ * losing is what strands the caller. At 30 seconds it fired FOUR SECONDS before voicemail
+ * detection reached a verdict on a real call: the caller was handed back to the agent while the
+ * bridge was still running, the leg was then hung up as voicemail, and nothing told them - the
+ * agent had been given the room back but had no reason to speak, so a real person sat in silence
+ * for over two minutes.
+ *
+ * The normal end of a hold is the bridge resolving, which now always says something either way.
+ * This only covers a bridge wedged so badly it never concludes.
  */
-const HOLD_MAX_MS = 30000;
+const HOLD_MAX_MS = 60000;
 
 /**
  * Where a call's audio is going, and therefore who is in the conversation.
@@ -527,6 +532,8 @@ export class LiveKitChannelHost {
     const { roomName, leg } = ctx;
     let frames: AsyncIterator<AudioFrame> | null = null;
     let crossed = false;
+    /** Set once something has been said to the caller about how this ended. */
+    let spoken = false;
 
     try {
       const track = await this.waitForTrack(leg.room, leg.identity, VM_DECIDE_BY_MS);
@@ -562,7 +569,11 @@ export class LiveKitChannelHost {
         logger.info({ roomName, identity: leg.identity, accept: decision.accept, via: decision.via }, 'LiveKit: the answering party decided');
 
         if (!decision.accept) {
-          if (decision.relay) await this.relayToCaller(ctx, decision.relay);
+          // A refusal WITH a message goes to the relay stage, which speaks it. A refusal without
+          // one still has to be said out loud - see the finally below.
+          if (decision.relay) {
+            spoken = await this.relayToCaller(ctx, decision.relay);
+          }
           return;
         }
       }
@@ -584,6 +595,14 @@ export class LiveKitChannelHost {
       if (!crossed) {
         await frames?.return?.().catch(() => undefined);
         await this.dropBridge(roomName);
+
+        // AND SOMEBODY HAS TO SAY SO. Handing the room back to an agent is not the same as
+        // telling the caller anything: the agent has the words - "I couldn't reach him, is there
+        // a message?" - but nothing to prompt it, so it waits for the caller to speak first. A
+        // real caller whose bridge went to voicemail sat in silence for over two minutes before
+        // saying "testing" and finally hearing it. Dead air after a ring is worse than never
+        // having tried the bridge at all.
+        if (!spoken) await this.tellCallerTheyCouldNotBePutThrough(ctx);
       }
     }
   }
@@ -836,11 +855,11 @@ export class LiveKitChannelHost {
    * @param ctx - The bridge context, carrying the project's relay configuration.
    * @param relay - What to pass on, in the answering party's own words.
    */
-  private async relayToCaller(ctx: BridgeContext, relay: string): Promise<void> {
+  private async relayToCaller(ctx: BridgeContext, relay: string): Promise<boolean> {
     const stageId = ctx.config.handoffRelayStageId;
     if (!stageId) {
       logger.info({ roomName: ctx.roomName }, 'LiveKit: no relay stage configured, the declined message was not passed on');
-      return;
+      return false;
     }
 
     const call = this.activeCalls.get(ctx.roomName);
@@ -848,7 +867,7 @@ export class LiveKitChannelHost {
     const conversationId = session?.conversationId;
     if (!session || !conversationId) {
       logger.warn({ roomName: ctx.roomName }, 'LiveKit: the caller conversation is gone, the declined message was not passed on');
-      return;
+      return false;
     }
 
     try {
@@ -864,8 +883,42 @@ export class LiveKitChannelHost {
       await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, context);
 
       logger.info({ roomName: ctx.roomName, stageId }, 'LiveKit: moved the caller to the relay stage');
+      return true;
     } catch (error) {
       logger.error({ error, roomName: ctx.roomName, stageId }, 'LiveKit: failed to pass the declined message to the caller');
+      return false;
+    }
+  }
+
+  /**
+   * Tells the caller they could not be put through, instead of leaving them in silence.
+   *
+   * Moves the conversation to a stage whose `enterBehavior` is `generate_response`, so the agent
+   * speaks the moment it arrives rather than waiting to be spoken to. That distinction is the
+   * whole point: the screening prompt already contains the right sentence, and the agent will
+   * produce it perfectly - but only in reply to something. Nobody replies to a bridge failing.
+   *
+   * Covers every way a bridge can fail to connect: voicemail answered, nothing answered, the
+   * answering party refused without a message, or the whole thing threw.
+   * @param ctx - The bridge context, carrying the project's stage configuration.
+   */
+  private async tellCallerTheyCouldNotBePutThrough(ctx: BridgeContext): Promise<void> {
+    const stageId = ctx.config.bridgeFailedStageId;
+    if (!stageId) {
+      logger.info({ roomName: ctx.roomName }, 'LiveKit: no bridge-failed stage configured, the caller was told nothing');
+      return;
+    }
+
+    const call = this.activeCalls.get(ctx.roomName);
+    const session = call ? this.sessionManager.getSession(call.sessionId) : undefined;
+    const conversationId = session?.conversationId;
+    if (!session || !conversationId) return;
+
+    try {
+      await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, this.buildContext(session));
+      logger.info({ roomName: ctx.roomName, stageId }, 'LiveKit: told the caller they could not be put through');
+    } catch (error) {
+      logger.error({ error, roomName: ctx.roomName, stageId }, 'LiveKit: could not tell the caller the bridge failed');
     }
   }
 
