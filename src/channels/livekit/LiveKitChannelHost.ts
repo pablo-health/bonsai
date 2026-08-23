@@ -22,7 +22,7 @@ import { providers, apiKeys, users } from '../../db/schema';
 import { SessionManager } from '../SessionManager';
 import type { Session } from '../SessionManager';
 import { ChannelHandlerDispatcher } from '../ChannelHandlerDispatcher';
-import { LiveKitConnection, pcmToAudioFrame } from './LiveKitConnection';
+import { LiveKitConnection, pcmToAudioFrame, pcmToAudioFrames } from './LiveKitConnection';
 import { LiveKitAnnouncer } from './LiveKitAnnouncer';
 import { LiveKitHandoff } from './LiveKitHandoff';
 import { liveKitChannelProviderConfigSchema, liveKitRoomMetadataSchema } from '../../services/providers/channel/LiveKitChannelProvider';
@@ -1170,10 +1170,14 @@ export class LiveKitChannelHost {
       const audio = await this.announcer.synthesize(ctx.projectId, ctx.stageId, ctx.agentId, text, format);
       if (!audio) return;
 
-      const frame = pcmToAudioFrame(audio, pcmSampleRate(format));
-      if (!frame) return;
-
-      await leg.toLeg.captureFrame(frame);
+      // Transport-sized frames, for the reason given on pcmToAudioFrames: this is a whole
+      // synthesised sentence, which is several seconds of audio, and the bridge leg's queue is
+      // deliberately short. Captured as one frame it is rejected outright and the person who
+      // picked up hears nothing at all - the announcement being the only thing that tells them
+      // who is calling and that they may decline.
+      for (const frame of pcmToAudioFrames(audio, pcmSampleRate(format))) {
+        await leg.toLeg.captureFrame(frame);
+      }
       await leg.toLeg.waitForPlayout();
     })();
 

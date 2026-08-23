@@ -30,6 +30,43 @@ export function pcmToAudioFrame(audioData: Buffer, sampleRate: number): AudioFra
 }
 
 /**
+ * How much audio goes into one captured frame.
+ *
+ * Twenty milliseconds is what the transport wants and what every other participant sends. A TTS
+ * vendor is under no obligation to deliver audio in those units, and the streaming ones do not:
+ * a sentence can arrive as a single buffer holding seconds of speech.
+ */
+const CAPTURE_FRAME_MS = 20;
+
+/**
+ * Splits a PCM payload into transport-sized frames.
+ *
+ * Handing a whole vendor chunk to the source as ONE frame works right up until the vendor sends a
+ * big one, and then it fails in a way that reads as anything but a size problem: the source
+ * rejects the frame with a bare `InvalidState`, the chunk is dropped, and - because the source
+ * counts a frame's duration against its queue before it tries to capture it - the queue is left
+ * carrying seconds of audio that never played. Every later frame in the turn then fails too, so
+ * one oversized buffer silences the rest of the sentence.
+ *
+ * Measured on this path: chunks of 15,732 to 77,461 samples, the largest 4.8 seconds of speech in
+ * a single frame, driving the queue to nineteen seconds. Amazon Polly never showed it because the
+ * sentence splitter hands over small pieces; ElevenLabs streams in bursts.
+ */
+export function* pcmToAudioFrames(audioData: Buffer, sampleRate: number): Generator<AudioFrame> {
+  const perFrame = Math.max(1, Math.floor((sampleRate * CAPTURE_FRAME_MS) / 1000));
+  const total = Math.floor(audioData.byteLength / 2);
+
+  for (let offset = 0; offset < total; offset += perFrame) {
+    const count = Math.min(perFrame, total - offset);
+    const samples = new Int16Array(count);
+    for (let i = 0; i < count; i++) {
+      samples[i] = audioData.readInt16LE((offset + i) * 2);
+    }
+    yield new AudioFrame(samples, sampleRate, 1, count);
+  }
+}
+
+/**
  * LiveKit-backed implementation of {@link IClientConnection}.
  *
  * Each instance represents one call session inside a LiveKit room. Agent audio is published to
@@ -148,25 +185,29 @@ export class LiveKitConnection implements IClientConnection {
           logger.warn({ audioFormat: msg.audioFormat, sessionId: this.session?.id }, 'LiveKit: received non-PCM audio chunk, dropping');
           return;
         }
-        const frame = this.toAudioFrame(msg.audioData, pcmSampleRate(msg.audioFormat));
-        if (!frame) return;
+        // Captured in transport-sized pieces rather than as one buffer - see pcmToAudioFrames.
+        // The generation is re-checked between frames so a barge-in still cuts the agent off
+        // mid-sentence: the whole point of flushing is that what was already generated does not
+        // keep playing, and a loop that ignored it would reintroduce exactly that.
+        const generation = this.generation;
         try {
-          await this.audioSource.captureFrame(frame);
+          for (const frame of pcmToAudioFrames(msg.audioData, pcmSampleRate(msg.audioFormat))) {
+            if (this.muted || this.generation !== generation) break;
+            await this.audioSource.captureFrame(frame);
+          }
         } catch (error) {
-          // The facts that distinguish the causes, because the FFI error text does not. An
-          // InvalidState from the Rust side covers a closed source, a rate or channel mismatch,
-          // and an over-large frame alike - and a dropped chunk is audible, so this is worth
-          // knowing precisely rather than by elimination.
+          // The facts that distinguish the causes, because the FFI error text does not: an
+          // InvalidState from the Rust side covers a closed source, a rate or channel mismatch
+          // and an over-large frame alike. A dropped chunk is audible, so this is worth knowing
+          // precisely rather than by elimination - it is how the oversized-frame cause was found.
           logger.warn({
             error,
             sessionId: this.session?.id,
-            samples: frame.samplesPerChannel,
-            sampleRate: frame.sampleRate,
             chunkBytes: msg.audioData.byteLength,
             declaredFormat: msg.audioFormat,
             queuedMs: this.audioSource.queuedDuration,
             muted: this.muted,
-          }, 'LiveKit: captureFrame failed, dropping chunk');
+          }, 'LiveKit: captureFrame failed, dropping the rest of this chunk');
         }
         break;
       }
