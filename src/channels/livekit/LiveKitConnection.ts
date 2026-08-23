@@ -79,6 +79,17 @@ export class LiveKitConnection implements IClientConnection {
   ) {}
 
   /**
+   * The audio source carrying this agent's voice into the room.
+   *
+   * Exposed so the channel can write non-conversational audio to the caller - ringback while a
+   * second line is being tried - without opening a second track. It is the same source the agent
+   * speaks through, so anything the agent says naturally takes over from it.
+   */
+  get outboundSource(): AudioSource {
+    return this.audioSource;
+  }
+
+  /**
    * Attaches the session record to this connection instance.
    * Must be called immediately after {@link SessionManager.registerSession}.
    * @param session - The session to attach.
@@ -118,6 +129,27 @@ export class LiveKitConnection implements IClientConnection {
         } catch (error) {
           logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: captureFrame failed, dropping chunk');
         }
+        break;
+      }
+      case 'conversation_event': {
+        // The runner has ended the conversation. On a phone call that has to mean HANGING UP -
+        // there is no window to close and no client to navigate away, so a caller who has said
+        // goodbye is otherwise left holding a live line, working out whether they are supposed
+        // to hang up on us. One did, twice, and said goodbye a second time in between.
+        //
+        // Draining first is the whole trick: the goodbye is still in the audio queue at this
+        // point, and closing immediately would cut it off mid-word, which is a worse ending than
+        // no ending at all.
+        if (msg.eventType !== 'conversation_end') break;
+
+        const generation = this.generation;
+        this.audioSource.waitForPlayout()
+          .then(async () => {
+            if (this.closed || generation !== this.generation) return;
+            logger.info({ sessionId: this.session?.id }, 'LiveKit: conversation ended, hanging up');
+            await this.close();
+          })
+          .catch((error) => logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: could not hang up after the conversation ended'));
         break;
       }
       case 'end_ai_generation_output': {

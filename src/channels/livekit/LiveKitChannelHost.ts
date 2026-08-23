@@ -85,6 +85,25 @@ const INBOUND_FRAME_SIZE_MS = 20;
 const BRIDGE_QUEUE_MS = 40;
 
 /**
+ * US ringback: 440 Hz + 480 Hz, two seconds on, four seconds off.
+ *
+ * Played to the caller while a leg is ringing, because the alternative is what they got before -
+ * "let me try him for you" and then thirty-two seconds of nothing. Silence on a phone call is
+ * indistinguishable from a dropped one, so the caller spends the whole hold wondering whether to
+ * hang up and try again.
+ *
+ * Ringback rather than music on purpose. Music-on-hold says "you are parked in a queue for an
+ * unknown time"; ringback says "a phone is ringing right now", which is exactly what is happening
+ * and what every call transfer in the world sounds like. It is also generated rather than played
+ * from a file, so there is no asset to ship and nothing to license.
+ */
+const RINGBACK_HZ = [440, 480];
+const RINGBACK_ON_MS = 2000;
+const RINGBACK_OFF_MS = 4000;
+/** Well below the agent's speaking level: this is a background, not an announcement. */
+const RINGBACK_AMPLITUDE = 0.18;
+
+/**
  * Publish settings for the two tracks that carry a live conversation between two people.
  *
  * Crossing the streams costs one extra Opus generation. A same-room bridge encodes once
@@ -958,6 +977,51 @@ export class LiveKitChannelHost {
   }
 
   /**
+   * Plays ringback to the caller for as long as their call is still holding.
+   *
+   * Writes into the agent's own track in the caller's room, so it stops being heard the moment
+   * anything else is said - and stops entirely as soon as the call leaves the holding state,
+   * whether that is an accept, a decline, voicemail or a timeout.
+   * @param roomName - The caller's room.
+   */
+  private async playRingback(roomName: string): Promise<void> {
+    const rate = pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat);
+    const frameSamples = Math.floor((rate * INBOUND_FRAME_SIZE_MS) / 1000);
+    const cycleMs = RINGBACK_ON_MS + RINGBACK_OFF_MS;
+
+    let elapsedMs = 0;
+    let phase = 0;
+
+    while (this.activeCalls.get(roomName)?.state === 'holding') {
+      const call = this.activeCalls.get(roomName);
+      const source = call?.connection.outboundSource;
+      if (!source) return;
+
+      const pcm = Buffer.alloc(frameSamples * 2);
+      if (elapsedMs % cycleMs < RINGBACK_ON_MS) {
+        for (let i = 0; i < frameSamples; i++) {
+          const t = (phase + i) / rate;
+          let v = 0;
+          for (const hz of RINGBACK_HZ) v += Math.sin(2 * Math.PI * hz * t);
+          pcm.writeInt16LE(Math.round((v / RINGBACK_HZ.length) * RINGBACK_AMPLITUDE * 32767), i * 2);
+        }
+      }
+      // Silence is a frame of zeroes rather than a gap: stopping the stream entirely would let
+      // the far end's comfort noise or the codec's DTX decide what the caller hears instead.
+      phase += frameSamples;
+      elapsedMs += INBOUND_FRAME_SIZE_MS;
+
+      const frame = pcmToAudioFrame(pcm, rate);
+      if (!frame) return;
+      try {
+        await source.captureFrame(frame);
+      } catch {
+        return;
+      }
+    }
+  }
+
+  /**
    * Moves a call between states, and arms the release that stops a bridge stranding the caller.
    *
    * The release is scheduled independently of whatever the bridge is doing, so a bridge that
@@ -975,6 +1039,11 @@ export class LiveKitChannelHost {
     logger.info({ roomName, state }, 'LiveKit: call state changed');
 
     if (state !== 'holding') return;
+
+    // Something for the caller to listen to while the other phone rings.
+    void this.playRingback(roomName).catch((error) => {
+      logger.debug({ error, roomName }, 'LiveKit: ringback stopped');
+    });
 
     setTimeout(() => {
       const current = this.activeCalls.get(roomName);
