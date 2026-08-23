@@ -153,7 +153,20 @@ export class LiveKitConnection implements IClientConnection {
         try {
           await this.audioSource.captureFrame(frame);
         } catch (error) {
-          logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: captureFrame failed, dropping chunk');
+          // The facts that distinguish the causes, because the FFI error text does not. An
+          // InvalidState from the Rust side covers a closed source, a rate or channel mismatch,
+          // and an over-large frame alike - and a dropped chunk is audible, so this is worth
+          // knowing precisely rather than by elimination.
+          logger.warn({
+            error,
+            sessionId: this.session?.id,
+            samples: frame.samplesPerChannel,
+            sampleRate: frame.sampleRate,
+            chunkBytes: msg.audioData.byteLength,
+            declaredFormat: msg.audioFormat,
+            queuedMs: this.audioSource.queuedDuration,
+            muted: this.muted,
+          }, 'LiveKit: captureFrame failed, dropping chunk');
         }
         break;
       }
