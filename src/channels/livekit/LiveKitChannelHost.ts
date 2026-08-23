@@ -80,6 +80,30 @@ const INBOUND_FRAME_SIZE_MS = 20;
 const BRIDGE_QUEUE_MS = 100;
 
 /**
+ * Publish settings for the two tracks that carry a live conversation between two people.
+ *
+ * Crossing the streams costs one extra Opus generation. A same-room bridge encodes once
+ * (SIP -> room); this decodes that and re-encodes into the second room, so the audio is
+ * compressed twice before it reaches a handset. There is no way around it here - rtc-node has no
+ * API to forward encoded frames without decoding them, and decoding is the whole point of being
+ * in the media path. What CAN be done is make the second generation inaudible.
+ *
+ * `maxBitrate` at 64 kbps is deliberate overkill. The content arriving from the PSTN is band
+ * limited to about 4 kHz by G.711 before it ever reaches us, and Opus is already transparent on
+ * that band well below this rate - so the second encode stops being a quality decision. It costs
+ * a few tens of kbps on one call, which is nothing next to a person hearing artefacts.
+ *
+ * `dtx: false` because discontinuous transmission suppresses "silence" it detects, and its
+ * detector is working on audio that has ALREADY been through a codec. On re-encoded speech that
+ * clips quiet onsets - the start of a word after a pause is exactly what it mistakes for silence.
+ * Bandwidth saved by not sending silence is worthless on a two-party bridge.
+ *
+ * `red: true` sends redundant payloads. Packet loss is far more audible than any generation loss
+ * being discussed here, and this is the cheap insurance against it.
+ */
+const BRIDGE_PUBLISH = { audioEncoding: { maxBitrate: BigInt(64000) }, dtx: false, red: true };
+
+/**
  * Voicemail detection thresholds for an answered outbound leg.
  *
  * Carriers answer for voicemail exactly as they answer for a person - 200 OK and media - so the
@@ -658,7 +682,7 @@ export class LiveKitChannelHost {
       // track in this room, and publishing a second microphone track under one participant left
       // the first in a state where captureFrame threw InvalidState - the agent went silent to the
       // caller for the rest of the call while the second track worked fine.
-      const publication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_UNKNOWN }));
+      const publication = await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_UNKNOWN, ...BRIDGE_PUBLISH }));
       if (!publication?.sid) throw new Error('LiveKit returned no SID for the bridge track');
 
       leg.toCaller = source;
@@ -763,7 +787,7 @@ export class LiveKitChannelHost {
       await room.connect(config.url, await token.toJwt(), { autoSubscribe: true, dynacast: false });
 
       const track = LocalAudioTrack.createAudioTrack('agent-voice', source);
-      await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
+      await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE, ...BRIDGE_PUBLISH }));
 
       return leg;
     } catch (error) {
