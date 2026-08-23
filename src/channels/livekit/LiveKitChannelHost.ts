@@ -69,15 +69,20 @@ const INBOUND_FRAME_SIZE_MS = 20;
  * so once the queue has filled it simply stays that far behind for the rest of the call. Two
  * people in the same room heard each other through their handsets a second and a half late.
  *
- * 100ms is five frames: enough to absorb ordinary network jitter, short enough that the delay it
- * can accumulate is inaudible. Telephony budgets around 150ms one way in total, so this is the
- * only part of the path we control that could have spent it.
+ * MEASURED, not chosen: at a 100ms cap both directions sat at 102ms and 83ms - saturated. Input
+ * and output are both real time, so any burst that forms a queue makes it PERMANENT; the cap is
+ * therefore not a ceiling on jitter, it is the latency. 100ms in each direction was ~185ms of
+ * round trip that a caller hears as lag.
+ *
+ * 40ms is two frames: still room for a frame of jitter, and a fifth of the standing delay. Going
+ * further risks underruns when the event loop stalls, which are audible as clicks rather than as
+ * delay - a worse trade. Re-measure after changing this; the peak is logged at teardown.
  *
  * The producer is not starved by the smaller queue - `captureFrame` simply applies backpressure
  * sooner, which is correct for a real-time source and harmless for the announcement, since
  * `waitForPlayout` still reports the queue draining.
  */
-const BRIDGE_QUEUE_MS = 100;
+const BRIDGE_QUEUE_MS = 40;
 
 /**
  * Publish settings for the two tracks that carry a live conversation between two people.
@@ -750,8 +755,11 @@ export class LiveKitChannelHost {
         // Sampled once a second rather than per frame: this is diagnostics on a live call, and
         // the queue cannot change meaningfully inside 20ms.
         if (delivered % 50 === 0) {
-          peakToCallerMs = Math.max(peakToCallerMs, Math.round((source.queuedDuration ?? 0) * 1000));
-          peakToLegMs = Math.max(peakToLegMs, Math.round((leg.toLeg.queuedDuration ?? 0) * 1000));
+          // queuedDuration is already MILLISECONDS. Scaling it looked like a 102-second queue
+          // against a 100ms cap, which is the sort of number that should stop you rather than be
+          // reported.
+          peakToCallerMs = Math.max(peakToCallerMs, Math.round(source.queuedDuration ?? 0));
+          peakToLegMs = Math.max(peakToLegMs, Math.round(leg.toLeg.queuedDuration ?? 0));
         }
       }
     } catch (error) {
