@@ -110,7 +110,8 @@ export class CachedTtsProvider implements ITtsProvider {
     this.held += text;
     const index = await this.loadIndex();
 
-    const exact = index.get(this.held);
+    const matched = this.held;
+    const exact = index.get(matched);
     if (exact) {
       try {
         const audio = await readFile(this.pathFor(exact));
@@ -127,6 +128,10 @@ export class CachedTtsProvider implements ITtsProvider {
         });
         this.served = true;
         this.held = '';
+        // Logged because a cache is otherwise invisible: a miss and a hit produce the same call,
+        // and 'it did not store anything that time' is inference, not evidence. Without this the
+        // only way to know the cache works is to reason about what is absent from the log.
+        logger.info({ chars: matched.length, bytes: audio.byteLength }, 'TTS cache: hit');
         return;
       } catch (error) {
         logger.warn({ error }, 'TTS cache: entry named in the manifest could not be read');
