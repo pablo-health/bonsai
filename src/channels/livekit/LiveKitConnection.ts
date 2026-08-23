@@ -67,6 +67,23 @@ export class LiveKitConnection implements IClientConnection {
   private closed = false;
   /** True while the agent's voice is withheld from the room. See {@link setMuted}. */
   private muted = false;
+  /** True from the first chunk of a turn until its audio has finished playing out. */
+  private speaking = false;
+  /** True once the agent has completed at least one turn - normally the greeting. */
+  private hasSpoken = false;
+
+  /**
+   * Whether it is safe to write non-conversational audio into this connection right now.
+   *
+   * False while the agent is mid-turn, and false before it has said anything at all. Both
+   * matter: ringback and the agent share one audio source, so anything written while a turn is
+   * in flight competes with it for the same queue - and the greeting arrived SECOND on a real
+   * call, because the tone had already started filling the source before start_conversation
+   * produced a word.
+   */
+  get canPlayFiller(): boolean {
+    return !this.speaking && this.hasSpoken && !this.closed;
+  }
 
   constructor(
     /** The connected LiveKit room for this call. */
@@ -118,6 +135,7 @@ export class LiveKitConnection implements IClientConnection {
         // Dropped rather than queued: the point of muting is that nothing generated while the
         // room belongs to someone else plays out when it is handed back.
         if (this.muted) return;
+        this.speaking = true;
         if (!isPcmFormat(msg.audioFormat)) {
           logger.warn({ audioFormat: msg.audioFormat, sessionId: this.session?.id }, 'LiveKit: received non-PCM audio chunk, dropping');
           return;
@@ -157,6 +175,8 @@ export class LiveKitConnection implements IClientConnection {
         this.audioSource.waitForPlayout()
           .then(async () => {
             if (this.closed || generation !== this.generation) return;
+            this.speaking = false;
+            this.hasSpoken = true;
             await this.onAiTurnEnd();
           })
           .catch((error) => logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: waitForPlayout failed, next input turn not opened'));
@@ -218,7 +238,10 @@ export class LiveKitConnection implements IClientConnection {
 
     this.muted = muted;
     logger.info({ sessionId: this.session?.id, muted }, 'LiveKit: agent voice muted state changed');
-    if (muted) this.flush();
+    if (muted) {
+      this.speaking = false;
+      this.flush();
+    }
   }
 
   /**

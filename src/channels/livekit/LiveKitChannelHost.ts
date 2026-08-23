@@ -997,6 +997,14 @@ export class LiveKitChannelHost {
       const source = call?.connection.outboundSource;
       if (!source) return;
 
+      // Never write over the agent. The dial now waits for the greeting so this should not
+      // trigger on the first turn, but the agent can speak again mid-hold - a relay, a
+      // reassurance - and the tone must give way to it rather than mix with it.
+      if (!call?.connection.canPlayFiller) {
+        await new Promise((r) => setTimeout(r, INBOUND_FRAME_SIZE_MS));
+        continue;
+      }
+
       const pcm = Buffer.alloc(frameSamples * 2);
       if (elapsedMs % cycleMs < RINGBACK_ON_MS) {
         for (let i = 0; i < frameSamples; i++) {
@@ -1407,12 +1415,38 @@ export class LiveKitChannelHost {
     const track = LocalAudioTrack.createAudioTrack('agent-voice', audioSource);
     await room.localParticipant?.publishTrack(track, new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }));
 
+    /**
+     * Set once the second leg has been attempted, so it is attempted exactly once.
+     *
+     * The attempt is deferred to the end of the first agent turn rather than made immediately -
+     * see below.
+     */
+    let bridgeAttempted = false;
+
     const onAiTurnEnd = async (): Promise<void> => {
       const current = this.activeCalls.get(roomName);
       if (!current) return;
       const session = this.sessionManager.getSession(current.sessionId);
       if (!session) return;
       session.runner?.notifyAudioPlaybackEnded();
+
+      // DIAL AFTER THE GREETING, NOT BEFORE IT.
+      //
+      // Dialling immediately meant the leg started ringing while the agent was still saying
+      // "let me try him for you" - so the ringback and the greeting were produced into the same
+      // audio source at the same time and played over each other. The caller heard ringing and
+      // not the sentence explaining it.
+      //
+      // Waiting is also simply the right order. The promise should land before the ringing
+      // starts, which is what a human transfer sounds like: you are told you are being put
+      // through, and then you hear the phone ring. The cost is the length of one greeting.
+      if (!bridgeAttempted) {
+        bridgeAttempted = true;
+        void this.tryDirectConnect({
+          config, projectId, userId, roomName, room, stageId, agentId,
+        });
+      }
+
       const newId = await this.dispatchStartUserVoiceInput(session);
       if (newId) inputTurnId = newId;
     };
@@ -1437,19 +1471,15 @@ export class LiveKitChannelHost {
     // instead of being screened. The destination and the name spoken in the announcement come
     // from that user's profile, never from channel code, so this stays transport-agnostic and no
     // phone number or caller-specific wording is baked in here.
+    //
+    // The attempt itself is made in `onAiTurnEnd`, once the greeting has finished playing - the
+    // caller should hear "let me try him for you" before they hear a phone ringing, not
+    // underneath it.
+    //
     // The bridge is attempted in the background and the conversation always starts. If the leg
     // turns out to be voicemail, or the person who answers declines, the agent is already talking
     // to the caller and screening continues - rather than the caller being dropped into a
     // recording, or into silence, with no explanation.
-    void this.tryDirectConnect({
-      config,
-      projectId,
-      userId,
-      roomName,
-      room,
-      stageId,
-      agentId,
-    });
 
     logger.info({ sessionId, projectId, roomName, userId, stageId, agentId }, 'LiveKit: new voice session created');
 
