@@ -90,6 +90,44 @@ describe('CachedTtsProvider', () => {
     expect(inner.calls).to.have.length(2);
   });
 
+  it('matches a cached utterance even though the text arrives in fragments', async () => {
+    // The real shape: the model produces the greeting a few tokens at a time, so the cache never
+    // sees it as one string. A lookup that waited for a complete utterance would never fire.
+    const inner = new CountingTts();
+    await speak(inner, dir, 'voiceA', GREETING);
+
+    const heard: Buffer[] = [];
+    const cache = new CachedTtsProvider(inner, 'voiceA', dir);
+    cache.setOnSpeechGenerating(async (chunk) => { heard.push(chunk.audio); });
+    await cache.start();
+    for (const piece of ['Hi, I am ', 'Pablo. How can ', 'I help you today?']) {
+      await cache.sendText(piece);
+    }
+    await cache.end();
+
+    expect(inner.calls).to.have.length(1);
+    expect(heard.map((b) => b.toString()).join('')).to.contain(GREETING);
+  });
+
+  it('says everything it held back when the utterance turns out to be new', async () => {
+    // The failure this guards against is the worst one available: text held in the hope of a hit,
+    // then dropped when the hope dies, so the agent simply never says the first half of a
+    // sentence. Silence mid-utterance reads as a broken line, not as a cache miss.
+    const inner = new CountingTts();
+    await speak(inner, dir, 'voiceA', GREETING);
+
+    const cache = new CachedTtsProvider(inner, 'voiceA', dir);
+    cache.setOnSpeechGenerating(async () => { /* discard */ });
+    await cache.start();
+    await cache.sendText('Hi, I am ');            // still a prefix of the cached greeting
+    await cache.sendText('afraid he is busy.');   // diverges here
+    await cache.end();
+
+    const spoken = inner.calls.join('');
+    expect(spoken).to.contain('Hi, I am ');
+    expect(spoken).to.contain('afraid he is busy.');
+  });
+
   it('is keyed on the exact words, so a reworded greeting is a miss not a wrong hit', async () => {
     const inner = new CountingTts();
     await speak(inner, dir, 'voiceA', GREETING);
