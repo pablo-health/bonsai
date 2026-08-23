@@ -2644,8 +2644,21 @@ export class ConversationRunner {
       Object.entries(this.stageData.stage.actions)
         .filter(([name]) => !lifecycleActionNames.includes(name))
     );
-    const globalActionsMap = new Map(this.stageData.globalActions.map(ga => [ga.name, ga]));
-    const guardrailActionsMap = new Map(this.stageData.guardrails.map(ga => [ga.name, ga]));
+    // Indexed by classificationTrigger AS WELL AS name. A classifier is shown the trigger and
+    // answers with it; indexing only by the human-facing name means it can never match. Same
+    // reason as the identical map in UserInputProcessor - and this second copy is why fixing that
+    // one alone left the robocall stage still unreachable.
+    const indexByNameAndTrigger = <T extends { name: string; classificationTrigger?: string | null }>(defs: T[]): Map<string, T> => {
+      const map = new Map<string, T>();
+      for (const def of defs) {
+        if (def.classificationTrigger) map.set(def.classificationTrigger, def);
+      }
+      for (const def of defs) map.set(def.name, def);
+      return map;
+    };
+
+    const globalActionsMap = indexByNameAndTrigger(this.stageData.globalActions);
+    const guardrailActionsMap = indexByNameAndTrigger(this.stageData.guardrails);
     const selectedSampleCopyName = processingResult.sampleCopyResult?.sampleCopy ?? null;
     const sampleCopies = selectedSampleCopyName && this.sampleCopyDistributor.hasName(selectedSampleCopyName)
       ? this.sampleCopyDistributor.distributeCopies(selectedSampleCopyName)
@@ -2678,7 +2691,7 @@ export class ConversationRunner {
     const forcedCopyResponse = sampleCopies.length > 0 && selectedSampleCopy?.mode === 'forced' ? copy : null;
     const context = await this.contextBuilder.buildContextForUserInput(this.stageData.conversation, this.stageData.stage, nonKnowledgeResults, userInput, userInputSource,
       this.sampleCopyDistributor.getOriginalCopies(), copy, copyContent, this.stageData.faq, getEffectiveChannelType(this.session));
-    const stageActionMap = new Map(Object.values(stageActions).map(sa => [sa.name, sa]));
+    const stageActionMap = indexByNameAndTrigger(Object.values(stageActions));
 
     // Deduplicate actions by name - if multiple classifiers detect the same action, only include it once
     const seenActionNames = new Set<string>();
