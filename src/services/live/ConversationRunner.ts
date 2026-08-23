@@ -1545,8 +1545,19 @@ export class ConversationRunner {
    * @param variableValue - Value to set
    */
   async setVariable(stageId: string, variableName: string, variableValue: any): Promise<void> {
-    if (this.stageData.id !== stageId) {
-      throw new InvalidOperationError(`Stage ID mismatch: expected ${this.stageData.id}, got ${stageId}`);
+    // Deliberately NOT restricted to the stage the conversation is currently in.
+    //
+    // `stageVars` is a map keyed BY stage precisely so a stage can be prepared before it is
+    // entered, and writing ahead of a move is the only order that works when the destination
+    // has `enterBehavior: generate_response`: it speaks the instant it is entered, so a
+    // variable written afterwards arrives after the sentence that needed it.
+    //
+    // Rejecting the write made that impossible, and did it quietly - the caller of a declined
+    // bridge was moved to a relay stage whose message slot rendered empty, so they heard a
+    // generic "he is unavailable" instead of what the person who declined actually asked to
+    // pass on. The write is still scoped to THIS conversation and still gated by `vars_access`.
+    if (!stageId) {
+      throw new InvalidOperationError('A stage id is required to set a variable');
     }
     if (this.conversation.status !== 'awaiting_user_input') {
       throw new InvalidOperationError(`Cannot set variable in current state: ${this.conversation.status}`);
