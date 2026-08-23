@@ -39,6 +39,17 @@ export function pcmToAudioFrame(audioData: Buffer, sampleRate: number): AudioFra
 const CAPTURE_FRAME_MS = 20;
 
 /**
+ * How much unplayed audio may sit in the source before more is pushed into it.
+ *
+ * The source holds a second and rejects anything beyond it, so this is backpressure, not tuning.
+ * A streaming vendor returns audio far faster than real time - flash renders three seconds of
+ * speech in four hundred milliseconds - and without a wait the tail of a long sentence arrives
+ * at a full queue and is refused. Left at 800ms there is room for a frame plus the jitter of
+ * getting to it, and nothing is lost.
+ */
+const QUEUE_HIGH_WATER_MS = 800;
+
+/**
  * Splits a PCM payload into transport-sized frames.
  *
  * Handing a whole vendor chunk to the source as ONE frame works right up until the vendor sends a
@@ -193,6 +204,8 @@ export class LiveKitConnection implements IClientConnection {
         try {
           for (const frame of pcmToAudioFrames(msg.audioData, pcmSampleRate(msg.audioFormat))) {
             if (this.muted || this.generation !== generation) break;
+            await this.waitForQueueRoom(generation);
+            if (this.muted || this.generation !== generation) break;
             await this.audioSource.captureFrame(frame);
           }
         } catch (error) {
@@ -309,6 +322,20 @@ export class LiveKitConnection implements IClientConnection {
     if (muted) {
       this.speaking = false;
       this.flush();
+    }
+  }
+
+  /**
+   * Waits until the source has room for another frame.
+   *
+   * Abandoned the moment the turn is superseded, so backpressure can never delay a barge-in: a
+   * caller who interrupts must be heard immediately, and a loop that finished draining first
+   * would hold the floor for exactly as long as the audio it was told to stop playing.
+   */
+  private async waitForQueueRoom(generation: number): Promise<void> {
+    while (this.audioSource.queuedDuration > QUEUE_HIGH_WATER_MS) {
+      if (this.muted || this.generation !== generation) return;
+      await new Promise((resolve) => setTimeout(resolve, CAPTURE_FRAME_MS));
     }
   }
 
