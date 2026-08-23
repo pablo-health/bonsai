@@ -195,10 +195,31 @@ export class UserInputProcessor {
         ...(guardrailResult?.actions ?? []),
         ...transformerTriggeredActions,
       ];
-      const globalActionsMap = new Map(session.runner.getRuntimeData().globalActions.map(ga => [ga.name, ga]));
-      const guardrailsMap = new Map(session.runner.getRuntimeData().guardrails.map(g => [g.name, g]));
+      // Indexed by `name` AND by `classificationTrigger`, because a classifier is told to emit
+      // the trigger and had no way to be right.
+      //
+      // `classificationTrigger` is described everywhere as "the classification label that
+      // triggers this action", is settable through the API, and was read by nothing at all -
+      // every lookup here went through `name`, the human-facing label. So a classifier that did
+      // exactly what its prompt asked returned "recording", the map held "Caller is a recording,
+      // not a person", and the action was dropped with a warning that reads like the config is
+      // wrong. Nothing errored, and the model narrated the action it could not fire as dialogue
+      // instead - which is precisely how this went unnoticed on a real call.
+      //
+      // Name still wins on a collision: it is what already worked.
+      const indexBy = <T extends { name: string; classificationTrigger?: string | null }>(defs: T[]): Map<string, T> => {
+        const map = new Map<string, T>();
+        for (const def of defs) {
+          if (def.classificationTrigger) map.set(def.classificationTrigger, def);
+        }
+        for (const def of defs) map.set(def.name, def);
+        return map;
+      };
+
+      const globalActionsMap = indexBy(session.runner.getRuntimeData().globalActions);
+      const guardrailsMap = indexBy(session.runner.getRuntimeData().guardrails);
       const knowledgeCategoryIds = new Set(knowledgeCategories.map(c => `__knowledge_${c.id}`));
-      const stageActionsMap = new Map(Object.values(stage.actions).map(a => [a.name, a]));
+      const stageActionsMap = indexBy(Object.values(stage.actions));
       const filteredActions = allActions.filter(action => {
         // Allow synthetic knowledge actions to pass through without looking them up in stage or global actions
         if (knowledgeCategoryIds.has(action.name)) {
