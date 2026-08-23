@@ -257,6 +257,13 @@ type BridgeLeg = {
   toCallerSid: string | undefined;
   /** Set once the bridge is being torn down. Stops the crossing and makes cleanup idempotent. */
   closed: boolean;
+  /**
+   * True once the leg has been MOVED into the caller's room and is no longer in its own.
+   *
+   * Everything that addresses the leg by room has to follow it - hanging it up in the room it has
+   * left is a no-op that silently leaves a live PSTN call running.
+   */
+  moved: boolean;
 };
 
 /** Everything needed to place a second leg in a room of its own. */
@@ -632,7 +639,13 @@ export class LiveKitChannelHost {
         return;
       }
 
-      crossed = await this.startCrossing(ctx, frames);
+      // A real participant move is better than copying frames, when the server can do it: the
+      // two parties end up in one room and the SFU forwards between them, so the audio is
+      // encoded once instead of twice and neither our jitter buffer nor our decode sits in the
+      // path. Crossing remains the fallback, and is what runs against a stock LiveKit where
+      // MoveParticipant answers "not implemented".
+      crossed = await this.moveLegToCaller(ctx);
+      if (!crossed) crossed = await this.startCrossing(ctx, frames);
     } catch (error) {
       logger.error({ error, roomName, identity: leg.identity }, 'LiveKit: the bridge failed, leaving the caller with the agent');
     } finally {
@@ -654,6 +667,48 @@ export class LiveKitChannelHost {
         if (!spoken) await this.tellCallerTheyCouldNotBePutThrough(ctx);
       }
     }
+  }
+
+  /**
+   * Moves the dialed leg into the caller's room, so the two are simply in a room together.
+   *
+   * This is what the whole two-room arrangement was waiting for. Up to now the leg has been
+   * somewhere the caller is not, which is what makes the announcement and the decision private;
+   * once the answering party says yes there is no longer any reason for them to be apart, and
+   * being in one room means the SFU forwards their audio directly. No decode, no re-encode, no
+   * queue of ours in the middle.
+   *
+   * Returns false when the server will not do it - a stock LiveKit answers "not implemented" -
+   * and the caller falls back to crossing the streams, which works everywhere.
+   * @param ctx - The dialed leg plus its routing context.
+   */
+  private async moveLegToCaller(ctx: BridgeContext): Promise<boolean> {
+    const { rooms, roomName, leg } = ctx;
+
+    try {
+      // Set BEFORE the call: the move makes the leg leave its own room, and anything watching
+      // that room for a departure must not read it as the far end hanging up.
+      leg.moved = true;
+      await rooms.moveParticipant(leg.roomName, leg.identity, roomName);
+    } catch (error) {
+      leg.moved = false;
+      logger.info({ error, roomName, identity: leg.identity }, 'LiveKit: the server would not move the leg, crossing the streams instead');
+      return false;
+    }
+
+    // The agent no longer needs to be in the leg's room - the leg is not there any more, and the
+    // announcement it was published for has been made.
+    try {
+      await leg.room.disconnect();
+    } catch (error) {
+      logger.warn({ error, roomName: leg.roomName }, 'LiveKit: failed to leave the bridge room after moving the leg');
+    }
+
+    this.activeCalls.get(roomName)?.connection.setMuted(true);
+    this.setCallState(roomName, 'bridged');
+
+    logger.info({ roomName, from: leg.roomName, identity: leg.identity }, 'LiveKit: moved the answering party into the caller room, the SFU carries it from here');
+    return true;
   }
 
   /**
@@ -802,7 +857,7 @@ export class LiveKitChannelHost {
     const source = new AudioSource(pcmSampleRate(VOICE_SESSION_SETTINGS.receiveAudioFormat), 1, BRIDGE_QUEUE_MS);
     const leg: BridgeLeg = {
       room, roomName, identity, rooms, callerRoom, callerRoomName,
-      toLeg: source, toCaller: null, toCallerSid: undefined, closed: false,
+      toLeg: source, toCaller: null, toCallerSid: undefined, closed: false, moved: false,
     };
 
     try {
@@ -810,6 +865,13 @@ export class LiveKitChannelHost {
       // is still on the line; they get the agent back rather than dead air.
       room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
         if (participant.identity !== identity) return;
+        // A leg that has been MOVED has left this room on purpose, and is now talking to the
+        // caller in theirs. Reading that as a hangup would drop the call at the exact moment it
+        // succeeded.
+        if (leg.moved) {
+          logger.info({ roomName, callerRoomName, identity }, 'LiveKit: the dialed leg left this room because it was moved, not because it hung up');
+          return;
+        }
         logger.info({ roomName, callerRoomName, identity }, 'LiveKit: the dialed leg hung up, giving the caller the agent back');
         this.dropBridge(callerRoomName).catch((error) => logger.error({ error, callerRoomName }, 'LiveKit: could not close the bridge after the leg left'));
       });
@@ -861,10 +923,14 @@ export class LiveKitChannelHost {
     if (leg.closed) return;
     leg.closed = true;
 
+    // Wherever it actually is. After a move the leg lives in the CALLER's room, and hanging it
+    // up in the room it left is a no-op that leaves a live PSTN call running until the server's
+    // empty-room timeout notices.
+    const legRoom = leg.moved ? leg.callerRoomName : leg.roomName;
     try {
-      await leg.rooms.removeParticipant(leg.roomName, leg.identity);
+      await leg.rooms.removeParticipant(legRoom, leg.identity);
     } catch (error) {
-      logger.debug({ error, roomName: leg.roomName, identity: leg.identity }, 'LiveKit: the dialed leg was already gone');
+      logger.debug({ error, roomName: legRoom, identity: leg.identity }, 'LiveKit: the dialed leg was already gone');
     }
 
     if (leg.toCallerSid) {
