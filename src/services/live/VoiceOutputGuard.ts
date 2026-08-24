@@ -121,6 +121,8 @@ export class VoiceOutputGuard {
   private readonly violations: GuardViolation[] = [];
   /** Digit runs the CALLER has spoken this conversation, normalised to bare digits. */
   private readonly callerDigits = new Set<string>();
+  /** Digit runs the operator wrote into the agent's own script, normalised the same way. */
+  private readonly scriptedDigits = new Set<string>();
 
   /**
    * Records what the caller said, so the guard can tell an echo from a disclosure.
@@ -135,6 +137,26 @@ export class VoiceOutputGuard {
     for (const run of digitRuns(text)) {
       if (this.callerDigits.size >= 64) return;
       this.callerDigits.add(run);
+    }
+  }
+
+  /**
+   * Records digit runs the operator deliberately put in the agent's own prompt.
+   *
+   * The rule is "never say a number nobody gave you", and a number written into the script by the
+   * person who configured the agent was given to it. Without this the guard has a blind spot in
+   * the shape of an agent that is a CALLER rather than a receptionist: it has a number of its own
+   * to hand over, there is no earlier caller turn to echo, and so the one sentence it exists to
+   * say gets replaced by a refusal it never chose. Found by a synthetic patient reciting her
+   * callback number three times while the practice kept asking for it.
+   *
+   * Nothing loosens for a screening line. A screening prompt contains no long digit runs - if one
+   * ever does, that number was put there on purpose and is exactly as sayable as this makes it.
+   */
+  noteScriptedDigits(text: string): void {
+    for (const run of digitRuns(text)) {
+      if (this.scriptedDigits.size >= 64) return;
+      this.scriptedDigits.add(run);
     }
   }
 
@@ -167,11 +189,13 @@ export class VoiceOutputGuard {
    *
    * EVERY run must match, so a sentence that pairs the caller's number with an unknown one is
    * still blocked rather than smuggled through on the strength of the half that checks out.
+   *
+   * A run the operator wrote into the agent's own prompt counts too - see noteScriptedDigits.
    */
   private isCallerEcho(sentence: string): boolean {
     const runs = digitRuns(sentence);
     if (runs.length === 0) return false;
-    return runs.every((run) => this.callerDigits.has(run));
+    return runs.every((run) => this.callerDigits.has(run) || this.scriptedDigits.has(run));
   }
 
   /** Everything the guard changed this session. */

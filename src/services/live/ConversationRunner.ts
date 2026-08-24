@@ -604,6 +604,11 @@ export class ConversationRunner {
           : rawTts;
 
         this.voiceOutputGuard = new VoiceOutputGuard();
+        // Seeded with the stage's own prompt, so an agent can say a number its operator wrote
+        // into its script. Without this an agent that CALLS somebody cannot give out its own
+        // callback number: there is no earlier caller turn for the echo exemption to match, so
+        // the guard substitutes a refusal for the one sentence the call was about.
+        this.voiceOutputGuard.noteScriptedDigits(stage?.prompt ?? '');
         stageData.ttsProvider = new GuardedTtsProvider(voiced, this.voiceOutputGuard);
       }
     }
