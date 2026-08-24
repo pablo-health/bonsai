@@ -50,6 +50,15 @@ const CAPTURE_FRAME_MS = 20;
 const QUEUE_HIGH_WATER_MS = 800;
 
 /**
+ * A gap between frames longer than this, mid-utterance, is audible as a break in the voice.
+ *
+ * Chosen against what the source itself tolerates: it holds a second of audio, so a stall only
+ * becomes a hole once the queue drains, and by 400ms of pushing nothing the caller is hearing
+ * silence in the middle of a sentence. Below that a stall is absorbed and nobody can tell.
+ */
+const STALL_MS = 400;
+
+/**
  * Splits a PCM payload into transport-sized frames.
  *
  * Handing a whole vendor chunk to the source as ONE frame works right up until the vendor sends a
@@ -181,6 +190,8 @@ export class LiveKitConnection implements IClientConnection {
     switch (msg.type) {
       case 'start_ai_generation_output': {
         if (msg.flushBuffer !== false) this.flush();
+        this.lastFrameAt = 0;
+        this.worstGapMs = 0;
         break;
       }
       case 'abort_ai_generation_output': {
@@ -206,6 +217,7 @@ export class LiveKitConnection implements IClientConnection {
             if (this.muted || this.generation !== generation) break;
             await this.waitForQueueRoom(generation);
             if (this.muted || this.generation !== generation) break;
+            this.noteFrameTiming();
             await this.audioSource.captureFrame(frame);
           }
         } catch (error) {
@@ -252,6 +264,17 @@ export class LiveKitConnection implements IClientConnection {
         break;
       }
       case 'end_ai_generation_output': {
+        // One number per utterance, so continuity is something a test can assert on. WARN when it
+        // crosses the threshold because at that point a person can hear it, and a person hearing
+        // it before we do is how this measurement came to exist.
+        if (this.worstGapMs > 0) {
+          const level = this.worstGapMs >= STALL_MS ? 'warn' : 'debug';
+          logger[level]({ sessionId: this.session?.id, worstGapMs: this.worstGapMs },
+            this.worstGapMs >= STALL_MS
+              ? 'LiveKit: agent audio stalled mid-utterance'
+              : 'LiveKit: agent audio was continuous');
+        }
+
         const generation = this.generation;
         this.audioSource.waitForPlayout()
           .then(async () => {
@@ -323,6 +346,31 @@ export class LiveKitConnection implements IClientConnection {
       this.speaking = false;
       this.flush();
     }
+  }
+
+  /**
+   * Records how long it has been since the last frame was pushed.
+   *
+   * The reason this exists: a caller reported the voice breaking up on a build whose logs were
+   * clean - no dropped chunks, no packet loss, the right number of packets published. Every
+   * automated check passed because they all measured whether audio was PRODUCED, and none
+   * measured whether it was produced WITHOUT INTERRUPTION. A stall does not lose audio; it
+   * delivers all of it, late, in a lump.
+   *
+   * Tracked per utterance and reported when the utterance ends, so it is one number a test can
+   * assert on rather than a shape somebody has to hear.
+   */
+  /** When the last frame was pushed, and the worst gap seen this utterance. */
+  private lastFrameAt = 0;
+  private worstGapMs = 0;
+
+  private noteFrameTiming(): void {
+    const now = Date.now();
+    if (this.lastFrameAt !== 0) {
+      const gap = now - this.lastFrameAt;
+      if (gap > this.worstGapMs) this.worstGapMs = gap;
+    }
+    this.lastFrameAt = now;
   }
 
   /**

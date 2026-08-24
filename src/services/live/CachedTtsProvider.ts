@@ -36,8 +36,19 @@ const MANIFEST = 'manifest.json';
  * The cost of that choice is that a lookup cannot happen until the text is complete, which would
  * be useless. So the text is matched as it accumulates: while what has been said so far is a
  * prefix of something cached, it is held back; the moment it diverges, everything held is handed
- * to the vendor at once. On a cold cache nothing is ever a prefix, so nothing is ever held - the
- * miss path costs nothing, and only an utterance that really does begin like a cached one waits.
+ * to the vendor at once.
+ *
+ * WHY ONLY THE FIRST UTTERANCE OF A CALL. Holding is free only when it ends in a hit. It ends in
+ * a hit reliably for exactly one utterance - the greeting, which is identical on every call and
+ * is the reason this class exists. Every later reply is a gamble, and it was lost the first time
+ * a person listened: a model reuses its openings, so a reply beginning "Great to meet you..." sat
+ * held against a cached line that started the same way, produced silence while it accumulated,
+ * then arrived as a rush when it finally diverged. Heard down a phone that is not a slow start,
+ * it is a broken line.
+ *
+ * The original reasoning was that on a cold cache nothing is ever a prefix so nothing is ever
+ * held. True, and worthless: the cache does not stay cold, and the entries it fills with are
+ * precisely the phrasings the model repeats.
  *
  * WHY THE KEY IS THE VOICE TOO. Two lines can speak the same words differently, and serving one
  * line's audio on the other would be baffling to diagnose - it would look like a configuration
@@ -64,6 +75,12 @@ export class CachedTtsProvider implements ITtsProvider {
 
   /** text -> key, loaded once. Small by construction: only short utterances are ever added. */
   private index: Map<string, string> | null = null;
+
+  /**
+   * Which utterance of this call is being spoken. Only the first takes part in the cache: see the
+   * class comment for what happened when every utterance did.
+   */
+  private utterance = -1;
 
   constructor(
     private readonly inner: ITtsProvider,
@@ -158,6 +175,7 @@ export class CachedTtsProvider implements ITtsProvider {
     this.audio = [];
     this.bytes = 0;
 
+    if (this.diverged && this.utterance > 0) return;   // not the greeting; never cached
     if (this.served || audio.length === 0) return;
     if (!text.trim() || text.length > MAX_CACHEABLE_CHARS) return;
     if (bytes === 0 || bytes > MAX_CACHEABLE_BYTES) return;
@@ -232,7 +250,11 @@ export class CachedTtsProvider implements ITtsProvider {
     this.bytes = 0;
     this.held = '';
     this.served = false;
-    this.diverged = false;
+    this.utterance += 1;
+    // Everything after the greeting streams to the vendor exactly as it did before this class
+    // existed. `diverged` is the flag for "stop trying to match", so setting it up front is the
+    // whole opt-out.
+    this.diverged = this.utterance > 0;
     this.ordinal = 0;
     await this.inner.start();
   }

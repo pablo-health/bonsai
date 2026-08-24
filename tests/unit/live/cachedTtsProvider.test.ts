@@ -128,6 +128,47 @@ describe('CachedTtsProvider', () => {
     expect(spoken).to.contain('afraid he is busy.');
   });
 
+  it('leaves every utterance after the greeting alone', async () => {
+    // The bug a person heard: a later reply began the way a cached line did, was held while it
+    // accumulated, and arrived as silence-then-a-rush. Only the first utterance of a call is
+    // worth that risk, because only the greeting reliably ends in a hit.
+    const inner = new CountingTts();
+    const cache = new CachedTtsProvider(inner, 'voiceA', dir);
+    cache.setOnSpeechGenerating(async () => { /* discard */ });
+
+    await cache.start();                       // utterance 0 - the greeting
+    await cache.sendText(GREETING);
+    await cache.end();
+
+    await cache.start();                       // utterance 1 - a reply
+    await cache.sendText('Great to meet you.');
+    await cache.end();
+
+    await cache.start();                       // utterance 2 - the same reply again
+    await cache.sendText('Great to meet you.');
+    await cache.end();
+
+    // The greeting once, then the reply twice: the reply was never cached and never held.
+    expect(inner.calls).to.deep.equal([GREETING, 'Great to meet you.', 'Great to meet you.']);
+  });
+
+  it('forwards a later reply immediately even when it starts like the cached greeting', async () => {
+    // The precise shape of the glitch: text held in the hope of a hit produces dead air, and on a
+    // phone dead air mid-sentence is indistinguishable from a fault.
+    const inner = new CountingTts();
+    const cache = new CachedTtsProvider(inner, 'voiceA', dir);
+    cache.setOnSpeechGenerating(async () => { /* discard */ });
+
+    await cache.start();
+    await cache.sendText(GREETING);
+    await cache.end();
+
+    await cache.start();
+    await cache.sendText('Hi, I am ');          // a prefix of the cached greeting
+    expect(inner.calls[1]).to.equal('Hi, I am ');  // ...and it went straight out anyway
+    await cache.end();
+  });
+
   it('is keyed on the exact words, so a reworded greeting is a miss not a wrong hit', async () => {
     const inner = new CountingTts();
     await speak(inner, dir, 'voiceA', GREETING);
