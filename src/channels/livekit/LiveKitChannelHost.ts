@@ -1236,6 +1236,10 @@ export class LiveKitChannelHost {
    * @param audioSource - The agent's own published track, so the recording arrives the same way
    *                      its speech does and needs no second track or publish.
    */
+  /** Roughly a minute of trying to hand the conversation back, at the interval below. */
+  private static readonly DEMO_RESUME_ATTEMPTS = 30;
+  private static readonly DEMO_RESUME_RETRY_MS = 2000;
+
   /** Rooms whose caller has started talking while a recording plays. */
   private readonly demoInterrupted = new Set<string>();
 
@@ -1279,20 +1283,6 @@ export class LiveKitChannelHost {
       this.demoInterrupted.delete(roomName);
     }
 
-    // ONLY when the recording ran out on its own. If the caller talked over it they are mid-turn,
-    // the runner is in receiving_user_voice, and it refuses to navigate - "Cannot navigate to
-    // stage in current state" - so the move is not merely pointless, it fails. Their words are
-    // about to be answered by whatever stage the conversation is in, which is why the stage the
-    // recording plays in has a prompt for exactly that: it is the one that picks the conversation
-    // back up when it was stopped early.
-    //
-    // The move is for the other case, where the recording finishes and nobody is talking. Nothing
-    // else would break the silence.
-    if (interrupted) {
-      logger.info({ roomName }, 'LiveKit: the caller stopped the recording and is talking, so the stage they are in answers them');
-      return;
-    }
-
     const stageId = config.demoDoneStageId;
     if (!stageId) {
       logger.warn({ roomName }, 'LiveKit: no stage to return to after the recording, the caller is now in silence');
@@ -1302,10 +1292,30 @@ export class LiveKitChannelHost {
     const session = call ? this.sessionManager.getSession(call.sessionId) : undefined;
     const conversationId = session?.conversationId;
     if (!session || !conversationId) return;
-    try {
-      await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, this.buildContext(session));
-    } catch (error) {
-      logger.error({ error, roomName, stageId }, 'LiveKit: could not pick the conversation back up after the recording');
+    logger.info({ roomName, stageId, interrupted },
+      'LiveKit: handing the conversation back to the line after the recording');
+
+    // Retried, because of WHEN this runs in the interrupted case. Stopping the recording means
+    // the caller is mid-sentence, the runner is in receiving_user_voice, and it refuses outright:
+    // "Cannot navigate to stage in current state". One attempt therefore always failed exactly
+    // when the caller had just started talking - and leaving them in the stage the recording
+    // played in strands them there for the rest of the call, with its narrow prompt and without
+    // put_through, so asking for a person afterwards would do nothing at all.
+    //
+    // Their turn finishes within a few seconds and the state clears. Attempts are cheap and
+    // stopping after a minute of them means something else is wrong.
+    for (let attempt = 0; attempt < LiveKitChannelHost.DEMO_RESUME_ATTEMPTS; attempt++) {
+      try {
+        await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, this.buildContext(session));
+        return;
+      } catch (error) {
+        const last = attempt === LiveKitChannelHost.DEMO_RESUME_ATTEMPTS - 1;
+        if (last) {
+          logger.error({ error, roomName, stageId }, 'LiveKit: could not pick the conversation back up after the recording');
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, LiveKitChannelHost.DEMO_RESUME_RETRY_MS));
+      }
     }
   }
 
