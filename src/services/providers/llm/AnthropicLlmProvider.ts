@@ -2,11 +2,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { LlmProviderBase } from './LlmProviderBase';
-import { ImageContent, LlmContent, LlmGenerationOptions, LlmGenerationResult, LlmMessage, TextContent } from './ILlmProvider';
+import { ImageContent, LlmContent, LlmGenerationOptions, LlmGenerationResult, LlmMessage, StructuredOutputSupport, TextContent } from './ILlmProvider';
 import { logger } from '../../../utils/logger';
 import type { LlmModelInfo } from '../ProviderCatalogService';
 
 extendZodWithOpenApi(z);
+
+/** Default name for the single forced tool, when the caller does not name its schema. */
+const STRUCTURED_OUTPUT_TOOL = 'structured_output';
 
 /**
  * Schema for Anthropic-specific configuration
@@ -48,6 +51,15 @@ export class AnthropicLlmProvider extends LlmProviderBase<AnthropicLlmProviderCo
   constructor(config: AnthropicLlmProviderConfig, settings: AnthropicLlmSettings) {
     super(config);
     this.settings = settings;
+  }
+
+  /**
+   * Claude enforces a forced tool call's input schema, so a caller that supplies a
+   * schema gets an answer of that shape from the API rather than from the model's
+   * good intentions.
+   */
+  structuredOutput(): StructuredOutputSupport {
+    return 'tool';
   }
 
   /**
@@ -134,6 +146,8 @@ export class AnthropicLlmProvider extends LlmProviderBase<AnthropicLlmProviderCo
       throw new Error('Anthropic client not initialized');
     }
 
+    const toolName = options?.schemaName ?? STRUCTURED_OUTPUT_TOOL;
+
     const response = await this.client.messages.create({
       model: this.settings.model,
       max_tokens: options?.maxTokens ?? this.settings.defaultMaxTokens ?? 4096,
@@ -145,6 +159,13 @@ export class AnthropicLlmProvider extends LlmProviderBase<AnthropicLlmProviderCo
       //stop_sequences: this.settings.stopSequences,
       stream: false,
       metadata: options?.metadata,
+      // One tool, and it must be called: the model has no way to answer in prose.
+      ...(options?.schema
+        ? {
+            tools: [{ name: toolName, description: 'Return the result. This is the only way to answer.', input_schema: options.schema }],
+            tool_choice: { type: 'tool', name: toolName },
+          }
+        : {}),
     } as any);
 
     // Extract text from content blocks
@@ -152,6 +173,12 @@ export class AnthropicLlmProvider extends LlmProviderBase<AnthropicLlmProviderCo
     for (const block of response.content) {
       if (block.type === 'text') {
         content += block.text;
+      }
+      // A forced tool call carries the answer as an already-parsed object. Serialising
+      // it back to text keeps one content shape for every caller; the guarantee it came
+      // with is that the text is now JSON of the requested shape by construction.
+      if (block.type === 'tool_use') {
+        content += JSON.stringify(block.input);
       }
     }
 

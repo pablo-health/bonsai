@@ -9,8 +9,7 @@ import { MAX_LIST_LIMIT } from "../../utils/pagination";
 import { InvalidOperationError } from "../../errors";
 import { KnowledgeService } from "../KnowledgeService";
 import { ClassificationEventData, SampleCopySelectionEventData } from "../../types/conversationEvents";
-import { parseJsonFromMarkdown } from "../../utils/jsonParser";
-import { classificationResultSchema, ActionClassificationResult, ActionClassificationResultWithClassifier, SampleCopyClassificationResult, sampleCopyClassificationResultSchema } from "../../types/classification";
+import { classificationResultSchema, classificationOutputJsonSchema, ActionClassificationResult, ActionClassificationResultWithClassifier, SampleCopyClassificationResult, sampleCopyClassificationResultSchema, sampleCopyOutputJsonSchema } from "../../types/classification";
 import { extractTextFromContent } from "../../utils/llm";
 import type { KnowledgeCategoryResponse } from "../../http/contracts/knowledge";
 import { ContextTransformerExecutor } from "./ContextTransformerExecutor";
@@ -133,6 +132,11 @@ export class UserInputProcessor {
           metadata: {
             classifierName: result.classifierName,
             actionCount: result.actions.length,
+            // Always present, so "this classifier fired nothing" and "this classifier
+            // never answered" are distinguishable in a stored event, not just in a log
+            // line that has since rotated away.
+            classificationFailed: result.classificationFailed ?? false,
+            ...(result.classificationError ? { classificationError: result.classificationError } : {}),
             systemPrompt: result.renderedPrompt,
             llmUsage: result.llmUsage,
             currentVariables: conversation?.stageVars[stage.id] || {},
@@ -155,6 +159,8 @@ export class UserInputProcessor {
           metadata: {
             classifierName: guardrailResult.classifierName,
             actionCount: guardrailResult.actions.length,
+            classificationFailed: guardrailResult.classificationFailed ?? false,
+            ...(guardrailResult.classificationError ? { classificationError: guardrailResult.classificationError } : {}),
             systemPrompt: guardrailResult.renderedPrompt,
             llmUsage: guardrailResult.llmUsage,
             currentVariables: conversation?.stageVars[stage.id] || {},
@@ -283,15 +289,19 @@ export class UserInputProcessor {
       const copyMaxTokens = resolveOutputCap(classifierData.classifier.llmSettings?.defaultMaxTokens, copyLimits, 'classification');
       const copyInputCap = copyLimits?.inputTokensLimits?.classification;
       const { messages: truncatedCopyMessages, ...copyTruncation } = truncateMessagesToTokenBudget(messages, copyInputCap, copyModel);
-      const result = await llmProvider.generate(truncatedCopyMessages, copyMaxTokens !== undefined ? { maxTokens: copyMaxTokens } : undefined);
+      const structured = await llmProvider.generateStructured(truncatedCopyMessages, sampleCopyClassificationResultSchema, {
+        ...(copyMaxTokens !== undefined ? { maxTokens: copyMaxTokens } : {}),
+        schema: sampleCopyOutputJsonSchema,
+        schemaName: 'sample_copy',
+      });
+      const result = structured.raw;
       const textContent = extractTextFromContent(result.content);
 
-      logger.info({ sessionId: session.id, classifierId: classifier.id }, `Received sample copy classification result from LLM provider: ${textContent}`);
-      const classificationResult = sampleCopyClassificationResultSchema.parse(parseJsonFromMarkdown(textContent));
+      logger.info({ sessionId: session.id, classifierId: classifier.id, structuredOutputMode: structured.mode, attempts: structured.attempts }, `Received sample copy classification result from LLM provider: ${textContent}`);
 
       const endMs = Date.now();
       return {
-        ...classificationResult,
+        ...structured.value,
         renderedPrompt,
         result: textContent,
         llmUsage: buildLlmUsage(result.usage, classifierData.llmProviderInfo, classifierData.classifier.llmSettings?.model, copyTruncation),
@@ -313,7 +323,7 @@ export class UserInputProcessor {
     }
   }
 
-  private async classifyTextInput(session: Session, classifierData: ClassifierRuntimeData, context: ConversationContext): Promise<ActionClassificationResultWithClassifier & { renderedPrompt: string; llmUsage?: LlmUsageMetadata; durationMs: number; startMs: number; endMs: number }> {
+  private async classifyTextInput(session: Session, classifierData: ClassifierRuntimeData, context: ConversationContext): Promise<ActionClassificationResultWithClassifier & { renderedPrompt: string | null; llmUsage?: LlmUsageMetadata; durationMs: number; startMs: number; endMs: number; classificationFailed?: boolean; classificationError?: string }> {
     const classifyStartMs = Date.now();
     try {
       logger.debug({ sessionId: session.id, classifierId: classifierData.classifier.id }, 'Classifying text input using classifier');
@@ -338,14 +348,21 @@ export class UserInputProcessor {
       const classifyMaxTokens = resolveOutputCap(classifierData.classifier.llmSettings?.defaultMaxTokens, classifyLimits, 'classification');
       const classifyInputCap = classifyLimits?.inputTokensLimits?.classification;
       const { messages: truncatedClassifyMessages, ...classifyTruncation } = truncateMessagesToTokenBudget(messages, classifyInputCap, classifyModel);
-      const result = await llmProvider.generate(truncatedClassifyMessages, classifyMaxTokens !== undefined ? { maxTokens: classifyMaxTokens } : undefined);
+      // The classifier is asked for a shape, not for prose that happens to look like one.
+      // Where the provider can enforce it, the API does; where it cannot, generateStructured
+      // retries once and then throws rather than handing back something ambiguous.
+      const structured = await llmProvider.generateStructured(truncatedClassifyMessages, classificationResultSchema, {
+        ...(classifyMaxTokens !== undefined ? { maxTokens: classifyMaxTokens } : {}),
+        schema: classificationOutputJsonSchema,
+        schemaName: 'classification',
+      });
+      const result = structured.raw;
       const textContent = extractTextFromContent(result.content);
 
-      logger.info({ sessionId: session.id, classifierId: classifier.id }, `Received classification result from LLM provider: ${textContent}`);
-      const classificationResult = classificationResultSchema.parse(parseJsonFromMarkdown(textContent));
+      logger.info({ sessionId: session.id, classifierId: classifier.id, structuredOutputMode: structured.mode, attempts: structured.attempts }, `Received classification result from LLM provider: ${textContent}`);
 
       // Convert actions object to array format
-      const actions: ActionClassificationResult[] = Object.entries(classificationResult.actions).map(([name, parameters]) => ({
+      const actions: ActionClassificationResult[] = Object.entries(structured.value.actions).map(([name, parameters]) => ({
         name,
         parameters,
       }));
@@ -362,13 +379,26 @@ export class UserInputProcessor {
         endMs,
       };
     } catch (error) {
-      logger.error({ error, sessionId: session.id, classifierId: classifierData.classifier.id }, 'Error classifying text input');
+      // A classifier that could not answer is NOT a classifier that chose no action.
+      // Those were the same value here once, and on a phone line the classifier is the
+      // only thing that can fire an action - so an hour of unreadable responses looked
+      // exactly like an hour of the model deciding to sit still, and nobody's phone rang.
+      //
+      // The turn still proceeds with no action, because dropping a live caller over a
+      // formatting failure would be worse. What changes is that the failure is now
+      // stated: `classificationFailed` rides out on the classification event, so it is
+      // countable in the database and a scenario run containing one is a run that failed
+      // rather than a run to puzzle over.
+      const classificationError = error instanceof Error ? error.message : String(error);
+      logger.error({ error, sessionId: session.id, classifierId: classifierData.classifier.id, classificationFailed: true }, 'Classifier produced no usable result - recording a fault, NOT an empty action set');
       const endMs = Date.now();
       return {
         classifierId: classifierData.classifier.id,
         classifierName: classifierData.classifier.name,
         actions: [],
         renderedPrompt: null,
+        classificationFailed: true,
+        classificationError,
         durationMs: endMs - classifyStartMs,
         startMs: classifyStartMs,
         endMs,

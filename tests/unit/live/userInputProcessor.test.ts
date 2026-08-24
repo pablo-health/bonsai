@@ -5,25 +5,46 @@ import { UserInputProcessor } from '../../../src/services/live/UserInputProcesso
 import type { ConversationContext } from '../../../src/services/live/ConversationContextBuilder';
 import type { ClassifierRuntimeData } from '../../../src/services/live/ConversationRunner';
 import type { ILlmProvider } from '../../../src/services/providers/llm/ILlmProvider';
+import { LlmProviderBase } from '../../../src/services/providers/llm/LlmProviderBase';
 import type { Conversation, Stage, GlobalAction, SampleCopy } from '../../../src/types/models';
 import type { KnowledgeCategoryResponse } from '../../../src/http/contracts/knowledge';
 import type { ActionClassificationResult } from '../../../src/types/classification';
+
+/**
+ * Wrap a bare `generate` as a provider, borrowing the real `generateStructured` from
+ * the base class so these tests exercise the ladder the runtime actually climbs
+ * rather than a stand-in for it.
+ */
+function asProvider(generate: () => Promise<any>, support: 'tool' | 'json' | 'none' = 'none'): ILlmProvider {
+  const provider: any = {
+    generate,
+    structuredOutput: () => support,
+    generateStream: async () => {},
+    enumerateModels: async () => [],
+    init: async () => {},
+    cleanup: async () => {},
+  };
+  provider.generateStructured = LlmProviderBase.prototype.generateStructured.bind(provider);
+  return provider as ILlmProvider;
+}
 
 function makeMockProvider(actionNames: string[] = [], actionParams: Record<string, Record<string, any>> = {}): ILlmProvider {
   const actions: Record<string, Record<string, any>> = {};
   for (const name of actionNames) {
     actions[name] = actionParams[name] || {};
   }
-  return {
-    generate: async () => ({
-      content: [{ contentType: 'text', text: JSON.stringify({ actions }) }],
-      usage: { inputTokens: 10, outputTokens: 5 },
-    }),
-    generateStream: async () => {},
-    enumerateModels: async () => [],
-    init: async () => {},
-    cleanup: async () => {},
-  } as any;
+  return asProvider(async () => ({
+    content: [{ contentType: 'text', text: JSON.stringify({ actions }) }],
+    usage: { inputTokens: 10, outputTokens: 5 },
+  }));
+}
+
+/** A classifier model that answers as though it were the agent, on every attempt. */
+function makeProseProvider(text = 'I am ready. Waiting for the caller to speak.'): ILlmProvider {
+  return asProvider(async () => ({
+    content: [{ contentType: 'text', text }],
+    usage: { inputTokens: 10, outputTokens: 5 },
+  }));
 }
 
 function makeClassifier(id: string, name: string, provider: ILlmProvider): ClassifierRuntimeData {
@@ -141,6 +162,67 @@ describe('UserInputProcessor', () => {
       const result = await processor.processTextInput(session, 'hello', 'hello');
 
       expect(result.actions).to.have.length(0);
+    });
+  });
+
+  describe('a classifier that cannot answer', () => {
+    // The 2026-08-24 regression in miniature: the classifier answered in prose, every
+    // action set came back empty, and nothing anywhere said so. The call must still
+    // proceed - but the event it leaves behind has to name the fault.
+    it('records a fault on the classification event instead of a silent empty action set', async () => {
+      const events: Array<{ type: string; data: any }> = [];
+      conversationService.saveConversationEvent = async (_projectId: string, _conversationId: string, type: string, data: any) => {
+        events.push({ type, data });
+      };
+
+      const classifier = makeClassifier('clf_1', 'Main', makeProseProvider());
+      const runtimeData = {
+        classifiers: [classifier],
+        stage: makeStage(),
+        conversation: makeConversation(),
+        globalActions: [],
+        guardrails: [],
+        guardrailClassifier: null,
+        sampleCopies: [],
+        sampleCopyClassifier: null,
+        costManagementConfig: null,
+      };
+      const session = makeSession(runtimeData);
+
+      const result = await processor.processTextInput(session, 'hello', 'hello');
+
+      expect(result.actions).to.have.length(0);
+      const classification = events.find(e => e.type === 'classification');
+      expect(classification, 'a classification event is still recorded').to.not.be.undefined;
+      expect(classification!.data.metadata.classificationFailed).to.equal(true);
+      expect(classification!.data.metadata.classificationError).to.be.a('string');
+    });
+
+    it('marks a genuine no-action turn as NOT failed, so the two stay distinguishable', async () => {
+      const events: Array<{ type: string; data: any }> = [];
+      conversationService.saveConversationEvent = async (_projectId: string, _conversationId: string, type: string, data: any) => {
+        events.push({ type, data });
+      };
+
+      const classifier = makeClassifier('clf_1', 'Main', makeMockProvider());
+      const runtimeData = {
+        classifiers: [classifier],
+        stage: makeStage(),
+        conversation: makeConversation(),
+        globalActions: [],
+        guardrails: [],
+        guardrailClassifier: null,
+        sampleCopies: [],
+        sampleCopyClassifier: null,
+        costManagementConfig: null,
+      };
+      const session = makeSession(runtimeData);
+
+      const result = await processor.processTextInput(session, 'hello', 'hello');
+
+      expect(result.actions).to.have.length(0);
+      const classification = events.find(e => e.type === 'classification');
+      expect(classification!.data.metadata.classificationFailed).to.equal(false);
     });
   });
 

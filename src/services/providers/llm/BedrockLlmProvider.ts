@@ -11,11 +11,32 @@ import { BedrockClient, ListFoundationModelsCommand } from '@aws-sdk/client-bedr
 import { z } from 'zod';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { LlmProviderBase } from './LlmProviderBase';
-import { ImageContent, LlmContent, LlmGenerationOptions, LlmGenerationResult, LlmMessage, TextContent } from './ILlmProvider';
+import { ImageContent, LlmContent, LlmGenerationOptions, LlmGenerationResult, LlmMessage, StructuredOutputSupport, TextContent } from './ILlmProvider';
 import { logger } from '../../../utils/logger';
 import type { LlmModelInfo } from '../ProviderCatalogService';
 
 extendZodWithOpenApi(z);
+
+/** Default name for the single forced tool, when the caller does not name its schema. */
+const STRUCTURED_OUTPUT_TOOL = 'structured_output';
+
+/**
+ * Wrap the caller's JSON Schema as the only tool available, and require it be called.
+ * With exactly one tool and `toolChoice.tool`, the model has no way to answer in prose.
+ */
+function buildToolConfig(options: LlmGenerationOptions): ConverseCommandInput['toolConfig'] {
+  const name = options.schemaName ?? STRUCTURED_OUTPUT_TOOL;
+  return {
+    tools: [{
+      toolSpec: {
+        name,
+        description: 'Return the result. This is the only way to answer.',
+        inputSchema: { json: options.schema },
+      },
+    }],
+    toolChoice: { tool: { name } },
+  };
+}
 
 /**
  * Schema for Amazon Bedrock provider configuration.
@@ -74,6 +95,19 @@ export class BedrockLlmProvider extends LlmProviderBase<BedrockLlmProviderConfig
   }
 
   /**
+   * Converse exposes tool use with a forced `toolChoice`, so a caller that supplies a
+   * schema gets an answer of that shape from the API rather than from the model's
+   * good intentions.
+   *
+   * Reported unconditionally, because the model families that decline forced tool use
+   * reject the request outright, and `generateStructured` falls back to plain JSON
+   * when they do - a wrong guess here costs one extra round trip, not a failed call.
+   */
+  structuredOutput(): StructuredOutputSupport {
+    return 'tool';
+  }
+
+  /**
    * Initialize the Bedrock runtime client
    */
   async init(): Promise<void> {
@@ -125,6 +159,12 @@ export class BedrockLlmProvider extends LlmProviderBase<BedrockLlmProviderConfig
       for (const block of response.output?.message?.content ?? []) {
         if (block.text) {
           content += block.text;
+        }
+        // A forced tool call carries the answer as an already-parsed object. Serialising
+        // it back to text keeps one content shape for every caller; the guarantee it
+        // came with is that the text is now JSON of the requested shape by construction.
+        if (block.toolUse?.input !== undefined) {
+          content += JSON.stringify(block.toolUse.input);
         }
       }
 
@@ -340,6 +380,7 @@ export class BedrockLlmProvider extends LlmProviderBase<BedrockLlmProviderConfig
             },
           }
         : {}),
+      ...(options?.schema ? { toolConfig: buildToolConfig(options) } : {}),
     };
   }
 

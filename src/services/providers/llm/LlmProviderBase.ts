@@ -1,8 +1,49 @@
+import { z, type ZodType } from 'zod';
 import type { ErrorCallback, SimpleCallback } from '../../../types/callbacks';
-import { ILlmProvider, LlmChunkCallback, LlmCompleteCallback, LlmGenerationOptions, LlmGenerationResult, LlmMessage } from './ILlmProvider';
+import { ILlmProvider, LlmChunkCallback, LlmCompleteCallback, LlmGenerationOptions, LlmGenerationResult, LlmMessage, StructuredGenerationResult, StructuredOutputError, StructuredOutputSupport } from './ILlmProvider';
+import { parseJsonFromMarkdown } from '../../../utils/jsonParser';
+import { extractTextFromContent } from '../../../utils/llm';
 import { logger } from '../../../utils/logger';
 import { log } from 'handlebars';
 import { LlmModelInfo } from '../ProviderCatalogService';
+
+/**
+ * Derive a JSON Schema from a Zod schema, for providers that enforce one.
+ *
+ * A derived schema is a fallback, not the preferred path: it mirrors every branch of
+ * the Zod type, which for a permissive union runs to hundreds of tokens on every
+ * turn. Callers with a hot loop should hand `options.schema` a compact schema of
+ * their own and let the Zod type do the precise validation afterwards.
+ */
+export function toJsonSchema(validator: ZodType<unknown>): Record<string, unknown> {
+  try {
+    const { $schema, ...schema } = z.toJSONSchema(validator as any, { io: 'input', unrepresentable: 'any' }) as Record<string, unknown>;
+    return schema;
+  } catch (error) {
+    logger.warn(`Could not derive a JSON Schema, falling back to an unconstrained object: ${error instanceof Error ? error.message : String(error)}`);
+    return { type: 'object' };
+  }
+}
+
+/**
+ * Parse the JSON a model meant to send, from the text it actually sent.
+ *
+ * Beyond the code fences `parseJsonFromMarkdown` already strips, this recovers the
+ * case where a model prefaces the object with a sentence. It is only ever reached on
+ * the unconstrained rung; a provider that enforces a schema never needs it.
+ */
+function parseStructuredText(text: string): unknown {
+  try {
+    return parseJsonFromMarkdown(text);
+  } catch (error) {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end <= start) {
+      throw error;
+    }
+    return JSON.parse(text.slice(start, end + 1));
+  }
+}
 
 /**
  * Abstract base class for LLM provider implementations
@@ -40,6 +81,81 @@ export abstract class LlmProviderBase<TConfig> implements ILlmProvider {
    * Must be implemented by subclasses
    */
   abstract generateStream(messages: LlmMessage[], options?: LlmGenerationOptions): Promise<void>;
+
+  /**
+   * How strongly this provider can constrain the shape of its output.
+   *
+   * 'none' by default so that every provider compiles and behaves exactly as it did
+   * before this existed. A provider opts in deliberately, by overriding this and
+   * honouring `options.schema` in `generate`.
+   */
+  structuredOutput(): StructuredOutputSupport {
+    return 'none';
+  }
+
+  /**
+   * Generate a value that satisfies `validator`, or throw.
+   *
+   * The ladder, climbed once here rather than at each call site:
+   *
+   *   tool  the API enforces the shape. One attempt is enough, because a second
+   *         could not do better.
+   *   json  the API guarantees valid JSON but not the requested shape, so a shape
+   *         failure is still possible and still worth one retry.
+   *   none  prose. Parse it, and on failure retry ONCE with the parse error handed
+   *         back to the model. One retry converts most single-shot formatting
+   *         slips; a second failure is a real failure rather than a coin toss.
+   *
+   * A tool-capable provider that rejects the request outright - a model family whose
+   * Bedrock profile has no forced tool use, say - falls back to the JSON rung rather
+   * than failing the caller. A live phone call should not end over a request shape.
+   *
+   * Whatever happens, the outcome is a validated value or a StructuredOutputError.
+   * There is deliberately no third outcome that a caller could read as "no action".
+   */
+  async generateStructured<T>(messages: LlmMessage[], validator: ZodType<T>, options?: LlmGenerationOptions): Promise<StructuredGenerationResult<T>> {
+    const support = this.structuredOutput();
+
+    if (support === 'tool') {
+      const schema = options?.schema ?? toJsonSchema(validator);
+      try {
+        const raw = await this.generate(messages, { ...options, schema, outputFormat: 'json' });
+        return { value: validator.parse(parseStructuredText(extractTextFromContent(raw.content))), raw, mode: 'tool', attempts: 1 };
+      } catch (error) {
+        logger.warn(`Constrained generation failed, falling back to JSON output: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    // Both remaining rungs parse prose; they differ only in whether the API promised
+    // the text would be JSON at all.
+    const mode: StructuredOutputSupport = support === 'json' ? 'json' : 'none';
+    const baseOptions: LlmGenerationOptions = { ...options, schema: undefined, ...(mode === 'json' ? { outputFormat: 'json' as const } : {}) };
+
+    let lastText = '';
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const attemptMessages = attempt === 1 ? messages : [
+        ...messages,
+        { role: 'assistant' as const, content: lastText || '(empty response)' },
+        { role: 'user' as const, content: `That response could not be used: ${lastError instanceof Error ? lastError.message : String(lastError)}. Reply with the JSON object only - no prose, no explanation, no code fences.` },
+      ];
+
+      try {
+        const raw = await this.generate(attemptMessages, baseOptions);
+        lastText = extractTextFromContent(raw.content);
+        return { value: validator.parse(parseStructuredText(lastText)), raw, mode, attempts: attempt };
+      } catch (error) {
+        lastError = error;
+        logger.warn(`Structured generation attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    throw new StructuredOutputError(
+      `Could not obtain schema-valid output after 2 attempts (mode: ${mode}): ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      lastText,
+      lastError,
+    );
+  }
 
   /**
    * Set callback for streaming chunks
