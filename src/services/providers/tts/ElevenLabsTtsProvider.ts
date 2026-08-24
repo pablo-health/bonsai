@@ -54,6 +54,23 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
   /** True from start() until the close that ends that turn's speech. An idle socket is not generating. */
   private generating: boolean = false;
 
+  /**
+   * Serialises the handling of inbound socket messages.
+   *
+   * An EventEmitter does not await an async listener. It calls it and moves on, so handling a
+   * message that takes two seconds does not stop the next message arriving a tenth of a second
+   * later and being handled at the same time - and handling a chunk means pushing its audio,
+   * frame by paced frame, into the one audio source the call is speaking through.
+   *
+   * The vendor sends the whole greeting as four bursts inside half a second, each holding up to
+   * two seconds of speech, so four handlers ran at once and their frames interleaved. The result
+   * has the loudness and texture of ordinary speech and none of its words: nothing is dropped,
+   * nothing stalls, and the sentence dissolves. Amazon Polly never showed it because its audio
+   * arrives down a single response body that one loop reads end to end - it is serial by
+   * construction, and this is what gives the socket the same guarantee.
+   */
+  private inbound: Promise<void> = Promise.resolve();
+
   /** Set by cleanup(). Stops a closing socket from being replaced by another one nobody wants. */
   private disposed: boolean = false;
 
@@ -184,8 +201,16 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         resolve();
       });
 
-      socket.on('message', async (data: Buffer) => {
-        await this.handleWebSocketMessage(data);
+      // Queued rather than awaited: see `inbound`. Each message waits for the one before it to
+      // finish being handled, so audio reaches the transport in the order it was spoken.
+      socket.on('message', (data: Buffer) => {
+        this.inbound = this.inbound
+          .then(() => this.handleWebSocketMessage(data))
+          .catch(async (error: unknown) => {
+            // Swallowed deliberately: a rejection left in the chain would reject every message
+            // after it, so one malformed frame would silence the rest of the turn.
+            await this.handleError(error instanceof Error ? error : new Error(String(error)));
+          });
       });
 
       socket.on('error', async (error: Error) => {
@@ -194,8 +219,12 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         reject(error);
       });
 
-      socket.on('close', async (code: number, reason: Buffer) => {
-        await this.handleWebSocketClose(code, reason.toString());
+      // Behind the same queue, so the turn is not declared over while the last chunk's audio is
+      // still being handed to the transport.
+      socket.on('close', (code: number, reason: Buffer) => {
+        this.inbound = this.inbound
+          .then(() => this.handleWebSocketClose(code, reason.toString()))
+          .catch(() => { /* closing is the end of the turn; nothing left to fail into */ });
       });
     });
 
@@ -561,6 +590,7 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
 
     this.connecting = null;
     this.generating = false;
+    this.inbound = Promise.resolve();
     this.inNoSpeechSection = undefined;
     this.audioChunks = [];
     this.audioDurationMs = 0;
