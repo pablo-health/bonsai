@@ -91,6 +91,21 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   private streamOpen = false;
   /** Text of the most recent partial result, promoted to a final chunk if the stream ends abruptly. */
   private lastPartial = '';
+  /** Resolves when the result stream has been fully drained, so stop() can wait for the real final. */
+  private consumeDone: Promise<void> | null = null;
+
+  /**
+   * How long stop() will wait for Transcribe to finalise before giving up and using the partial.
+   *
+   * Partials trail the audio by roughly 300-1000ms and are explicitly revisable, so the last one
+   * seen is a hypothesis from before the caller finished speaking. Returning it immediately is
+   * what produced transcripts cut mid-word - "I'd like to book that appoint" - even when the
+   * endpoint decision itself was correct.
+   *
+   * The ceiling matters as much as the wait. This sits directly between the caller finishing and
+   * the agent replying, so an unbounded wait would trade one visible fault for a slower one.
+   */
+  private static readonly FINALIZE_TIMEOUT_MS = 800;
 
   constructor(config: TranscribeAsrProviderConfig, settings: TranscribeAsrSettings) {
     super(config);
@@ -181,7 +196,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
       logger.info(`Transcribe ASR stream opened at ${sampleRate} Hz for language ${this.settings.language}`);
 
       if (response.TranscriptResultStream) {
-        void this.consume(response.TranscriptResultStream);
+        this.consumeDone = this.consume(response.TranscriptResultStream);
       }
     } catch (error) {
       this.streamOpen = false;
@@ -203,6 +218,35 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     this.ended = true;
     this.wake();
 
+    // Let Transcribe finish what it already has before calling the turn over.
+    //
+    // Ending the audio generator sends EOF, and Transcribe then emits a non-partial result for
+    // the audio it has already been given. Firing handleRecognitionStopped without waiting meant
+    // the turn was submitted with whatever PARTIAL happened to be current - a hypothesis from
+    // several hundred milliseconds before the caller stopped talking - so transcripts arrived cut
+    // mid-word even when the endpoint decision was right. The Azure provider in this same
+    // directory already gets this right and says why; this is that behaviour, with a deadline.
+    //
+    // The deadline is not optional. This wait sits between the caller finishing and the agent
+    // answering, so a stream that never closes must not hold the call open indefinitely.
+    if (this.consumeDone) {
+      const drained = this.consumeDone;
+      this.consumeDone = null;
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        drained.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            logger.warn(`[ASR] Transcribe did not finalise within ${TranscribeAsrProvider.FINALIZE_TIMEOUT_MS}ms, using the last partial`);
+            resolve();
+          }, TranscribeAsrProvider.FINALIZE_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+    }
+
+    // Only if the real final never arrived. When it did, consume() has already emitted it and
+    // cleared lastPartial, and promoting a stale hypothesis on top would duplicate the tail.
     if (this.lastPartial.trim()) {
       this.handleRecognized(this.currentChunkId, this.lastPartial.trim());
       this.lastPartial = '';
