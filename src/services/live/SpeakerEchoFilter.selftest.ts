@@ -74,6 +74,24 @@ check('quoting the agent back loses the quote but never the question',
   'You said it drafts the reply in your own voice ready to send, how?',
   'You said how?');
 
+// From a live call, and the reason this filter checks WHERE a span sits. The caller is
+// summarising the product back to check they understood it - the most ordinary thing a prospect
+// does - and every word of "them to voicemail" is the agent's. An earlier version deleted it and
+// left "instead of losing That makes sense", which mangles a sentence nobody had trouble with.
+check('a caller summarising the product back keeps every word of it',
+  ['It answers calls and logs what people need instead of losing them to voicemail.'],
+  "OK. So the phone piece answers calls and logs what people need instead of losing them to " +
+  "voicemail. That makes sense. What's the cost?",
+  "OK. So the phone piece answers calls and logs what people need instead of losing them to " +
+  "voicemail. That makes sense. What's the cost?");
+
+// The same words, at the end of the turn with nothing of the caller's after them: that is the
+// microphone still listening when the caller has stopped, and it goes.
+check('the same phrase trailing off the end of a turn is echo',
+  ['It answers calls and logs what people need instead of losing them to voicemail.'],
+  "That makes sense. What's the cost? losing them to voicemail",
+  "That makes sense. What's the cost?");
+
 check('only the last few utterances are remembered',
   ['one two three four five', 'a b c d e', 'p q r s t', 'z y x w v'],
   'one two three four five',

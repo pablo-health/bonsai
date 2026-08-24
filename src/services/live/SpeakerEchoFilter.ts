@@ -96,12 +96,13 @@ export class SpeakerEchoFilter {
       .filter((t) => t.norm.length > 0);
     const norm = indexed.map((t) => t.norm);
 
-    const droppedIndices = new Set<number>();
+    // Pass one: every span the agent also said, without deciding yet whether to remove it.
+    const runs: Array<{ from: number; to: number }> = [];
     let i = 0;
     while (i < indexed.length) {
-      // The longest run starting here that the agent also said. Longest rather than shortest:
-      // stopping at MIN_ECHO_TOKENS would leave the tail of a long echo behind, which is the
-      // half that reads as the caller having said something strange.
+      // The longest run starting here. Longest rather than shortest: stopping at MIN_ECHO_TOKENS
+      // would leave the tail of a long echo behind, which is the half that reads as the caller
+      // having said something strange.
       let matched = 0;
       for (let len = indexed.length - i; len >= MIN_ECHO_TOKENS; len--) {
         const candidate = norm.slice(i, i + len);
@@ -111,10 +112,37 @@ export class SpeakerEchoFilter {
         }
       }
       if (matched > 0) {
-        for (let k = i; k < i + matched; k++) droppedIndices.add(indexed[k].index);
+        runs.push({ from: i, to: i + matched });
         i += matched;
       } else {
         i++;
+      }
+    }
+
+    // Pass two: WHERE the span sits, which is what separates echo from a caller quoting.
+    //
+    // Echo arrives at the EDGES of a turn. The microphone catches the agent's tail as the caller
+    // starts talking, or catches it still going after they stop - so an echoed span has the
+    // caller's own words on at most one side of it.
+    //
+    // A caller repeating the agent does it in the MIDDLE, with their own words either side:
+    //
+    //   "...and logs what people need instead of losing them to voicemail. That makes sense."
+    //
+    // Every word of "them to voicemail" came from the agent, and the caller still said all of it
+    // - they were summarising back to check they had understood, which is the most ordinary
+    // thing a prospect does. An earlier version of this deleted it and left "instead of losing
+    // That makes sense", mangling a sentence nobody had a problem with. Flanked spans stay.
+    const isMatched = (idx: number) => runs.some((r) => idx >= r.from && idx < r.to);
+    const droppedIndices = new Set<number>();
+    for (const run of runs) {
+      let before = 0;
+      for (let k = 0; k < run.from; k++) if (!isMatched(k)) before++;
+      let after = 0;
+      for (let k = run.to; k < indexed.length; k++) if (!isMatched(k)) after++;
+      // At an edge if there is not a sentence's worth of the caller's own words on that side.
+      if (before < MIN_ECHO_TOKENS || after < MIN_ECHO_TOKENS) {
+        for (let k = run.from; k < run.to; k++) droppedIndices.add(indexed[k].index);
       }
     }
 
