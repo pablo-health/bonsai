@@ -263,10 +263,23 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
       const buffer = Buffer.from(response.audio, 'base64');
       this.audioChunks.push(buffer);
 
-      if (response.alignment?.chars?.length) {
-        const text = response.alignment.chars.join('').replace(/\s+/g, ' ');
+      // Audio goes out as soon as it arrives, whether or not this message carried alignment.
+      //
+      // It used to be held until an aligned message turned up, which had two consequences and
+      // both were audible. Audio reached the transport in lumps rather than as a stream - single
+      // buffers of several seconds, which the transport rejects outright - and anything still
+      // held when the socket closed early was simply lost, so sentences arrived a quarter of
+      // their proper length. Close codes 1005 and 1006 were appearing on nearly every turn.
+      //
+      // Alignment is metadata about timing. It is worth using when it is there and worth waiting
+      // for never: a caller hears the audio, not the character offsets.
+      const aligned = response.alignment?.chars?.length ? response.alignment : null;
+      {
+        const text = aligned ? aligned.chars.join('').replace(/\s+/g, ' ') : '';
         const concatenatedBuffer = Buffer.concat([...this.audioChunks]);
-        const chunkDuration = response.alignment.charStartTimesMs.at(-1) + response.alignment.charDurationsMs.at(-1);
+        const chunkDuration = aligned
+          ? aligned.charStartTimesMs.at(-1) + aligned.charDurationsMs.at(-1)
+          : 0;
         this.audioDurationMs += chunkDuration;
         this.audioChunks = [];
 
