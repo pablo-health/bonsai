@@ -752,7 +752,7 @@ export class LiveKitChannelHost {
         // real caller whose bridge went to voicemail sat in silence for over two minutes before
         // saying "testing" and finally hearing it. Dead air after a ring is worse than never
         // having tried the bridge at all.
-        if (!spoken) await this.tellCallerTheyCouldNotBePutThrough(ctx);
+        if (!spoken) await this.tellCallerTheyCouldNotBePutThrough(ctx.config, ctx.roomName);
       }
     }
   }
@@ -962,6 +962,12 @@ export class LiveKitChannelHost {
         }
         logger.info({ roomName, callerRoomName, identity }, 'LiveKit: the dialed leg hung up, giving the caller the agent back');
         this.dropBridge(callerRoomName).catch((error) => logger.error({ error, callerRoomName }, 'LiveKit: could not close the bridge after the leg left'));
+        // A leg that hung up WITHOUT being moved never reached the caller: it was rejected, went
+        // to voicemail, or was put down. Handing the agent back is right and saying nothing is
+        // not - the caller has been holding a live line and knows only that the ringing stopped.
+        // Without this the bridge-failed stage exists, is configured, and is never entered.
+        this.tellCallerTheyCouldNotBePutThrough(config, callerRoomName).catch((error) =>
+          logger.error({ error, callerRoomName }, 'LiveKit: could not tell the caller the leg hung up'));
       });
 
       const token = new AccessToken(config.apiKey, config.apiSecret, { identity: agentIdentity });
@@ -1190,23 +1196,26 @@ export class LiveKitChannelHost {
    * answering party refused without a message, or the whole thing threw.
    * @param ctx - The bridge context, carrying the project's stage configuration.
    */
-  private async tellCallerTheyCouldNotBePutThrough(ctx: BridgeContext): Promise<void> {
-    const stageId = ctx.config.bridgeFailedStageId;
+  private async tellCallerTheyCouldNotBePutThrough(
+    config: LiveKitChannelProviderConfig,
+    callerRoomName: string,
+  ): Promise<void> {
+    const stageId = config.bridgeFailedStageId;
     if (!stageId) {
-      logger.info({ roomName: ctx.roomName }, 'LiveKit: no bridge-failed stage configured, the caller was told nothing');
+      logger.info({ roomName: callerRoomName }, 'LiveKit: no bridge-failed stage configured, the caller was told nothing');
       return;
     }
 
-    const call = this.activeCalls.get(ctx.roomName);
+    const call = this.activeCalls.get(callerRoomName);
     const session = call ? this.sessionManager.getSession(call.sessionId) : undefined;
     const conversationId = session?.conversationId;
     if (!session || !conversationId) return;
 
     try {
       await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, this.buildContext(session));
-      logger.info({ roomName: ctx.roomName, stageId }, 'LiveKit: told the caller they could not be put through');
+      logger.info({ roomName: callerRoomName, stageId }, 'LiveKit: told the caller they could not be put through');
     } catch (error) {
-      logger.error({ error, roomName: ctx.roomName, stageId }, 'LiveKit: could not tell the caller the bridge failed');
+      logger.error({ error, roomName: callerRoomName, stageId }, 'LiveKit: could not tell the caller the bridge failed');
     }
   }
 
