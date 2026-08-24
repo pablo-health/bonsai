@@ -162,6 +162,17 @@ type PendingPostResponseAction =
   | { name: string, type: 'end_conversation'; endReason: string; context: ConversationContext }
   | { name: string, type: 'abort_conversation'; abortReason: string; context: ConversationContext };
 
+/**
+ * A transcript ending in a way an English sentence cannot end.
+ *
+ * Filled pauses ("uh", "um") and words that must be followed by something - articles,
+ * prepositions, possessives, conjunctions, auxiliaries. Somebody who stops on one of these has
+ * not finished; they are thinking. Deliberately short and boring: every entry has to be a word
+ * that is genuinely almost never final, because a false positive here holds the line open on
+ * somebody who is waiting for an answer.
+ */
+const DANGLING_TAIL = /\b(uh|um|er|erm|hmm|a|an|the|my|your|our|his|her|their|its|and|or|but|so|to|of|for|with|at|in|on|from|about|is|are|was|were|am|be|been|i'?m|it'?s|that'?s|we'?re|you'?re|i'?d|i'?ll|we'?ll|like|just|can|could|would|should|will|do|does|did)\s*$/i;
+
 /** 
  * Manages the lifecycle and state of a conversation. Runners are hosted by the SessionManager.
  */
@@ -220,7 +231,21 @@ export class ConversationRunner {
   /** Timer that stops ASR if Smart Turn indicates continuation but no new speech arrives. */
   private smartTurnContinueTimer: NodeJS.Timeout | null = null;
   /** Duration before Smart Turn continuation times out and ASR is stopped. */
+  /**
+   * The longest we will ever hold the line open after Smart Turn says somebody is still going.
+   *
+   * A ceiling now rather than a fixed wait - see smartTurnContinueWaitMs. A flat three seconds
+   * was paid in full on every false continuation, and three seconds of silence is long enough
+   * that a caller who HAS finished says "hello?" into it, which arrives as a new turn and makes
+   * the confusion worse.
+   */
   private readonly SMART_TURN_CONTINUE_TIMEOUT_MS = 3000;
+
+  /** The floor, for when both signals agree the caller has almost certainly finished. */
+  private readonly SMART_TURN_CONTINUE_MIN_MS = 600;
+
+  /** The most recent interim transcript of the turn in progress. */
+  private latestPartialText = '';
 
   /** Partial ASR transcript accumulated during barge-in (silent barge-in captures partial text). Null when not in barge-in mode. */
   private bargeInPartialText: string | null = null;
@@ -674,6 +699,9 @@ export class ConversationRunner {
             isFinal: false,
           };
           await this.channel.sendMessage(message);
+          // Kept because the words are the strongest signal we have about whether somebody has
+          // finished, and Smart Turn cannot see them - it is an audio model.
+          this.latestPartialText = text;
           this.clearBargeInSilenceTimer();
         });
 
@@ -2254,8 +2282,10 @@ export class ConversationRunner {
         return true;
       }
 
+      const waitMs = this.smartTurnContinueWaitMs(result.endpointProbability, threshold);
       logger.info(
-        { conversationId, endpointProbability: result.endpointProbability, threshold },
+        { conversationId, endpointProbability: result.endpointProbability, threshold, waitMs,
+          partial: this.latestPartialText.slice(-40) },
         'Smart Turn: continuation detected, keeping ASR active'
       );
 
@@ -2273,7 +2303,7 @@ export class ConversationRunner {
             );
           }
         }
-      }, this.SMART_TURN_CONTINUE_TIMEOUT_MS);
+      }, waitMs);
 
       return false;
     } catch (error) {
@@ -2283,6 +2313,45 @@ export class ConversationRunner {
       );
       return true;
     }
+  }
+
+  /**
+   * How long to keep listening after Smart Turn says the caller is still going.
+   *
+   * The timer exists to hedge an uncertain verdict, so it should be as long as the uncertainty
+   * and no longer. Two things narrow it, and they are independent:
+   *
+   * CONFIDENCE. A verdict of 0.05 means the model is sure they are mid-sentence and the full
+   * wait is right. A verdict of 0.60 against a 0.65 threshold means it very nearly called them
+   * finished, and waiting three seconds on that is waiting on a coin flip.
+   *
+   * THE WORDS. Smart Turn only hears audio; it never sees the transcript, and the transcript is
+   * often decisive. "I'd like to book that appoint" cannot be a finished sentence - it ends
+   * mid-word. "Uh, this is my" ends on a possessive with nothing possessed. Both are worth the
+   * full wait. "Thursday at three works." has a terminal stop and needs almost none.
+   *
+   * Neither signal is trusted alone: an unfinished-looking transcript with a confident endpoint
+   * still gets a short wait, because Transcribe punctuates late and a missing full stop is weak
+   * evidence on its own.
+   */
+  private smartTurnContinueWaitMs(endpointProbability: number, threshold: number): number {
+    const span = this.SMART_TURN_CONTINUE_TIMEOUT_MS - this.SMART_TURN_CONTINUE_MIN_MS;
+
+    // 0 when the model was about to call it finished, 1 when it was certain they were not.
+    const uncertainty = threshold > 0 ? Math.max(0, Math.min(1, 1 - endpointProbability / threshold)) : 1;
+
+    const text = this.latestPartialText.trim();
+    let textFactor = 0.5;                       // no opinion
+    if (text) {
+      if (/[.!?]$/.test(text)) {
+        textFactor = 0.15;                      // a finished sentence
+      } else if (DANGLING_TAIL.test(text)) {
+        textFactor = 1;                         // cannot be the end of a sentence
+      }
+    }
+
+    const weight = Math.max(uncertainty, textFactor * uncertainty, textFactor === 1 ? 1 : 0);
+    return Math.round(this.SMART_TURN_CONTINUE_MIN_MS + span * weight);
   }
 
   /** Clears the Smart Turn continuation timer if active. */
@@ -2443,6 +2512,8 @@ export class ConversationRunner {
   private resetTurnData(): void {
     this.turnMessageVisibility = undefined;
     this.pendingPostResponseAction = null;
+    // Per-turn: a partial from the previous utterance would answer the wrong question entirely.
+    this.latestPartialText = '';
     this.turnData = {
       inputTurnId: this.turnData.inputTurnId,
       outputTurnId: undefined,
