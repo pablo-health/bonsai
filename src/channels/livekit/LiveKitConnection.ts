@@ -268,11 +268,15 @@ export class LiveKitConnection implements IClientConnection {
         // crosses the threshold because at that point a person can hear it, and a person hearing
         // it before we do is how this measurement came to exist.
         if (this.worstGapMs > 0) {
-          const level = this.worstGapMs >= STALL_MS ? 'warn' : 'debug';
-          logger[level]({ sessionId: this.session?.id, worstGapMs: this.worstGapMs },
-            this.worstGapMs >= STALL_MS
-              ? 'LiveKit: agent audio stalled mid-utterance'
-              : 'LiveKit: agent audio was continuous');
+          // Reported at INFO even when it is fine, deliberately. The first version logged the
+          // healthy case at debug, which the deployed log level filters out - so a clean run and
+          // a run with no measurement at all looked identical, which is the precise failure this
+          // instrument was built to stop happening.
+          const stalled = this.worstGapMs >= STALL_MS;
+          logger[stalled ? 'warn' : 'info'](
+            { sessionId: this.session?.id, worstGapMs: this.worstGapMs, stalled },
+            stalled ? 'LiveKit: agent audio stalled mid-utterance' : 'LiveKit: agent audio continuity',
+          );
         }
 
         const generation = this.generation;
