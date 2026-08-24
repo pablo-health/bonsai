@@ -48,6 +48,15 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
   /** WebSocket connection to ElevenLabs streaming API */
   private socket: WebSocket | null = null;
 
+  /** The connection attempt in flight, or the one that already succeeded, so a turn can adopt a socket opened before it */
+  private connecting: Promise<void> | null = null;
+
+  /** True from start() until the close that ends that turn's speech. An idle socket is not generating. */
+  private generating: boolean = false;
+
+  /** Set by cleanup(). Stops a closing socket from being replaced by another one nobody wants. */
+  private disposed: boolean = false;
+
   /** Sentence splitter for processing streaming text */
   private sentenceSplitter: SentenceSplitter | null = null;
 
@@ -71,7 +80,24 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     this.settings = settings;
   }
 
-  async init(): Promise<void> { }
+  async init(): Promise<void> {
+    // Open the socket now, not when the first sentence is ready to speak. Connect, TLS and the
+    // beginning-of-stream round trip cost real time, and paying for them at the moment there is
+    // finally something to say means the caller spends that time listening to nothing.
+    this.prewarm();
+  }
+
+  /**
+   * Opens the connection ahead of the turn that will need it, without waiting for the result.
+   * Safe to call whenever: a socket that is already open is left alone, and a failure here is
+   * only logged, because start() will open one itself and report the error if it cannot.
+   */
+  private prewarm(): void {
+    if (this.disposed) return;
+    void this.connect().catch(error => {
+      logger.warn(`[ElevenLabs] Pre-warm failed, will connect on demand: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
 
   /**
    * Gets the list of supported audio output formats for ElevenLabs
@@ -96,15 +122,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     this.audioChunks = [];
     this.audioDurationMs = 0;
 
-    // Merge conversation config with provider config
-    const effectiveVoiceId = this.settings.voiceId;
-    const effectiveSpeed = this.settings.speed ?? 1.0;
-    const effectiveModel = this.settings.model ?? 'eleven_flash_v2_5';
-
-    if (!effectiveVoiceId) {
-      throw new Error('Voice ID must be provided either in config or start() parameters');
-    }
-
     // Initialize sentence splitter with callback to send complete sentences (if enabled)
     const useSentenceSplitter = this.settings.useSentenceSplitter ?? true;
     if (useSentenceSplitter) {
@@ -119,36 +136,70 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
       this.sentenceSplitter = null;
     }
 
+    // Usually this has already happened and costs nothing.
+    await this.connect();
+
+    this.generating = true;
+    this.handleGenerationStarted();
+  }
+
+  /**
+   * Opens the socket and sends the beginning-of-stream message, or hands back the connection
+   * that is already open or already on its way.
+   *
+   * Connecting is deliberately not the same thing as generating. The socket can be opened long
+   * before there is anything to say — and opening it does not begin a turn, so an idle socket
+   * that times out between turns ends nothing and reports nothing.
+   */
+  private connect(): Promise<void> {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    if (this.connecting) {
+      return this.connecting;
+    }
+
+    const effectiveVoiceId = this.settings.voiceId;
+    if (!effectiveVoiceId) {
+      return Promise.reject(new Error('Voice ID must be provided either in config or start() parameters'));
+    }
+
+    const effectiveSpeed = this.settings.speed ?? 1.0;
+    const effectiveModel = this.settings.model ?? 'eleven_flash_v2_5';
     this.audioFormat = this.getOutputFormat();
 
-    logger.info(`[ElevenLabs] Starting speech generation with voiceId: ${effectiveVoiceId}, model: ${effectiveModel}, speed: ${effectiveSpeed}, stability: ${this.settings.stability}, similarityBoost: ${this.settings.similarityBoost}, audioFormat: ${this.audioFormat}`);
+    logger.info(`[ElevenLabs] Opening connection with voiceId: ${effectiveVoiceId}, model: ${effectiveModel}, speed: ${effectiveSpeed}, stability: ${this.settings.stability}, similarityBoost: ${this.settings.similarityBoost}, audioFormat: ${this.audioFormat}`);
 
     const useGlobalPreview = this.settings.useGlobalPreview ?? true;
     const baseUrl = useGlobalPreview ? 'wss://api-global-preview.elevenlabs.io' : 'wss://api.elevenlabs.io';
     const inactivityTimeout = this.settings.inactivityTimeout ?? 180;
     const wsUrl = `${baseUrl}/v1/text-to-speech/${effectiveVoiceId}/stream-input?model_id=${effectiveModel}&output_format=${this.audioFormat}&inactivity_timeout=${inactivityTimeout}`;
 
-    return new Promise<void>((resolve, reject) => {
-      this.socket = new WebSocket(wsUrl);
+    this.connecting = new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(wsUrl);
+      this.socket = socket;
 
-      this.socket.on('open', async () => {
+      socket.on('open', async () => {
         await this.handleWebSocketOpen(effectiveSpeed);
         resolve();
       });
 
-      this.socket.on('message', async (data: Buffer) => {
+      socket.on('message', async (data: Buffer) => {
         await this.handleWebSocketMessage(data);
       });
 
-      this.socket.on('error', async (error: Error) => {
+      socket.on('error', async (error: Error) => {
+        this.connecting = null;
         await this.handleWebSocketError(error);
         reject(error);
       });
 
-      this.socket.on('close', async (code: number, reason: Buffer) => {
+      socket.on('close', async (code: number, reason: Buffer) => {
         await this.handleWebSocketClose(code, reason.toString());
       });
     });
+
+    return this.connecting;
   }
 
   /**
@@ -247,8 +298,6 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
 
     this.socket.send(JSON.stringify(bosMessage));
     logger.info(`[ElevenLabs] Connection established with voice settings: ${JSON.stringify(voiceSettings)}`);
-
-    this.handleGenerationStarted();
   }
 
   /**
@@ -345,7 +394,21 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
    */
   private async handleWebSocketClose(code: number, reason: string): Promise<void> {
     logger.info(`[ElevenLabs] Connection closed with code ${code}: ${reason}`);
+    this.socket = null;
+    this.connecting = null;
+
+    if (!this.generating) {
+      // An idle socket timed out, or the vendor hung up between turns. Nobody was speaking, so
+      // nothing ended: say nothing, and let the next turn open a fresh one.
+      return;
+    }
+
+    this.generating = false;
     this.handleGenerationEnded();
+
+    // The next turn will want a socket too. Open it now, in the pause while the caller is
+    // speaking, rather than when the first sentence is already waiting on it.
+    this.prewarm();
   }
 
   /**
@@ -482,6 +545,8 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
    * Cleans up resources when the provider is no longer needed
    */
   async cleanup(): Promise<void> {
+    this.disposed = true;
+
     if (this.socket) {
       if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) {
         this.socket.close();
@@ -494,6 +559,8 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
       this.sentenceSplitter = null;
     }
 
+    this.connecting = null;
+    this.generating = false;
     this.inNoSpeechSection = undefined;
     this.audioChunks = [];
     this.audioDurationMs = 0;
