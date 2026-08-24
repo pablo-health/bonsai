@@ -2462,10 +2462,21 @@ export class ConversationRunner {
   }
 
   private async processUserInput(userInput: string, userInputSource: 'text' | 'voice', asrEndMs?: number) {
-    // Handle barge-in: prepend accumulated partial transcript from previous ASR sessions.
+    // Barge-in bookkeeping. NOT accumulation - the caller sites already did that.
+    //
+    // This used to prepend bargeInPartialText to userInput, and both call sites pass
+    // bargeInPartialText in AS userInput, so every barged-in turn arrived exactly doubled:
+    //
+    //   "can you tell me about the product. is there a demo?
+    //    can you tell me about the product. is there a demo?"
+    //
+    // That reached the classifier and the reply model, so the agent answered a caller who
+    // appeared to have asked the same thing twice in one breath - it talked straight past them,
+    // and a demo the caller asked for was re-offered instead of continuing. Interrupting is the
+    // one moment a caller most needs to be heard accurately, and it was the one moment the input
+    // was mangled.
     if (this.isBargeIn && this.bargeInPartialText) {
       const abortedOutputTurnId = this.turnData.outputTurnId || null;
-      userInput = `${this.bargeInPartialText} ${userInput}`.trim();
       logger.info({ conversationId: this.stageData.conversation.id, abortedOutputTurnId }, `Barge-in: processing accumulated transcript`);
 
       // Save turn_aborted event for the interrupted response.
