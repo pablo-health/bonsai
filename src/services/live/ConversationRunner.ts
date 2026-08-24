@@ -11,6 +11,7 @@ import { ConversationService } from "../ConversationService";
 import { ConversationStorageService } from "../ConversationStorageService";
 import { ConversationRecorder } from "./ConversationRecorder";
 import { logger } from "../../utils/logger";
+import { SpeakerEchoFilter } from "./SpeakerEchoFilter";
 import { AgentService } from "../AgentService";
 import type { Session } from "../../channels/SessionManager";
 import { getEffectiveChannelType } from "../../channels/SessionManager";
@@ -264,6 +265,8 @@ export class ConversationRunner {
    * to refusing every number.
    */
   private voiceOutputGuard: VoiceOutputGuard | null = null;
+  /** Per-conversation, because it only ever compares a caller to the agent talking to them. */
+  private echoFilter = new SpeakerEchoFilter();
 
   private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
@@ -954,6 +957,10 @@ export class ConversationRunner {
         const turnEndMs = !ttsProvider ? llmEndMs : undefined;
 
         // Save AI message event with usage info and timing metrics
+        // Before it is sent anywhere: whatever the agent says here is what may come back off a
+        // speakerphone as the caller's next turn.
+        this.echoFilter.noteAgentSpeech(fullResponseText);
+
         const messageEventData: MessageEventData = {
           text: fullResponseText,
           role: 'assistant',
@@ -2494,6 +2501,29 @@ export class ConversationRunner {
     // Let's save the message event to fill data about timing and user input after moderation and processing
     // Before anything else does: the guard needs the caller's own words to distinguish reading a
     // number back from giving one out.
+    // Strip the agent's own voice back out before ANYTHING reads this turn - the guard below,
+    // the message event, the classifier and the reply model all see the same string, so filtering
+    // anywhere later would leave some of them working from the echo.
+    //
+    // Voice only. A typed conversation has no microphone and no speaker, so there is nothing to
+    // echo and a text caller quoting the agent back is doing it deliberately.
+    if (userInputSource === 'voice' && userInput) {
+      const deEchoed = this.echoFilter.filter(userInput);
+      if (deEchoed !== userInput) {
+        logger.info({
+          conversationId: this.stageData.conversation.id,
+          before: userInput,
+          after: deEchoed,
+        }, 'Removed the agent\'s own speech from the caller transcript');
+        // An utterance that was ENTIRELY echo means the caller did not speak at all, so it
+        // becomes the silence the project already knows how to handle rather than an empty
+        // string nothing downstream expects.
+        userInput = deEchoed.trim().length > 0
+          ? deEchoed
+          : (this.stageData.project.asrConfig?.silencePlaceholder ?? '**silence**');
+      }
+    }
+
     this.voiceOutputGuard?.noteCallerSpeech(userInput || '');
 
     const preliminaryMessageEventData: MessageEventData = {
@@ -2626,6 +2656,9 @@ export class ConversationRunner {
         this.lastFillerPrompt = renderedPrompt;
         this.lastFillerSentence = finalText;
         this.turnData.fillerSentence = finalText;
+        // Spoken aloud like anything else, and first in the turn - so it is the fragment most
+        // likely to come back, arriving while the caller is still deciding what to say.
+        this.echoFilter.noteAgentSpeech(finalText);
       }
 
       fillerEndMs = Date.now();
@@ -3256,6 +3289,8 @@ export class ConversationRunner {
       isFinal: true,
     };
     await this.channel.sendMessage(prescriptedChunkMessage);
+
+    this.echoFilter.noteAgentSpeech(eventText);
 
     const messageEventData: MessageEventData = {
       text: eventText,
