@@ -1252,6 +1252,7 @@ export class LiveKitChannelHost {
 
     const format = VOICE_SESSION_SETTINGS.receiveAudioFormat;
     const rate = pcmSampleRate(format);
+    let interrupted = false;
 
     try {
       const pcm = await readFile(path);
@@ -1274,7 +1275,22 @@ export class LiveKitChannelHost {
       // still on the line and the conversation still has somewhere to go.
       logger.error({ error, roomName, path }, 'LiveKit: could not play the recording');
     } finally {
+      interrupted = this.demoInterrupted.has(roomName);
       this.demoInterrupted.delete(roomName);
+    }
+
+    // ONLY when the recording ran out on its own. If the caller talked over it they are mid-turn,
+    // the runner is in receiving_user_voice, and it refuses to navigate - "Cannot navigate to
+    // stage in current state" - so the move is not merely pointless, it fails. Their words are
+    // about to be answered by whatever stage the conversation is in, which is why the stage the
+    // recording plays in has a prompt for exactly that: it is the one that picks the conversation
+    // back up when it was stopped early.
+    //
+    // The move is for the other case, where the recording finishes and nobody is talking. Nothing
+    // else would break the silence.
+    if (interrupted) {
+      logger.info({ roomName }, 'LiveKit: the caller stopped the recording and is talking, so the stage they are in answers them');
+      return;
     }
 
     const stageId = config.demoDoneStageId;
