@@ -1240,6 +1240,15 @@ export class LiveKitChannelHost {
   private static readonly DEMO_RESUME_ATTEMPTS = 30;
   private static readonly DEMO_RESUME_RETRY_MS = 2000;
 
+  /**
+   * Rooms whose conversation has ended and which are waiting on the goodbye to finish playing.
+   *
+   * The runner ending a conversation does not hang up a PHONE. It marks itself finished and stops
+   * responding, and the SIP leg stays up - so the caller who has just been wished a good day sits
+   * in silence holding a live call, and has to hang up on a line that already stopped listening.
+   */
+  private readonly endedAwaitingPlayout = new Set<string>();
+
   /** Rooms whose caller has started talking while a recording plays. */
   private readonly demoInterrupted = new Set<string>();
 
@@ -1612,6 +1621,19 @@ export class LiveKitChannelHost {
       if (!session) return;
       session.runner?.notifyAudioPlaybackEnded();
 
+      // The goodbye has now been heard, so end the CALL and not merely the conversation.
+      if (this.endedAwaitingPlayout.has(roomName)) {
+        this.endedAwaitingPlayout.delete(roomName);
+        logger.info({ roomName }, 'LiveKit: goodbye delivered, hanging up');
+        try {
+          await current.connection.close();
+        } catch (error) {
+          logger.warn({ error, roomName }, 'LiveKit: could not hang up cleanly after the goodbye');
+        }
+        this.activeCalls.delete(roomName);
+        return;
+      }
+
       // DIAL AFTER THE GREETING, NOT BEFORE IT.
       //
       // Dialling immediately meant the leg started ringing while the agent was still saying
@@ -1671,9 +1693,24 @@ export class LiveKitChannelHost {
       void this.playDemoRecording(config, roomName, audioSource);
     };
 
+    /**
+     * Watches for the conversation finishing, so the call can be hung up rather than left open.
+     *
+     * The room is NOT closed here. The goodbye is still being spoken at this point - the end is
+     * deferred until after response delivery precisely so the caller hears it - and disconnecting
+     * now would cut it off mid-word, which is worse than leaving the line open. Marked here, hung
+     * up in onAiTurnEnd once the audio has actually played out.
+     */
+    const onConversationFinished = (eventType: string): void => {
+      if (eventType !== 'conversation_end' && eventType !== 'conversation_aborted') return;
+      logger.info({ roomName, eventType }, 'LiveKit: the conversation is over, hanging up once the goodbye has played');
+      this.endedAwaitingPlayout.add(roomName);
+    };
+
     const onAnyConversationEvent = (eventType: string, eventData: Record<string, unknown>): void => {
       onConversationEvent(eventType, eventData);
       onDemoRequested(eventType, eventData);
+      onConversationFinished(eventType);
     };
     const connection = new LiveKitConnection(
       room, audioSource, this.sessionManager, onAiTurnEnd, onAnyConversationEvent,
