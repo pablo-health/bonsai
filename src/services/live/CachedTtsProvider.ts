@@ -77,10 +77,18 @@ export class CachedTtsProvider implements ITtsProvider {
   private index: Map<string, string> | null = null;
 
   /**
-   * Which utterance of this call is being spoken. Only the first takes part in the cache: see the
-   * class comment for what happened when every utterance did.
+   * Whether any audio has already gone out this utterance.
+   *
+   * This, and not a count of utterances, is what decides whether holding is safe. Holding before
+   * the first sound is just latency - the caller is waiting for a reply either way. Holding after
+   * it is a hole in the middle of a sentence, which is what a person actually heard and reported.
+   *
+   * An earlier attempt gated on "is this the first utterance of the call", which quietly did
+   * nothing: the provider is not built once per call, so the counter was always zero and every
+   * utterance kept holding. Depending on a lifecycle rather than on the thing that matters is how
+   * that slipped through.
    */
-  private utterance = -1;
+  private emitted = false;
 
   constructor(
     private readonly inner: ITtsProvider,
@@ -119,7 +127,9 @@ export class CachedTtsProvider implements ITtsProvider {
 
     if (this.served) return;
 
-    if (this.diverged) {
+    // Once the caller is hearing something, nothing is ever held again.
+    if (this.diverged || this.emitted) {
+      await this.flushHeld();
       await this.inner.sendText(text);
       return;
     }
@@ -160,10 +170,16 @@ export class CachedTtsProvider implements ITtsProvider {
     }
 
     // No cached utterance starts this way, so this one is new. Everything held goes over at once.
-    this.diverged = true;
+    await this.flushHeld();
+  }
+
+  /** Hands the vendor anything held, so held text can never be lost. */
+  private async flushHeld(): Promise<void> {
+    if (!this.held) return;
     const pending = this.held;
     this.held = '';
-    if (pending) await this.inner.sendText(pending);
+    this.diverged = true;
+    await this.inner.sendText(pending);
   }
 
   /** Stores this utterance if it is worth keeping and was heard in full. */
@@ -175,7 +191,6 @@ export class CachedTtsProvider implements ITtsProvider {
     this.audio = [];
     this.bytes = 0;
 
-    if (this.diverged && this.utterance > 0) return;   // not the greeting; never cached
     if (this.served || audio.length === 0) return;
     if (!text.trim() || text.length > MAX_CACHEABLE_CHARS) return;
     if (bytes === 0 || bytes > MAX_CACHEABLE_BYTES) return;
@@ -218,18 +233,14 @@ export class CachedTtsProvider implements ITtsProvider {
       this.audio.push(chunk.audio);
       this.bytes += chunk.audio.byteLength;
       this.ordinal = chunk.ordinal + 1;
+      this.emitted = true;
       await cb(chunk);
     });
   }
 
   async end(): Promise<void> {
     // Anything still held was never a hit; the vendor has to say it before the turn can end.
-    if (this.held && !this.served) {
-      const pending = this.held;
-      this.held = '';
-      this.diverged = true;
-      await this.inner.sendText(pending);
-    }
+    if (!this.served) await this.flushHeld();
     await this.inner.end();
     await this.persist();
   }
@@ -250,11 +261,8 @@ export class CachedTtsProvider implements ITtsProvider {
     this.bytes = 0;
     this.held = '';
     this.served = false;
-    this.utterance += 1;
-    // Everything after the greeting streams to the vendor exactly as it did before this class
-    // existed. `diverged` is the flag for "stop trying to match", so setting it up front is the
-    // whole opt-out.
-    this.diverged = this.utterance > 0;
+    this.diverged = false;
+    this.emitted = false;
     this.ordinal = 0;
     await this.inner.start();
   }

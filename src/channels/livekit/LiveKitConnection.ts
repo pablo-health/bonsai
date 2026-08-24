@@ -267,22 +267,28 @@ export class LiveKitConnection implements IClientConnection {
         // One number per utterance, so continuity is something a test can assert on. WARN when it
         // crosses the threshold because at that point a person can hear it, and a person hearing
         // it before we do is how this measurement came to exist.
-        if (this.worstGapMs > 0) {
-          // Reported at INFO even when it is fine, deliberately. The first version logged the
-          // healthy case at debug, which the deployed log level filters out - so a clean run and
-          // a run with no measurement at all looked identical, which is the precise failure this
-          // instrument was built to stop happening.
-          const stalled = this.worstGapMs >= STALL_MS;
-          logger[stalled ? 'warn' : 'info'](
-            { sessionId: this.session?.id, worstGapMs: this.worstGapMs, stalled },
-            stalled ? 'LiveKit: agent audio stalled mid-utterance' : 'LiveKit: agent audio continuity',
-          );
-        }
-
         const generation = this.generation;
         this.audioSource.waitForPlayout()
           .then(async () => {
             if (this.closed || generation !== this.generation) return;
+
+            // Reported here rather than when the TEXT stream ended, because at that moment the
+            // audio is still arriving and the worst gap has not happened yet - which is why the
+            // first version of this measurement silently reported nothing at all.
+            //
+            // At INFO even when healthy, deliberately: the version before that logged the good
+            // case at debug, which the deployed log level drops, so a clean run and a broken
+            // instrument looked identical. Both mistakes are the same mistake this measurement
+            // exists to catch, made inside the measurement.
+            if (this.worstGapMs > 0) {
+              const stalled = this.worstGapMs >= STALL_MS;
+              logger[stalled ? 'warn' : 'info'](
+                { sessionId: this.session?.id, worstGapMs: this.worstGapMs, stalled },
+                stalled ? 'LiveKit: agent audio stalled mid-utterance' : 'LiveKit: agent audio continuity',
+              );
+              this.worstGapMs = 0;
+            }
+
             this.speaking = false;
             this.hasSpoken = true;
             await this.onAiTurnEnd();

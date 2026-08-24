@@ -128,45 +128,48 @@ describe('CachedTtsProvider', () => {
     expect(spoken).to.contain('afraid he is busy.');
   });
 
-  it('leaves every utterance after the greeting alone', async () => {
-    // The bug a person heard: a later reply began the way a cached line did, was held while it
-    // accumulated, and arrived as silence-then-a-rush. Only the first utterance of a call is
-    // worth that risk, because only the greeting reliably ends in a hit.
+  it('never holds text back once the caller is already hearing something', async () => {
+    // The bug a person heard. A reply began the way a cached line did, was held while it
+    // accumulated, and arrived as silence-then-a-rush. Holding before the first sound is only
+    // latency; holding after it is a hole in the middle of a sentence.
     const inner = new CountingTts();
     const cache = new CachedTtsProvider(inner, 'voiceA', dir);
     cache.setOnSpeechGenerating(async () => { /* discard */ });
 
-    await cache.start();                       // utterance 0 - the greeting
-    await cache.sendText(GREETING);
+    await cache.start();
+    await cache.sendText('Something new.');   // no match: goes out, and audio comes back
     await cache.end();
 
-    await cache.start();                       // utterance 1 - a reply
-    await cache.sendText('Great to meet you.');
+    await cache.start();
+    await cache.sendText('Also new.');        // audio has been emitted before, but this is a new
+    await cache.sendText(' And more.');       // utterance - the second fragment must not be held
     await cache.end();
 
-    await cache.start();                       // utterance 2 - the same reply again
-    await cache.sendText('Great to meet you.');
-    await cache.end();
-
-    // The greeting once, then the reply twice: the reply was never cached and never held.
-    expect(inner.calls).to.deep.equal([GREETING, 'Great to meet you.', 'Great to meet you.']);
+    expect(inner.calls).to.deep.equal(['Something new.', 'Also new.', ' And more.']);
   });
 
-  it('forwards a later reply immediately even when it starts like the cached greeting', async () => {
-    // The precise shape of the glitch: text held in the hope of a hit produces dead air, and on a
-    // phone dead air mid-sentence is indistinguishable from a fault.
+  it('holds only until the first sound, then never again in that utterance', async () => {
     const inner = new CountingTts();
+    await speak(inner, dir, 'voiceA', GREETING);   // cache the greeting
+
     const cache = new CachedTtsProvider(inner, 'voiceA', dir);
     cache.setOnSpeechGenerating(async () => { /* discard */ });
-
     await cache.start();
-    await cache.sendText(GREETING);
+
+    // A prefix of the cached greeting, so this one fragment is legitimately held - no audio has
+    // been emitted yet, so the caller is only waiting for the reply to begin.
+    await cache.sendText('Hi, I am ');
+    expect(inner.calls).to.have.length(1);          // still just the original synthesis
+
+    // Diverges: everything held is spoken, and nothing is held after that.
+    await cache.sendText('afraid he is busy. ');
+    await cache.sendText('Can I take a message?');
     await cache.end();
 
-    await cache.start();
-    await cache.sendText('Hi, I am ');          // a prefix of the cached greeting
-    expect(inner.calls[1]).to.equal('Hi, I am ');  // ...and it went straight out anyway
-    await cache.end();
+    const spoken = inner.calls.slice(1).join('');
+    expect(spoken).to.contain('Hi, I am ');
+    expect(spoken).to.contain('afraid he is busy.');
+    expect(spoken).to.contain('Can I take a message?');
   });
 
   it('is keyed on the exact words, so a reworded greeting is a miss not a wrong hit', async () => {
