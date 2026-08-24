@@ -158,6 +158,15 @@ export class LiveKitConnection implements IClientConnection {
      * the conversation tells the channel to do something it cannot do itself, like dial.
      */
     private readonly onConversationEvent?: (eventType: string, eventData: Record<string, unknown>) => void,
+    /**
+     * Called the moment the caller starts talking over the agent.
+     *
+     * Ordinary agent speech needs nothing here - barge-in already flushes the queue. This exists
+     * for audio the CHANNEL is playing rather than the runner, which the runner therefore cannot
+     * stop: a recording keeps going until something tells it not to, and a caller talking over a
+     * recording that will not stop is worse than never playing one.
+     */
+    private readonly onUserInterrupt?: () => void,
   ) {}
 
   /**
@@ -196,6 +205,13 @@ export class LiveKitConnection implements IClientConnection {
       }
       case 'abort_ai_generation_output': {
         this.flush();
+        this.onUserInterrupt?.();
+        break;
+      }
+      // Not otherwise handled here - there is no UI to notify - but it is the earliest signal
+      // that the caller has started talking, which is what stops a recording playing over them.
+      case 'user_speaking_started': {
+        this.onUserInterrupt?.();
         break;
       }
       case 'send_ai_voice_chunk': {

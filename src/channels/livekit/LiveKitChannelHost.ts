@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { inject, singleton } from 'tsyringe';
 import { z } from 'zod';
 import express from 'express';
@@ -1220,6 +1221,79 @@ export class LiveKitChannelHost {
   }
 
   /**
+   * Plays a recording into the caller's own room, and hands the conversation back afterwards.
+   *
+   * The model cannot do this. It can only say it is doing it, which on the line this was built
+   * for produced an agent describing a demo it had no way to play - and, before the classifier
+   * was corrected, a demo request read as "put me through" and rang a phone at the exact moment
+   * the caller wanted to be SHOWN something.
+   *
+   * The file is raw PCM at the session rate. No decoding happens here on purpose: a codec in the
+   * media path is a dependency that can fail mid-call, and converting once at deploy time cannot.
+   *
+   * @param config - Channel configuration carrying the path and the stage to return to.
+   * @param roomName - The caller's room, which is where this plays.
+   * @param audioSource - The agent's own published track, so the recording arrives the same way
+   *                      its speech does and needs no second track or publish.
+   */
+  /** Rooms whose caller has started talking while a recording plays. */
+  private readonly demoInterrupted = new Set<string>();
+
+  private async playDemoRecording(
+    config: LiveKitChannelProviderConfig,
+    roomName: string,
+    audioSource: AudioSource,
+  ): Promise<void> {
+    const path = config.demoAudioPath;
+    if (!path) {
+      logger.warn({ roomName }, 'LiveKit: asked to play the recording but none is configured');
+      return;
+    }
+
+    const format = VOICE_SESSION_SETTINGS.receiveAudioFormat;
+    const rate = pcmSampleRate(format);
+
+    try {
+      const pcm = await readFile(path);
+      logger.info({ roomName, path, bytes: pcm.length, seconds: Math.round(pcm.length / 2 / rate) },
+        'LiveKit: playing the recording to the caller');
+
+      // Frame by frame rather than in one capture, so the caller can stop it. Anything larger
+      // than the queue is rejected outright, and a recording is far longer than any sentence -
+      // see pcmToAudioFrames.
+      for (const frame of pcmToAudioFrames(pcm, rate)) {
+        if (this.demoInterrupted.has(roomName)) {
+          logger.info({ roomName }, 'LiveKit: the caller talked over the recording, stopping it');
+          break;
+        }
+        await audioSource.captureFrame(frame);
+      }
+      if (!this.demoInterrupted.has(roomName)) await audioSource.waitForPlayout();
+    } catch (error) {
+      // A recording that will not play is a disappointment, not a dropped call: the caller is
+      // still on the line and the conversation still has somewhere to go.
+      logger.error({ error, roomName, path }, 'LiveKit: could not play the recording');
+    } finally {
+      this.demoInterrupted.delete(roomName);
+    }
+
+    const stageId = config.demoDoneStageId;
+    if (!stageId) {
+      logger.warn({ roomName }, 'LiveKit: no stage to return to after the recording, the caller is now in silence');
+      return;
+    }
+    const call = this.activeCalls.get(roomName);
+    const session = call ? this.sessionManager.getSession(call.sessionId) : undefined;
+    const conversationId = session?.conversationId;
+    if (!session || !conversationId) return;
+    try {
+      await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, this.buildContext(session));
+    } catch (error) {
+      logger.error({ error, roomName, stageId }, 'LiveKit: could not pick the conversation back up after the recording');
+    }
+  }
+
+  /**
    * Tells whoever answered the leg who is calling, and waits for it to finish playing.
    *
    * Spoken over the agent's ordinary track in the LEG's room. Nothing about it is private
@@ -1562,7 +1636,23 @@ export class LiveKitChannelHost {
       });
     };
 
-    const connection = new LiveKitConnection(room, audioSource, this.sessionManager, onAiTurnEnd, onConversationEvent);
+    /** Watches for the conversation asking for the recording to be played. */
+    const onDemoRequested = (eventType: string, eventData: Record<string, unknown>): void => {
+      if (eventType !== 'jump_to_stage') return;
+      const demoStageId = config.demoStageId;
+      if (!demoStageId || eventData.toStageId !== demoStageId) return;
+      this.demoInterrupted.delete(roomName);
+      void this.playDemoRecording(config, roomName, audioSource);
+    };
+
+    const onAnyConversationEvent = (eventType: string, eventData: Record<string, unknown>): void => {
+      onConversationEvent(eventType, eventData);
+      onDemoRequested(eventType, eventData);
+    };
+    const connection = new LiveKitConnection(
+      room, audioSource, this.sessionManager, onAiTurnEnd, onAnyConversationEvent,
+      () => { this.demoInterrupted.add(roomName); },
+    );
     const sessionId = this.sessionManager.registerSession(connection);
     const session = this.sessionManager.getSession(sessionId);
     if (!session) {
