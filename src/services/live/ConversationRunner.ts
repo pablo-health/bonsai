@@ -2644,7 +2644,24 @@ export class ConversationRunner {
     const processingPromise = this.userInputProcessor.processTextInput(this.session, userInput, userInput);
 
     // Wait for both filler delivery and classification to complete before proceeding.
-    await Promise.all([fillerDeliveryPromise, processingPromise]);
+    // The filler is a courtesy, so it is only ever allowed to fail like one. Promise.all rejects
+    // as soon as either side does, and this rejection escapes the turn entirely: a filler whose
+    // LLM call 400s takes down the whole process (observed - three restarts in an afternoon,
+    // exit 0, from a bad historyMessageCount), dropping every other call in flight and losing
+    // their conversations before they are ever persisted. The caller's experience of that is a
+    // greeting followed by silence, which looks nothing like a misconfigured filler.
+    //
+    // Swallowing it here costs a turn with no acknowledgement in front of it. That is exactly
+    // what the line did before it had a filler at all.
+    const guardedFillerPromise = fillerDeliveryPromise.catch((error: unknown) => {
+      logger.error({
+        conversationId: this.conversation.id,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'Filler generation failed; continuing the turn without one');
+      return null;
+    });
+
+    await Promise.all([guardedFillerPromise, processingPromise]);
     const processingResult = await processingPromise; // already resolved, no extra round-trip
     const processingEndMs = Date.now();
     const processingDurationMs = processingEndMs - processingStartMs;
