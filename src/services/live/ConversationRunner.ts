@@ -942,6 +942,17 @@ export class ConversationRunner {
         const llmEndMs = Date.now();
 
         logger.info({ conversationId, totalTokens: result.usage?.totalTokens, contentBlocks: result.content.length }, `LLM completion finished for conversation ${conversationId}: ${contentSize} bytes in ${result.content.length} content blocks, ${result.usage?.totalTokens} tokens used`);
+
+        // An empty completion is a SILENT TURN, and on a voice call that is indistinguishable
+        // from a dropped line - the caller hears nothing and says "hello?" into it. It is also
+        // self-reinforcing: once an empty assistant turn is in the history, the model reads it as
+        // a precedent and the rest of the call goes quiet. One real call lost four turns that
+        // way. The line above logs it at INFO as "completion finished", which reads like success,
+        // so it is called out here instead. Usually a prompt telling the agent it may stay silent.
+        if (!textContent.trim()) {
+          logger.warn({ conversationId, stageId: this.stageData.stage?.id, promptTokens: result.usage?.promptTokens },
+            'LLM returned an empty completion: this turn says nothing at all');
+        }
         this.stageData.lastCompletionResult = result;
 
         // Compute turn timings available at LLM completion time
