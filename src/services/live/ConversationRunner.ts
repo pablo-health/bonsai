@@ -36,7 +36,7 @@ import { ToolExecutor } from "./ToolExecutor";
 import { generateId, ID_PREFIXES } from "../../utils/idGenerator";
 
 import { TemplatingEngine } from "./TemplatingEngine";
-import { extractTextFromContent, getContentSize } from "../../utils/llm";
+import { extractTextFromContent, getContentSize, joinFillerToReply } from "../../utils/llm";
 import { KnowledgeService } from "../KnowledgeService";
 import { ModerationService } from "../ModerationService";
 import type { ModerationResult } from "../ModerationService";
@@ -980,8 +980,7 @@ export class ConversationRunner {
 
       completionLlmProvider.setOnGenerationCompleted(async (result) => {
         const textContent = extractTextFromContent(result.content);
-        const fillerPrefix = this.turnData.fillerSentence ? `${this.turnData.fillerSentence} ` : '';
-        const fullResponseText = `${fillerPrefix}${textContent}`.trim();
+        const fullResponseText = joinFillerToReply(this.turnData.fillerSentence, textContent);
         const contentSize = getContentSize(result.content);
         const llmEndMs = Date.now();
 
@@ -3438,8 +3437,7 @@ export class ConversationRunner {
     logger.info({ conversationId, responseLength: text.length }, `Delivering prescripted response for conversation ${conversationId}`);
 
     this.turnData.prescriptedText = text;
-    const fillerPrefix = this.turnData.fillerSentence ? `${this.turnData.fillerSentence} ` : '';
-    const eventText = `${fillerPrefix}${text}`.trim();
+    const eventText = joinFillerToReply(this.turnData.fillerSentence, text);
 
     if (ttsProvider) {
       this.ttsUsedInTurn = true;
