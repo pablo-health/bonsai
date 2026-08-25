@@ -146,22 +146,18 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
           return false;
         }
-        // Sent WITHOUT a flush. A flush does not mean "send this now", it means "generate
-        // everything buffered and finish" - so flushing each sentence made every sentence its
-        // own generation, and the vendor starts one only after the last has finished. The seam
-        // is audible: measured against a REST rendering of the same words, the greeting's two
-        // sentence breaks ran 320ms and 380ms where the voice itself justifies about 250ms.
+        // The trailing space is required, not cosmetic. The splitter trims what it emits, so
+        // three sentences reach the vendor as "Hi, I'm Pablo." "Thank you for calling Pablo
+        // Health." "What can I help you with today?" and it appends them into
+        // "...Pablo.Thank you for calling..." with the word boundary gone. The vendor's own
+        // guidance is that every chunk ends with a space; without it the seam between chunks is
+        // audible, measured on the caller's recording against a REST rendering of the same
+        // words as a 320-560ms silence where the voice justifies about 250ms.
         //
-        // It shows worst on speech that was ready all at once, like a fixed greeting, because
-        // every sentence arrives inside a few milliseconds and the flushes then queue behind
-        // each other. A streamed reply hides it - the model is slower than the vendor, so the
-        // gaps it leaves are its own.
-        //
-        // Without the flush the text accumulates against generation_config.chunk_length_schedule
-        // and the whole utterance is one generation, whose pauses are the ones the voice would
-        // have made anyway. end() sends the empty-text end-of-stream, which flushes, so nothing
-        // is left unspoken.
-        await this.sendTextToSocket(sentence, false);
+        // A whole utterance sent as ONE chunk has no seams for the same reason - there is no
+        // boundary to lose a space at, which is why turning the splitter off looked like a cure
+        // and was really just an absence of the defect.
+        await this.sendTextToSocket(sentence + ' ');
         return true;
       });
     } else {
@@ -460,8 +456,7 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
    * @param text The text to send (can be a complete sentence or partial text)
    * @param flush Force generation of everything buffered, ending the current generation. This
    *   is not "send now" - text sent without it still goes immediately, it simply lets the vendor
-   *   decide where a generation ends. Only end-of-utterance wants a flush; see the sentence
-   *   callback in start() for what flushing mid-utterance sounds like.
+   *   decide where a generation ends by generation_config.chunk_length_schedule.
    */
   private async sendTextToSocket(text: string, flush: boolean = true): Promise<void> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
