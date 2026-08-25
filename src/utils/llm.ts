@@ -22,7 +22,10 @@ export function extractTextFromContent(content: LlmContent[]): string {
 export function joinFillerToReply(filler: string | null, reply: string): string {
   if (!filler) return reply.trim();
   const rest = reply.replace(/^\s+/, '');
-  const needsSpace = rest.length > 0 && !/^[,.!?;:)\]}–—-]/.test(rest);
+  // Only the marks that CLOSE a clause attach tight. A dash opens one - "Got it - you're looking
+  // for a different Pablo" - and closing it up to "Got it- you're" is just a different typo from
+  // the one this function exists to prevent.
+  const needsSpace = rest.length > 0 && !/^[,.!?;:)\]}]/.test(rest);
   return `${filler}${needsSpace ? ' ' : ''}${rest}`.trim();
 }
 
