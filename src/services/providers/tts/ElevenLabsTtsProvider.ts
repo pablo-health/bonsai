@@ -146,7 +146,22 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
           return false;
         }
-        await this.sendTextToSocket(sentence);
+        // Sent WITHOUT a flush. A flush does not mean "send this now", it means "generate
+        // everything buffered and finish" - so flushing each sentence made every sentence its
+        // own generation, and the vendor starts one only after the last has finished. The seam
+        // is audible: measured against a REST rendering of the same words, the greeting's two
+        // sentence breaks ran 320ms and 380ms where the voice itself justifies about 250ms.
+        //
+        // It shows worst on speech that was ready all at once, like a fixed greeting, because
+        // every sentence arrives inside a few milliseconds and the flushes then queue behind
+        // each other. A streamed reply hides it - the model is slower than the vendor, so the
+        // gaps it leaves are its own.
+        //
+        // Without the flush the text accumulates against generation_config.chunk_length_schedule
+        // and the whole utterance is one generation, whose pauses are the ones the voice would
+        // have made anyway. end() sends the empty-text end-of-stream, which flushes, so nothing
+        // is left unspoken.
+        await this.sendTextToSocket(sentence, false);
         return true;
       });
     } else {
@@ -443,7 +458,10 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
   /**
    * Sends text to the WebSocket after applying no-speech filtering
    * @param text The text to send (can be a complete sentence or partial text)
-   * @param flush Whether to flush and generate audio immediately (default: true)
+   * @param flush Force generation of everything buffered, ending the current generation. This
+   *   is not "send now" - text sent without it still goes immediately, it simply lets the vendor
+   *   decide where a generation ends. Only end-of-utterance wants a flush; see the sentence
+   *   callback in start() for what flushing mid-utterance sounds like.
    */
   private async sendTextToSocket(text: string, flush: boolean = true): Promise<void> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
