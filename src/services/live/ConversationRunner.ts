@@ -2850,9 +2850,7 @@ export class ConversationRunner {
         // flush the acknowledgement waits for the reply's first sentence and arrives glued to
         // the front of it, having missed the pause it exists to fill.
         if (tts) {
-          logger.info({ conversationId: this.conversation.id, finalText, hasFlush: !!tts.flushPendingText }, 'filler: about to flush');
           await tts.flushPendingText?.();
-          logger.info({ conversationId: this.conversation.id }, 'filler: flush returned');
         }
       }
 

@@ -189,7 +189,6 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * Speaks buffered text without ending the session. See ITtsProvider.flushPendingText.
    */
   async flushPendingText(): Promise<void> {
-    logger.info(`[Amazon Polly TTS] flushPendingText: started=${this.isStarted} splitter=${!!this.sentenceSplitter} buffered=${JSON.stringify(this.sentenceSplitter?.getBuffer() ?? this.textBuffer)}`);
     if (!this.isStarted) {
       return;
     }
