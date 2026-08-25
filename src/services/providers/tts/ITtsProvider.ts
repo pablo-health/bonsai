@@ -93,6 +93,23 @@ export interface ITtsProvider<TChunk extends GeneratedAudioChunk = GeneratedAudi
   sendText(text: string): Promise<void>;
 
   /**
+   * Speaks whatever text is buffered, without ending the session.
+   *
+   * Providers that split on sentence boundaries hold text until they see one. That is right for
+   * a reply arriving token by token and wrong for the filler, which is a COMPLETE utterance the
+   * caller should hear at once — it exists to fill the pause before the reply, so text that
+   * waits for the reply's first full stop has missed the only moment it was for.
+   *
+   * The filler is deliberately written without terminal punctuation, because it is also handed
+   * to the answering model as a prefill to continue and a closed sentence ends that turn. The
+   * two consumers want opposite things from the same string; this is how the speaking half gets
+   * what it needs without punctuating the thinking half.
+   *
+   * Optional: a provider that does not buffer has nothing to flush.
+   */
+  flushPendingText?(): Promise<void>;
+
+  /**
    * Cancels the ongoing speech generation without finalizing it.
    * Used when a user barge-in interrupts the AI's response — the TTS session is abandoned
    * rather than completed, and no end-of-generation callback is fired.

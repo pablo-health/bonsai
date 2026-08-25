@@ -251,10 +251,7 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
       return;
     }
 
-    // Finalize any remaining text in the sentence splitter
-    if (this.sentenceSplitter) {
-      await this.sentenceSplitter.finalize();
-    }
+    await this.flushPendingText();
 
     logger.info(`[ElevenLabs] Ending speech generation`);
 
@@ -262,6 +259,15 @@ export class ElevenLabsTtsProvider extends TtsProviderBase<ElevenLabsTtsProvider
     const eosMessage = { text: '' };
     if (this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(eosMessage));
+    }
+  }
+
+  /**
+   * Speaks buffered text without ending the session. See ITtsProvider.flushPendingText.
+   */
+  async flushPendingText(): Promise<void> {
+    if (this.sentenceSplitter) {
+      await this.sentenceSplitter.finalize();
     }
   }
 

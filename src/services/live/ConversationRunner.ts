@@ -2825,6 +2825,16 @@ export class ConversationRunner {
         // Spoken aloud like anything else, and first in the turn - so it is the fragment most
         // likely to come back, arriving while the caller is still deciding what to say.
         this.echoFilter.noteAgentSpeech(finalText);
+
+        // Say it NOW. The filler is a complete utterance and the reply is still seconds away,
+        // but a sentence-splitting provider holds text until it sees a full stop - and the
+        // filler is deliberately written without one, because it is also the prefill the
+        // answering model continues from and a closed sentence ends that turn. Without this
+        // flush the acknowledgement waits for the reply's first sentence and arrives glued to
+        // the front of it, having missed the pause it exists to fill.
+        if (tts) {
+          await tts.flushPendingText?.();
+        }
       }
 
       fillerEndMs = Date.now();

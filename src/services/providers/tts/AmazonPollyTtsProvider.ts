@@ -174,13 +174,7 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
       return;
     }
 
-    if (this.sentenceSplitter) {
-      await this.sentenceSplitter.finalize();
-    } else if (this.textBuffer.trim()) {
-      logger.info(`[Amazon Polly TTS] Synthesizing buffered text: "${this.textBuffer}"`);
-      await this.synthesizeSentence(this.textBuffer);
-      this.textBuffer = '';
-    }
+    await this.flushPendingText();
 
     logger.info(`[Amazon Polly TTS] Ending speech generation`);
 
@@ -189,6 +183,23 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
 
     this.isStarted = false;
     this.handleGenerationEnded();
+  }
+
+  /**
+   * Speaks buffered text without ending the session. See ITtsProvider.flushPendingText.
+   */
+  async flushPendingText(): Promise<void> {
+    if (!this.isStarted) {
+      return;
+    }
+
+    if (this.sentenceSplitter) {
+      await this.sentenceSplitter.finalize();
+    } else if (this.textBuffer.trim()) {
+      logger.info(`[Amazon Polly TTS] Synthesizing buffered text: "${this.textBuffer}"`);
+      await this.synthesizeSentence(this.textBuffer);
+      this.textBuffer = '';
+    }
   }
 
   /**
