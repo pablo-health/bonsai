@@ -2816,6 +2816,7 @@ export class ConversationRunner {
       let chunkWork: Promise<unknown> = Promise.resolve();
 
       const onFillerChunk = async (chunk: LlmChunk) => {
+        logger.info({ n: chunk.content.length }, 'FILLERTRACE chunk in');
         accumulatedText += chunk.content;
 
         if (firstChunk) {
@@ -2872,7 +2873,9 @@ export class ConversationRunner {
       });
 
       await streamPromise;
+      logger.info({}, 'FILLERTRACE stream done');
       await chunkWork;
+      logger.info({}, 'FILLERTRACE chunkWork done');
       const result = await onCompletePromise;
 
       if (result) {
@@ -2895,6 +2898,7 @@ export class ConversationRunner {
         // flush the acknowledgement waits for the reply's first sentence and arrives glued to
         // the front of it, having missed the pause it exists to fill.
         if (tts) {
+          logger.info({ finalText }, 'FILLERTRACE about to flush');
           await tts.flushPendingText?.();
         }
       }
