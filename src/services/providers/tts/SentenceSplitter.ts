@@ -26,6 +26,9 @@ export class SentenceSplitter {
   /** Pre-compiled regex for better performance */
   private static readonly SENTENCE_REGEX = /[.!?]+(?:\s+|$)/g;
 
+  /** Something a voice can actually say. Punctuation and whitespace alone do not qualify. */
+  private static readonly HAS_SPEECH = /[\p{L}\p{N}]/u;
+
   /** Common abbreviations that shouldn't trigger sentence breaks */
   private static readonly ABBREVIATIONS = new Set(['dr', 'mr', 'mrs', 'ms', 'prof', 'vs', 'etc', 'inc', 'ltd', 'corp', 'jr', 'sr', 'phd', 'md', 'ba', 'ma', 'am', 'pm', 'st', 'ave', 'blvd']);
 
@@ -65,6 +68,10 @@ export class SentenceSplitter {
    */
   async finalize(): Promise<void> {
     const remaining = this.buffer.trim();
+    if (remaining && !SentenceSplitter.HAS_SPEECH.test(remaining)) {
+      this.buffer = '';
+      return;
+    }
     if (remaining) {
       await this.callback(remaining);
       this.buffer = '';
@@ -108,6 +115,19 @@ export class SentenceSplitter {
 
     while ((match = SentenceSplitter.SENTENCE_REGEX.exec(this.buffer)) !== null) {
       const potentialSentence = this.buffer.substring(lastIndex, match.index + match[0].length).trim();
+
+      // A run of punctuation with nothing in it is not a sentence, and handing it to a
+      // synthesiser is how a caller ends up hearing the word "dot".
+      //
+      // It happens whenever an utterance is flushed mid-clause: the text that follows begins
+      // with the mark that closed the previous fragment - "Got it" flushed on its own, then
+      // ". So the notes are..." - and the regex matches that leading full stop as a complete
+      // sentence all by itself. Dropped rather than held, because punctuation alone carries
+      // nothing a voice can say, and the next fragment reads correctly without it.
+      if (potentialSentence && !SentenceSplitter.HAS_SPEECH.test(potentialSentence)) {
+        lastIndex = match.index + match[0].length;
+        continue;
+      }
 
       if (potentialSentence && this.isValidSentenceEnd(potentialSentence, match.index)) {
         logger.debug(`Sentence splitter detected complete sentence: "${potentialSentence}"`);
