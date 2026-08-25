@@ -188,6 +188,9 @@ export class ConversationRunner {
   private ttsUsedInTurn: boolean = false;
   /** Filler sentence generated for the current turn, passed as assistant prefix to the LLM so it continues naturally */
   private lastFillerSentence: string | null = null;
+
+  /** What the filler said on the PREVIOUS turn, kept so this turn can avoid repeating it. */
+  private previousFillerSentence: string | null = null;
   /** Rendered filler prompt used to generate the filler sentence for the current turn; stored for debugging */
   private lastFillerPrompt: string | null = null;
   /** Tracks the call depth of goToStage to distinguish top-level calls from recursive ones triggered by on_enter/on_leave actions */
@@ -2723,6 +2726,10 @@ export class ConversationRunner {
     // independent of classification (processTextInput), so both can start simultaneously.
     // The Promise.all below is the single synchronisation point; nothing that classificationor
     // filler reads/writes conflicts before that barrier.
+    // Remembered across the reset, because the reset is what makes the filler repeat itself:
+    // lastFillerSentence is cleared here, before the next filler is prepared, so by the time the
+    // prompt is rendered there is nothing left to say "not that one again" about.
+    this.previousFillerSentence = this.lastFillerSentence;
     this.lastFillerSentence = null;
     this.lastFillerPrompt = null;
     const fillerStartMs = Date.now();
@@ -3377,7 +3384,18 @@ export class ConversationRunner {
       return null;
     }
     const context = await this.contextBuilder.buildContextForFillerSentence(this.conversation, this.stageData.stage, userInput, getEffectiveChannelType(this.session));
-    const renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
+    let renderedPrompt = await this.templatingEngine.render(fillerSettings.prompt, context);
+
+    // The filler model is deaf on purpose: historyMessageCount has exactly one safe value on
+    // Bedrock, which rejects a message list that does not open on a user message, and at filler
+    // time the caller's turn is not in history yet. So it cannot hear what it last said, and it
+    // repeats itself - five of eight consecutive fillers on one call were "Got it", which inside
+    // two minutes is an audible tic rather than a person acknowledging you.
+    //
+    // The runner already knows the answer. Telling it costs one line of prompt and no history.
+    if (this.previousFillerSentence) {
+      renderedPrompt = `${renderedPrompt}\n\nYou just said "${this.previousFillerSentence}". Say something else this time.`;
+    }
     const historyMessageCount = fillerSettings.historyMessageCount ?? 0;
     let recentHistory = [...context.history];
     if (recentHistory.at(-1)?.role === 'user') {
