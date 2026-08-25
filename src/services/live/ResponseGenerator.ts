@@ -36,7 +36,20 @@ export class ResponseGenerator {
       { role: 'user', content: context.userInput ?? '---' },
     ];
     if (assistantPrefix) {
-      messages.push({ role: 'assistant', content: assistantPrefix });
+      // Trailing sentence-enders are removed, because this is a prefill the model CONTINUES and
+      // a finished sentence is a finished turn. Given "Sure." the model can legitimately decide
+      // it has already spoken and add nothing at all - measured on claude-haiku-4.5 at roughly
+      // one turn in three, and worse than that in practice because an empty assistant turn goes
+      // into the history and reads as precedent for the next one. A real call degraded into
+      // "ok", "sure", "okay" with no answer behind any of them.
+      //
+      // Without the full stop the same request continues normally every time. The guidance for
+      // filler prompts is already "one sentence only, with no extra commentary or punctuation";
+      // this stops a filler that ignores it from costing the caller the reply.
+      const prefill = assistantPrefix.replace(/[.!?。！？]+\s*$/u, '');
+      if (prefill.trim()) {
+        messages.push({ role: 'assistant', content: prefill });
+      }
     }
     const { messages: truncatedMessages, ...truncationInfo } = truncateMessagesToTokenBudget(messages, inputTokenCap, model);
     onTruncation?.(truncationInfo);
