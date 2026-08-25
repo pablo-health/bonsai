@@ -259,6 +259,22 @@ export class GuardedTtsProvider implements ITtsProvider {
     await this.inner.end();
   }
 
+  /**
+   * Speak what is buffered without ending the turn. See ITtsProvider.flushPendingText.
+   *
+   * This wrapper holds text of its own, screening it before it is spoken, so a flush has to push
+   * that through first - flushing only the inner provider would speak the earlier text and leave
+   * this one's behind, which is the opposite of what was asked for.
+   */
+  async flushPendingText(): Promise<void> {
+    if (this.buffer.trim()) {
+      const remainder = this.guard.screen(this.buffer);
+      this.buffer = '';
+      await this.inner.sendText(remainder);
+    }
+    if (this.inner.flushPendingText) await this.inner.flushPendingText();
+  }
+
   async cancel(): Promise<void> {
     this.buffer = '';
     if (this.inner.cancel) await this.inner.cancel();

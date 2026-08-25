@@ -245,6 +245,18 @@ export class CachedTtsProvider implements ITtsProvider {
     await this.persist();
   }
 
+  /**
+   * Speak what is held without ending the turn. See ITtsProvider.flushPendingText.
+   *
+   * Anything still held here is text this layer was withholding while it decided whether the
+   * utterance matches something cached. A flush is a decision that it must be spoken now, so the
+   * hold ends - exactly as it does at end(), just earlier.
+   */
+  async flushPendingText(): Promise<void> {
+    if (!this.served) await this.flushHeld();
+    if (this.inner.flushPendingText) await this.inner.flushPendingText();
+  }
+
   async cancel(): Promise<void> {
     // A barge-in means the utterance was never heard in full. Storing it would serve that
     // truncation to everyone afterwards.
