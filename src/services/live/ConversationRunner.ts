@@ -2762,7 +2762,15 @@ export class ConversationRunner {
         : Promise.resolve();
       const streamPromise = fillerLlm.generateStream(fillerMessages, maxTokens !== undefined ? { maxTokens } : undefined);
 
-      fillerLlm.setOnChunk(async (chunk: LlmChunk) => {
+      // The chunk handler is an async listener, and the emitter that calls it does not await it.
+      // So `await streamPromise` means the STREAM is finished, not that this handler has finished
+      // pushing the text it produced into the synthesiser - and the flush below, which exists to
+      // speak the filler before the reply is written, ran against a buffer the filler had not
+      // reached yet. It flushed nothing, the text arrived afterwards, and the reply glued itself
+      // to the front of it exactly as before.
+      let chunkWork: Promise<unknown> = Promise.resolve();
+
+      const onFillerChunk = async (chunk: LlmChunk) => {
         accumulatedText += chunk.content;
 
         if (firstChunk) {
@@ -2808,9 +2816,18 @@ export class ConversationRunner {
           };
           await this.channel.sendMessage(chunkMsg);
         }
+      };
+
+      fillerLlm.setOnChunk((chunk: LlmChunk) => {
+        const work = onFillerChunk(chunk);
+        // Kept in order and, more importantly, kept - so the code below can wait for the text to
+        // have actually reached the synthesiser rather than for the stream to have stopped.
+        chunkWork = chunkWork.then(() => work, () => work);
+        return work;
       });
 
       await streamPromise;
+      await chunkWork;
       const result = await onCompletePromise;
 
       if (result) {
