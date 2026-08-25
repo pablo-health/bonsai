@@ -51,6 +51,12 @@ export type ActionsExecutionOutcome = {
     fileName: string;
     mimeType: string;
   }>;
+  /**
+   * True when the caller spoke again while this turn's effects were still running, so the turn
+   * that produced this outcome no longer represents what was asked. The runner must abandon it
+   * rather than apply it - see the isSuperseded parameter of executeActions.
+   */
+  superseded?: boolean;
 };
 
 /**
@@ -262,6 +268,12 @@ export class ActionsExecutor {
    * @param stageId - ID of the stage where execution is taking place
    * @param lifecycleContext - Lifecycle context for effect filtering (on_enter, on_leave, on_fallback), or null
    * @param emitEvent - Callback to emit conversation events inline as effects are applied
+   * @param isSuperseded - Optional predicate asked between effects: true means the caller has
+   *   started a new turn while these effects were running. A tool call is the realistic case -
+   *   an availability lookup can take seconds, and the caller correcting themselves mid-lookup
+   *   ("Thursday - no, Friday") starts the next turn before this one finishes. Everything after
+   *   that point answers a question the caller has already withdrawn, so execution stops and the
+   *   outcome comes back marked superseded for the runner to abandon.
    * @returns Array of execution results for each action
    */
   async executeActions(
@@ -269,7 +281,8 @@ export class ActionsExecutor {
     context: ConversationContext,
     stageId: string,
     lifecycleContext: LifecycleContext,
-    emitEvent: EffectEventCallback
+    emitEvent: EffectEventCallback,
+    isSuperseded?: () => boolean,
   ): Promise<ActionsExecutionOutcome> {
     logger.info({ conversationId: context.conversationId, actionCount: actions.length, lifecycleContext }, `Executing ${actions.length} action(s)`);
 
@@ -370,10 +383,27 @@ export class ActionsExecutor {
         continue;
       }
 
+      if (isSuperseded?.()) {
+        outcome.superseded = true;
+        logger.info({ conversationId: context.conversationId, effectType: effect.type, actionName }, `Caller started a new turn - skipping remaining effects`);
+        break;
+      }
+
       logger.debug({ conversationId: context.conversationId, actionName, effectType: effect.type }, `Executing effect: ${effect.type} from action: ${actionName}`);
 
       try {
         const effectResult = await this.executeEffect(effect, currentContext, actionName, emitEvent);
+
+        // Asked again on the far side of the await, because the await is where the time goes.
+        // A slow effect - a tool call above all - is exactly the window in which the caller
+        // speaks again, and its result is then an answer to the previous question. Drop it
+        // before it reaches the outcome: acting on it would end the conversation, change stage
+        // or speak on behalf of a turn the caller has moved on from.
+        if (isSuperseded?.()) {
+          outcome.superseded = true;
+          logger.info({ conversationId: context.conversationId, effectType: effect.type, actionName }, `Caller started a new turn while this effect ran - discarding its result`);
+          break;
+        }
 
         // Update context with modified user input if applicable
         if (effectResult.hasModifiedUserInput) {

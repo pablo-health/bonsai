@@ -744,4 +744,110 @@ describe('ActionsExecutor', () => {
       expect(outcome.error).to.equal('test error');
     });
   });
+
+  /**
+   * What a turn does when the caller speaks again while its effects are still running.
+   *
+   * The case this exists for is a phone booking. The agent asks which day, the caller says
+   * Thursday, an availability lookup goes out, and while it is in flight the caller says "no,
+   * make it Friday". Recognition stopping does not check the conversation's status, so that
+   * second utterance starts a second turn immediately - and the first turn's lookup is still
+   * coming. Whatever it says about Thursday must not end the call, must not move the stage, and
+   * must not be spoken.
+   *
+   * The dangerous direction is the opposite one: dropping work nobody withdrew. So the first
+   * and last cases here check that a turn with no interruption still applies everything.
+   */
+  describe('a turn superseded by the caller speaking again', () => {
+    const SLOW_TOOL = 'tool_availability';
+    const SECOND_TOOL = 'tool_book';
+
+    /** Tools that actually ran, so "never executed" is checked rather than assumed. */
+    let executedTools: string[];
+
+    /**
+     * @param onSlowToolStart - fired the moment the slow tool begins, before its await resolves.
+     *   This is where a test plays the caller interrupting.
+     */
+    function armTools(onSlowToolStart: () => void): void {
+      executedTools = [];
+      deps.toolService.getToolTypesByIds = async () =>
+        new Map([[SLOW_TOOL, 'webhook'], [SECOND_TOOL, 'webhook']]);
+      deps.toolService.getToolById = async (_projectId: string, id: string) => ({
+        id, name: id, type: 'webhook', inputType: 'json', outputType: 'json', parameters: [],
+      });
+      deps.toolExecutor.executeTool = async (tool: { id: string }) => {
+        executedTools.push(tool.id);
+        if (tool.id !== SLOW_TOOL) return { success: true, result: {} };
+        onSlowToolStart();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // A real lookup can come back saying the call is finished - a script tool returning flow
+        // control. That is exactly the instruction a superseded turn must drop.
+        return {
+          success: true,
+          result: { slots: ['Thursday 2pm'] },
+          flowControl: { shouldEndConversation: true, endReason: 'booked', goToStageId: 'stage_confirm' },
+        };
+      };
+    }
+
+    /** Explicit priorities so the order under test does not depend on tool-type defaults. */
+    function bookingAction(): StageAction {
+      return buildAction([
+        { type: 'call_tool', toolId: SLOW_TOOL, parameters: {}, asynchronous: false, priority: 1 } as CallToolEffect,
+        { type: 'call_tool', toolId: SECOND_TOOL, parameters: {}, asynchronous: false, priority: 2 } as CallToolEffect,
+      ]);
+    }
+
+    const noEvents = async () => { };
+
+    it('keeps the tool\'s flow control when nobody interrupts', async () => {
+      armTools(() => { });
+      const outcome = await (executor as any).executeActions(
+        [bookingAction()], buildContext(), 'stage_test', null, noEvents, () => false,
+      );
+
+      expect(outcome.shouldEndConversation).to.be.true;
+      expect(outcome.goToStageId).to.equal('stage_confirm');
+      expect(outcome.superseded).to.be.undefined;
+      expect(executedTools).to.include(SLOW_TOOL);
+    });
+
+    it('discards the result of a lookup the caller talked over', async () => {
+      let interrupted = false;
+      armTools(() => { interrupted = true; });
+      const outcome = await (executor as any).executeActions(
+        [bookingAction()], buildContext(), 'stage_test', null, noEvents, () => interrupted,
+      );
+
+      expect(outcome.superseded).to.be.true;
+      expect(outcome.shouldEndConversation).to.be.false;
+      expect(outcome.goToStageId).to.be.undefined;
+      expect(outcome.shouldGenerateResponse).to.be.false;
+      // The lookup itself still ran - it is an HTTP call already sent, and there is no recalling
+      // it. What must not happen is the effects after it.
+      expect(executedTools).to.deep.equal([SLOW_TOOL]);
+    });
+
+    it('executes nothing when the caller got a whole utterance in first', async () => {
+      armTools(() => { });
+      const outcome = await (executor as any).executeActions(
+        [bookingAction()], buildContext(), 'stage_test', null, noEvents, () => true,
+      );
+
+      expect(executedTools).to.be.empty;
+      expect(outcome.superseded).to.be.true;
+    });
+
+    it('behaves exactly as before when no predicate is supplied', async () => {
+      // on_enter, on_leave and conversation_end all call executeActions without one.
+      armTools(() => { });
+      const outcome = await (executor as any).executeActions(
+        [bookingAction()], buildContext(), 'stage_test', null, noEvents,
+      );
+
+      expect(outcome.shouldEndConversation).to.be.true;
+      expect(outcome.superseded).to.be.undefined;
+    });
+  });
 });

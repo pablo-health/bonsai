@@ -271,6 +271,18 @@ export class ConversationRunner {
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
 
+  /**
+   * Monotonic counter of user-input turns, bumped once at the top of processUserInput.
+   *
+   * A turn holds the counter's value it was given and compares it back before acting on
+   * anything it started. If the two differ the caller has spoken again since - the turn is
+   * answering a question that has been withdrawn, and it stops rather than speaking over its
+   * successor. This is not a hypothetical race: setOnRecognitionStopped has no status guard, so
+   * a caller who talks during a slow tool call ALREADY starts a second turn while the first is
+   * still waiting on its result.
+   */
+  private inputTurnGeneration = 0;
+
 
   /** Timer that fires when the user is silent in awaiting_user_input state. */
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -2657,7 +2669,34 @@ export class ConversationRunner {
     };
   }
 
+  /**
+   * True when the turn should stop. Either the executor noticed the caller move on partway
+   * through its effects, or the counter moved while the last of them was running.
+   *
+   * The runner is the only place that decides what a superseded turn does, deliberately: the
+   * executor stops and reports, and every consequence - the stage change, the hang-up, the
+   * spoken reply - is abandoned here, in one place, rather than each being suppressed at its own
+   * site where the next effect type added would quietly miss out.
+   */
+  private abandonIfSuperseded(isSuperseded: () => boolean, outcome: ActionsExecutionOutcome, turnGeneration: number): boolean {
+    if (!outcome.superseded && !isSuperseded()) return false;
+    logger.info({
+      conversationId: this.conversation.id,
+      turnGeneration,
+      goToStageId: outcome.goToStageId,
+      shouldEndConversation: outcome.shouldEndConversation,
+      shouldGenerateResponse: outcome.shouldGenerateResponse,
+    }, 'Caller started a new turn while this one was executing actions - discarding its outcome');
+    return true;
+  }
+
   private async processUserInput(userInput: string, userInputSource: 'text' | 'voice', asrEndMs?: number) {
+    // Claim this turn's place in the sequence before anything can await. Everything below asks
+    // isSuperseded() rather than reading the counter directly, so the comparison is always
+    // against the value captured here.
+    const turnGeneration = ++this.inputTurnGeneration;
+    const isSuperseded = () => this.inputTurnGeneration !== turnGeneration;
+
     // Barge-in bookkeeping. NOT accumulation - the caller sites already did that.
     //
     // This used to prepend bargeInPartialText to userInput, and both call sites pass
@@ -2937,6 +2976,14 @@ export class ConversationRunner {
     const processingEndMs = Date.now();
     const processingDurationMs = processingEndMs - processingStartMs;
 
+    // Classification and the filler both had to finish before this line, which is long enough
+    // for a caller to have interrupted and started the next turn. Stop here rather than carry a
+    // stale classification into actions.
+    if (isSuperseded()) {
+      logger.info({ conversationId: this.conversation.id, turnGeneration }, 'Caller started a new turn during classification - abandoning this one');
+      return;
+    }
+
     // Standard mode: await moderation (ran in parallel with processTextInput) and handle before classification.
     if (parallelModerationPromise) {
       const moderationResult = await parallelModerationPromise;
@@ -3069,15 +3116,17 @@ export class ConversationRunner {
     if (actions.length === 0 && onFallbackAction) {
       logger.debug({ conversationId: this.conversation.id }, 'No actions matched - executing __on_fallback lifecycle action');
       actionsStartMs = Date.now();
-      executionOutcome = await this.actionsExecutor.executeActions([onFallbackAction], context, this.stageData.id, 'on_fallback', this.saveAndSendEvent.bind(this));
+      executionOutcome = await this.actionsExecutor.executeActions([onFallbackAction], context, this.stageData.id, 'on_fallback', this.saveAndSendEvent.bind(this), isSuperseded);
       actionsEndMs = Date.now();
       actionsDurationMs = actionsEndMs - actionsStartMs;
+      if (this.abandonIfSuperseded(isSuperseded, executionOutcome, turnGeneration)) return;
       await this.applyActionOutcome(context, executionOutcome);
     } else {
       actionsStartMs = Date.now();
-      executionOutcome = await this.actionsExecutor.executeActions(actions, context, this.stageData.id, null, this.saveAndSendEvent.bind(this));
+      executionOutcome = await this.actionsExecutor.executeActions(actions, context, this.stageData.id, null, this.saveAndSendEvent.bind(this), isSuperseded);
       actionsEndMs = Date.now();
       actionsDurationMs = actionsEndMs - actionsStartMs;
+      if (this.abandonIfSuperseded(isSuperseded, executionOutcome, turnGeneration)) return;
       await this.applyActionOutcome(context, executionOutcome);
     }
 
@@ -3131,6 +3180,13 @@ export class ConversationRunner {
         outputTurnId: this.turnData.outputTurnId,
       };
       await this.channel.sendMessage(messageUpdateMessage);
+    }
+
+    // Last check before speaking. applyActionOutcome above can run a whole stage transition -
+    // on_leave, on_enter, provider setup - which is time enough for the caller to have moved on.
+    if (isSuperseded()) {
+      logger.info({ conversationId: this.conversation.id, turnGeneration }, 'Caller started a new turn before this one replied - staying quiet');
+      return;
     }
 
     await this.generateResponse(context, executionOutcome);
