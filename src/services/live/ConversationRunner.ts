@@ -2564,6 +2564,17 @@ export class ConversationRunner {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to update conversation status in database via ConversationService`);
     }
 
+    // SAY SOMETHING FIRST. Every provider error - ASR, LLM, a Bedrock 429 that outlived its
+    // retries, TTS - arrives here, and until now this closed the connection without a word. On a
+    // phone line that is a click and then nothing: the caller has no idea whether they were hung
+    // up on, whether it was their signal, or whether anyone heard them. The goodbye path drains
+    // its audio carefully before ending; the failure path, which is the one where the caller most
+    // needs telling, said less than nothing.
+    //
+    // Prescripted and short, because whatever just broke may be the thing that writes sentences,
+    // and best effort, because this must never be able to prevent the cleanup below.
+    await this.speakFailureNotice();
+
     // Flush recorder before closing connection
     await this.recorder?.flush();
 
@@ -2572,6 +2583,33 @@ export class ConversationRunner {
       await this.session.clientConnection?.close();
     } catch (error) {
       logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Failed to close client connection on failure');
+    }
+  }
+
+  /**
+   * Tell a voice caller the line broke, rather than hanging up on them silently.
+   *
+   * Bounded and swallowed on purpose. This runs on the path where something has already failed,
+   * so it assumes nothing works: if the synthesiser is what broke, or it hangs, the timeout ends
+   * the wait and the caller gets the same silence they would have got anyway. It must never be
+   * able to stop the connection being closed.
+   */
+  private async speakFailureNotice(): Promise<void> {
+    const tts = this.stageData.ttsProvider;
+    if (!tts || !this.session.clientConnection) return;
+    const NOTICE = "I'm sorry - something has gone wrong on my end and I can't carry on. Please call back.";
+    const GIVE_UP_MS = 4000;
+    try {
+      await Promise.race([
+        (async () => {
+          await tts.start();
+          await tts.sendText(NOTICE);
+          await tts.end();
+        })(),
+        new Promise((resolve) => setTimeout(resolve, GIVE_UP_MS)),
+      ]);
+    } catch (error) {
+      logger.warn({ conversationId: this.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Could not tell the caller the line had failed');
     }
   }
 
