@@ -1240,15 +1240,6 @@ export class LiveKitChannelHost {
   private static readonly DEMO_RESUME_ATTEMPTS = 30;
   private static readonly DEMO_RESUME_RETRY_MS = 2000;
 
-  /**
-   * Rooms whose conversation has ended and which are waiting on the goodbye to finish playing.
-   *
-   * The runner ending a conversation does not hang up a PHONE. It marks itself finished and stops
-   * responding, and the SIP leg stays up - so the caller who has just been wished a good day sits
-   * in silence holding a live call, and has to hang up on a line that already stopped listening.
-   */
-  private readonly endedAwaitingPlayout = new Set<string>();
-
   /** Rooms whose caller has started talking while a recording plays. */
   private readonly demoInterrupted = new Set<string>();
 
@@ -1621,19 +1612,6 @@ export class LiveKitChannelHost {
       if (!session) return;
       session.runner?.notifyAudioPlaybackEnded();
 
-      // The goodbye has now been heard, so end the CALL and not merely the conversation.
-      if (this.endedAwaitingPlayout.has(roomName)) {
-        this.endedAwaitingPlayout.delete(roomName);
-        logger.info({ roomName }, 'LiveKit: goodbye delivered, hanging up');
-        try {
-          await current.connection.close();
-        } catch (error) {
-          logger.warn({ error, roomName }, 'LiveKit: could not hang up cleanly after the goodbye');
-        }
-        this.activeCalls.delete(roomName);
-        return;
-      }
-
       // DIAL AFTER THE GREETING, NOT BEFORE IT.
       //
       // Dialling immediately meant the leg started ringing while the agent was still saying
@@ -1704,7 +1682,27 @@ export class LiveKitChannelHost {
     const onConversationFinished = (eventType: string): void => {
       if (eventType !== 'conversation_end' && eventType !== 'conversation_aborted') return;
       logger.info({ roomName, eventType }, 'LiveKit: the conversation is over, hanging up once the goodbye has played');
-      this.endedAwaitingPlayout.add(roomName);
+
+      // Waits for the goodbye to drain, exactly as LiveKitConnection's own handler does - the
+      // sentence is still in the audio queue when this event arrives, and dropping the leg now
+      // would cut it off mid-word, which is a worse ending than none.
+      void audioSource.waitForPlayout()
+        .then(async () => {
+          // REMOVING THE CALLER IS WHAT HANGS UP THE PHONE. The connection's handler calls
+          // room.disconnect(), which disconnects the AGENT and nothing else: the caller's SIP
+          // participant stays, the room stays alive, and the carrier holds the line. From the
+          // caller's side nothing happens at all - they are left listening to silence on a call
+          // that has ended everywhere except on their handset. One did, and said goodbye a
+          // second time first, into a line where nothing was listening any more.
+          const httpUrl = config.url.replace(/^ws/, 'http');
+          const rooms = new RoomServiceClient(httpUrl, config.apiKey, config.apiSecret);
+          await rooms.removeParticipant(roomName, callerIdentity);
+          logger.info({ roomName, callerIdentity }, 'LiveKit: caller disconnected, the call is over');
+        })
+        .catch((error) => {
+          // Commonly just the caller having hung up first, which removes them for us.
+          logger.info({ error, roomName, callerIdentity }, 'LiveKit: could not disconnect the caller, they may already be gone');
+        });
     };
 
     const onAnyConversationEvent = (eventType: string, eventData: Record<string, unknown>): void => {
