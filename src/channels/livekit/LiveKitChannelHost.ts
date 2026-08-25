@@ -330,6 +330,15 @@ type BridgeLeg = {
    * left is a no-op that silently leaves a live PSTN call running.
    */
   moved: boolean;
+  /**
+   * True once the caller has already been told how the bridge ended.
+   *
+   * A refusal carrying a message is still a refusal: the leg hangs up without being moved, which
+   * is indistinguishable at the room level from voicemail or nobody answering. So the caller was
+   * given the relay - "Kurt will call you back in an hour" - and then, a beat later, "I'm sorry,
+   * I couldn't reach him just now" about the man who had just answered and replied.
+   */
+  spokenTo: boolean;
 };
 
 /** Everything needed to place a second leg in a room of its own. */
@@ -947,6 +956,7 @@ export class LiveKitChannelHost {
     const leg: BridgeLeg = {
       room, roomName, identity, rooms, callerRoom, callerRoomName,
       toLeg: source, toCaller: null, toCallerSid: undefined, closed: false, moved: false,
+      spokenTo: false,
     };
 
     try {
@@ -967,6 +977,14 @@ export class LiveKitChannelHost {
         // to voicemail, or was put down. Handing the agent back is right and saying nothing is
         // not - the caller has been holding a live line and knows only that the ringing stopped.
         // Without this the bridge-failed stage exists, is configured, and is never entered.
+        //
+        // Unless the caller has ALREADY been told. A refusal carrying a message ends with the
+        // leg hanging up too, so this fired on top of the relay and followed "Kurt will call you
+        // back in an hour" with "I'm sorry, I couldn't reach him just now".
+        if (leg.spokenTo) {
+          logger.info({ roomName, callerRoomName, identity }, 'LiveKit: the leg hung up after its message was relayed, so the caller has already been told');
+          return;
+        }
         this.tellCallerTheyCouldNotBePutThrough(config, callerRoomName).catch((error) =>
           logger.error({ error, callerRoomName }, 'LiveKit: could not tell the caller the leg hung up'));
       });
@@ -1177,6 +1195,9 @@ export class LiveKitChannelHost {
       }, context);
       await this.dispatcher.dispatch({ type: 'go_to_stage', conversationId, stageId, correlationId: undefined }, context);
 
+      // Before the leg is dropped, because dropping it is what fires the disconnect handler that
+      // would otherwise apologise for failing to reach a man who just answered.
+      ctx.leg.spokenTo = true;
       logger.info({ roomName: ctx.roomName, stageId }, 'LiveKit: moved the caller to the relay stage');
       return true;
     } catch (error) {
