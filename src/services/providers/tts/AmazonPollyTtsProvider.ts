@@ -189,7 +189,6 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * Speaks buffered text without ending the session. See ITtsProvider.flushPendingText.
    */
   async flushPendingText(): Promise<void> {
-    logger.info({ buffered: this.sentenceSplitter?.getBuffer() }, 'FILLERTRACE flush enter');
     if (!this.isStarted) {
       return;
     }
@@ -209,7 +208,6 @@ export class AmazonPollyTtsProvider extends TtsProviderBase<AmazonPollyTtsProvid
    * @param text The text content to be converted to speech
    */
   async sendText(text: string): Promise<void> {
-    logger.info({ text }, 'FILLERTRACE sendText');
     if (!this.isStarted) {
       logger.warn(`[Amazon Polly TTS] Cannot send text, generation not started`);
       return;
