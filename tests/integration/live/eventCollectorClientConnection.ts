@@ -1,5 +1,5 @@
 import type { IClientConnection } from '../../../src/channels/IClientConnection';
-import type { CALOutputMessage, CALConversationEventMessage, CALEndAiGenerationOutputMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage } from '../../../src/channels/messages';
+import type { CALOutputMessage, CALConversationEventMessage, CALEndAiGenerationOutputMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALAiTranscribedChunkMessage } from '../../../src/channels/messages';
 import type { ApiKeyChannel } from '../../../src/apiKeyFeatures';
 
 /** Terminal conversation event types that signal the conversation can no longer produce AI responses. */
@@ -43,6 +43,15 @@ export class EventCollectorClientConnection implements IClientConnection {
    */
   get startAiGenerationOutputs(): CALStartAiGenerationOutputMessage[] {
     return this.messages.filter((m): m is CALStartAiGenerationOutputMessage => m.type === 'start_ai_generation_output');
+  }
+
+  /**
+   * AI transcript chunks in the order they were sent - what the caller was told, piece by piece.
+   * Unlike aiResponses this includes the filler and any mid-turn acknowledgement, which is the
+   * point: they are things the caller heard.
+   */
+  get aiChunks(): CALAiTranscribedChunkMessage[] {
+    return this.messages.filter((m): m is CALAiTranscribedChunkMessage => m.type === 'ai_transcribed_chunk');
   }
 
   /**

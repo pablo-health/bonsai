@@ -85,6 +85,31 @@ export const modifyUserProfileEffectSchema = z.object({
 }).openapi('ModifyUserProfileEffect');
 
 /**
+ * What the agent says out loud while a synchronous tool call is running.
+ *
+ * The filler at the top of a turn cannot do this job. It is chosen before anything is known
+ * about what the turn will do, so "let me check that for you" is a hope rather than a fact, and
+ * it fires once with no way to speak again if the wait turns out to be long. This is spoken from
+ * the tool call itself, once the request is already on its way, and it can name what is being
+ * looked up because the parameters have been resolved by then.
+ *
+ * Every string here is a Handlebars template rendered against the conversation context plus
+ * `parameters` - the tool's resolved arguments - so `{{parameters.day}}` names the day.
+ *
+ * Write each one as an open lead-in with NO terminal full stop. These are spoken through the
+ * same path as the filler and, like it, become the prefill the reply model continues from; a
+ * closed sentence ends that turn and the line goes silent.
+ */
+export const toolAcknowledgementSchema = z.object({
+  text: z.string().min(1).describe('Spoken once the request has been sent, never before - so it describes something that is actually happening. Name what is being looked up: "let me check {{parameters.day}} for you" rather than "let me check availability"'),
+  progressAfterMs: z.number().int().positive().optional().describe('Speak progressText if the tool has still not returned after this many milliseconds. Around 15000 is what a receptionist does, and it is what turns an unbounded wait into an ordinary one'),
+  progressText: z.string().optional().describe('Spoken once, at progressAfterMs, if the tool is still running. Ignored without progressAfterMs'),
+  timeoutMs: z.number().int().positive().optional().describe('Hard ceiling. Stop waiting for the tool at this point, skip the effects that would have used its result, and answer with timeoutText instead'),
+  timeoutText: z.string().optional().describe('The turn\'s reply when the ceiling is reached - an honest fallback such as taking a message. Unlike the fields above this one IS the response, so it is a complete sentence. Ignored without timeoutMs'),
+  timeoutGoToStageId: z.string().optional().describe('Stage to move to when the ceiling is reached, typically the one that takes a message. Ignored without timeoutMs'),
+}).openapi('ToolAcknowledgement');
+
+/**
  * Effect type: Call Tool
  * Calls a selected tool with parameters and puts the result in context
  */
@@ -94,6 +119,7 @@ export const callToolEffectSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).describe('Parameters to pass to the tool'),
   asynchronous: z.boolean().optional().default(false).describe('When true, the tool runs in the background without blocking the conversation. The result is not stored in context and flow control signals (go_to_stage, end_conversation, etc.) are discarded. Use for fire-and-forget operations such as logging or saving data.'),
   priority: z.number().optional().describe('Optional execution priority override. Lower numbers execute first. Default: 1000 (webhook), 2000 (smart_function), 6000 (script).'),
+  acknowledgement: toolAcknowledgementSchema.optional().describe('What to say out loud while this call runs. Synchronous calls only - an asynchronous one does not hold the turn up, so there is nothing to cover'),
 }).openapi('CallToolEffect');
 
 /**
@@ -187,6 +213,7 @@ export type UserProfileOperation = z.infer<typeof userProfileOperationSchema>;
 export type ModifyVariablesEffect = z.infer<typeof modifyVariablesEffectSchema>;
 export type ModifyUserProfileEffect = z.infer<typeof modifyUserProfileEffectSchema>;
 export type CallToolEffect = z.infer<typeof callToolEffectSchema>;
+export type ToolAcknowledgement = z.infer<typeof toolAcknowledgementSchema>;
 export type SaveArtifactEffect = z.infer<typeof saveArtifactEffectSchema>;
 export type GenerateResponseEffect = z.infer<typeof generateResponseEffectSchema>;
 export type ChangeVisibilityEffect = z.infer<typeof changeVisibilityEffectSchema>;

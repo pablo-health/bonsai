@@ -2,14 +2,14 @@ import { injectable, inject } from 'tsyringe';
 import { logger } from '../../utils/logger';
 import { TemplatingEngine } from './TemplatingEngine';
 import { ToolService } from '../ToolService';
-import { ToolExecutor } from './ToolExecutor';
+import { ToolExecutor, type ToolExecutionResult } from './ToolExecutor';
 import { ModifyVariablesEffectExecutor } from './ModifyVariablesEffectExecutor';
 import { ModifyUserProfileEffectExecutor } from './ModifyUserProfileEffectExecutor';
 import { UserService } from '../UserService';
 import { ConversationStorageService } from '../ConversationStorageService';
 import { db } from '../../db';
 import { eq } from 'drizzle-orm';
-import type { AbortConversationEffect, AttachFileEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect, SaveArtifactEffect } from '../../types/actions';
+import type { AbortConversationEffect, AttachFileEffect, BanUserEffect, CallToolEffect, ChangeVisibilityEffect, EndConversationEffect, GenerateResponseEffect, GoToStageEffect, ModifyUserInputEffect, Effect, StageAction, LifecycleContext, ModifyVariablesEffect, ModifyUserProfileEffect, SaveArtifactEffect, ToolAcknowledgement } from '../../types/actions';
 import type { MessageVisibility, ConversationEventType, ConversationEventData, ActionsExecutionPlanEventData } from '../../types/conversationEvents';
 import { LIFECYCLE_EFFECT_RESTRICTIONS } from '../../types/actions';
 import type { GlobalAction, Guardrail } from '../../types/models';
@@ -20,6 +20,15 @@ import { ParameterValue } from '../../types/parameters';
 
 /** Callback type for emitting conversation events from within effect handlers */
 export type EffectEventCallback = (type: ConversationEventType, data: ConversationEventData) => Promise<void>;
+
+/**
+ * Says one line out loud in the middle of a turn, without ending it.
+ *
+ * The executor has no channel and no synthesiser, so a tool that wants to tell the caller what
+ * it is doing asks the runner to say it. Distinct from a prescripted response, which closes the
+ * turn - this leaves it open for the reply that is still coming.
+ */
+export type SpeakInterstitialCallback = (text: string) => Promise<void>;
 
 /**
  * Execution result for an action
@@ -81,6 +90,12 @@ export type EffectOutcome = {
     fileName: string;
     mimeType: string;
   }>;
+  /**
+   * Stop running the rest of this turn's effects, without ending or aborting the conversation.
+   * Set when an effect did not produce what the effects behind it were written to consume - a
+   * tool call that hit its ceiling being the case this exists for.
+   */
+  shouldSkipRemainingEffects?: boolean;
 };
 
 /**
@@ -274,6 +289,8 @@ export class ActionsExecutor {
    *   ("Thursday - no, Friday") starts the next turn before this one finishes. Everything after
    *   that point answers a question the caller has already withdrawn, so execution stops and the
    *   outcome comes back marked superseded for the runner to abandon.
+   * @param speakInterstitial - Optional way to say a line mid-turn. Only tool calls carrying an
+   *   acknowledgement use it; without it they run silently, exactly as they did before.
    * @returns Array of execution results for each action
    */
   async executeActions(
@@ -283,6 +300,7 @@ export class ActionsExecutor {
     lifecycleContext: LifecycleContext,
     emitEvent: EffectEventCallback,
     isSuperseded?: () => boolean,
+    speakInterstitial?: SpeakInterstitialCallback,
   ): Promise<ActionsExecutionOutcome> {
     logger.info({ conversationId: context.conversationId, actionCount: actions.length, lifecycleContext }, `Executing ${actions.length} action(s)`);
 
@@ -392,7 +410,7 @@ export class ActionsExecutor {
       logger.debug({ conversationId: context.conversationId, actionName, effectType: effect.type }, `Executing effect: ${effect.type} from action: ${actionName}`);
 
       try {
-        const effectResult = await this.executeEffect(effect, currentContext, actionName, emitEvent);
+        const effectResult = await this.executeEffect(effect, currentContext, actionName, emitEvent, speakInterstitial);
 
         // Asked again on the far side of the await, because the await is where the time goes.
         // A slow effect - a tool call above all - is exactly the window in which the caller
@@ -460,6 +478,15 @@ export class ActionsExecutor {
           shouldStop = true;
           logger.info({ conversationId: context.conversationId, actionName, abortReason: effectResult.abortReason }, `Conversation will abort immediately - skipping remaining effects`);
         }
+
+        // A tool that hit its ceiling produced no result. Anything queued behind it was written
+        // expecting one - booking the slot the lookup was meant to find - so the rest of the list
+        // is skipped rather than run against nothing. The conversation continues; only this
+        // action's remaining work is abandoned.
+        if (effectResult.shouldSkipRemainingEffects) {
+          shouldStop = true;
+          logger.info({ conversationId: context.conversationId, actionName, effectType: effect.type }, `Effect asked for the remaining effects to be skipped`);
+        }
       } catch (error) {
         outcome.success = false;
         outcome.error = error instanceof Error ? error.message : String(error);
@@ -478,6 +505,7 @@ export class ActionsExecutor {
    * @param context - Execution context
    * @param actionName - Name of the action that triggered this effect
    * @param emitEvent - Callback to emit conversation events inline
+   * @param speakInterstitial - Optional way to say a line mid-turn; only call_tool uses it
    * @returns Result indicating if conversation should end/abort and any modified user input
    */
   private async executeEffect(
@@ -485,6 +513,7 @@ export class ActionsExecutor {
     context: ConversationContext,
     actionName: string,
     emitEvent: EffectEventCallback,
+    speakInterstitial?: SpeakInterstitialCallback,
   ): Promise<EffectOutcome> {
     switch (effect.type) {
       case 'end_conversation':
@@ -514,7 +543,7 @@ export class ActionsExecutor {
       }
 
       case 'call_tool':
-        return await this.executeCallTool(effect, context, actionName, emitEvent);
+        return await this.executeCallTool(effect, context, actionName, emitEvent, speakInterstitial);
 
       case 'save_artifact':
         return await this.executeSaveArtifact(effect, context, actionName, emitEvent);
@@ -737,6 +766,7 @@ export class ActionsExecutor {
     context: ConversationContext,
     actionName: string,
     emitEvent: EffectEventCallback,
+    speakInterstitial?: SpeakInterstitialCallback,
   ): Promise<EffectOutcome> {
     logger.info({ toolId: effect.toolId, parameterCount: Object.keys(effect.parameters).length }, `Calling tool: ${effect.toolId}`);
 
@@ -818,7 +848,34 @@ export class ActionsExecutor {
       // - Render the tool prompt with context and parameters
       // - Call the LLM
       // - Return the result
-      const executionResult = await this.toolExecutor.executeTool(tool as any, context, resolvedParameters);
+      //
+      // Started, not awaited, so the acknowledgement below is spoken with the call already on
+      // its way. That ordering is the whole point of saying it here rather than in the filler:
+      // "let me check Thursday for you" describes something that is happening, and it can name
+      // Thursday because the parameters above have been resolved.
+      const executionPromise = this.toolExecutor.executeTool(tool as any, context, resolvedParameters);
+
+      const executionResult = effect.acknowledgement && speakInterstitial
+        ? await this.awaitToolWithAcknowledgement(executionPromise, effect.acknowledgement, speakInterstitial, context, resolvedParameters, tool.name)
+        : await executionPromise;
+
+      // The ceiling was reached: nothing came back, and the caller has already been waiting
+      // longer than a phone call should. Answer honestly instead, and take the rest of this
+      // action's effects with it - they were written to use a result there isn't one of.
+      if (executionResult === null) {
+        const ack = effect.acknowledgement!;
+        const timeoutText = ack.timeoutText
+          ? await this.templatingEngine.render(ack.timeoutText, this.contextWithParameters(context, resolvedParameters))
+          : undefined;
+        return {
+          shouldEndConversation: false,
+          shouldAbortConversation: false,
+          shouldGenerateResponse: true,
+          prescriptedResponse: timeoutText,
+          newStageId: ack.timeoutGoToStageId,
+          shouldSkipRemainingEffects: true,
+        };
+      }
 
       if (!executionResult.success) {
         throw new Error(executionResult.failureReason || 'Tool execution failed');
@@ -888,6 +945,94 @@ export class ActionsExecutor {
     } catch (error) {
       logger.error({ conversationId: context.conversationId, toolId: effect.toolId, error: error instanceof Error ? error.message : String(error) }, `Failed to call tool`);
       throw error;
+    }
+  }
+
+  /**
+   * The conversation context a tool acknowledgement's templates are rendered against: everything
+   * the stage prompt can see, plus the tool's resolved arguments under `parameters`, which is
+   * what lets the line name the day the caller actually asked for.
+   */
+  private contextWithParameters(context: ConversationContext, parameters: Record<string, ParameterValue>): ConversationContext {
+    return { ...context, parameters } as ConversationContext & { parameters: Record<string, ParameterValue> };
+  }
+
+  /**
+   * Waits for a tool that is already running, talking to the caller while it does.
+   *
+   * The budget here is silence, not latency. Nobody minds a receptionist taking twenty seconds
+   * to look something up; they mind a dead line. So the wait is not shortened - it is narrated:
+   * an acknowledgement now, a "still looking" if it drags on, and a ceiling past which the line
+   * stops waiting and says so.
+   *
+   * @returns the tool's result, or null if the ceiling was reached first. The call itself is not
+   *   cancelled - there is no recalling an HTTP request already sent - it is simply no longer
+   *   waited on, and its eventual result goes nowhere.
+   */
+  private async awaitToolWithAcknowledgement(
+    executionPromise: Promise<ToolExecutionResult>,
+    ack: ToolAcknowledgement,
+    speak: SpeakInterstitialCallback,
+    context: ConversationContext,
+    parameters: Record<string, ParameterValue>,
+    toolName: string,
+  ): Promise<ToolExecutionResult | null> {
+    // An unhandled rejection here would take the process down while we are off speaking, so the
+    // promise gets a handler before anything else can await.
+    let settled = false;
+    const guarded = executionPromise.then(
+      (result) => { settled = true; return result; },
+      (error) => { settled = true; throw error; },
+    );
+
+    const renderContext = this.contextWithParameters(context, parameters);
+    const timers: NodeJS.Timeout[] = [];
+
+    try {
+      // Failing to say "let me check" must not fail the lookup. A synthesiser hiccup would
+      // otherwise turn a working availability call into an error the caller hears about.
+      try {
+        const text = await this.templatingEngine.render(ack.text, renderContext);
+        // Nothing to say if the tool beat us to it - the caller heard a short pause after
+        // speaking, which is what people do anyway, and an acknowledgement for a wait that has
+        // already ended would only delay the answer.
+        if (text.trim() && !settled) {
+          await speak(text);
+        }
+      } catch (error) {
+        logger.warn({ conversationId: context.conversationId, toolName, error: error instanceof Error ? error.message : String(error) }, `Failed to speak the acknowledgement for ${toolName}`);
+      }
+
+      if (ack.progressAfterMs && ack.progressText) {
+        timers.push(setTimeout(() => {
+          if (settled) return;
+          void (async () => {
+            try {
+              const progress = await this.templatingEngine.render(ack.progressText!, renderContext);
+              if (progress.trim() && !settled) await speak(progress);
+            } catch (error) {
+              logger.warn({ conversationId: context.conversationId, toolName, error: error instanceof Error ? error.message : String(error) }, `Failed to speak the progress line for ${toolName}`);
+            }
+          })();
+        }, ack.progressAfterMs));
+      }
+
+      if (!ack.timeoutMs) return await guarded;
+
+      const CEILING = Symbol('tool-ceiling');
+      const ceiling = new Promise<typeof CEILING>((resolve) => {
+        timers.push(setTimeout(() => resolve(CEILING), ack.timeoutMs));
+      });
+      const winner = await Promise.race([guarded, ceiling]);
+      if (winner === CEILING) {
+        logger.warn({ conversationId: context.conversationId, toolName, timeoutMs: ack.timeoutMs }, `Stopped waiting for ${toolName} at its ceiling`);
+        // Still handled, so a later rejection stays quiet rather than crashing the process.
+        void guarded.catch(() => { });
+        return null;
+      }
+      return winner as ToolExecutionResult;
+    } finally {
+      timers.forEach(clearTimeout);
     }
   }
 

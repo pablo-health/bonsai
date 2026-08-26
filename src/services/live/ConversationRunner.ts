@@ -119,6 +119,14 @@ export type TurnData = {
   turnIndex: number;
   /** Filler sentence text delivered to the client and TTS at the start of the current turn; null when no filler was generated */
   fillerSentence: string | null;
+  /**
+   * Lines spoken mid-turn by a tool acknowledgement, in the order the caller heard them.
+   *
+   * Kept apart from fillerSentence so the filler's own timing metrics stay about the filler, and
+   * joined back on for the two things that must reflect what was actually said out loud: the
+   * transcript event, and the assistant prefill the reply model continues from.
+   */
+  interstitials: string[];
   /** Prescripted response text (sample copy in forced mode) delivered in the current turn; null for LLM-generated responses */
   prescriptedText: string | null;
   /** Truncation info from the completion context window preparation; null before first completion in the turn */
@@ -324,7 +332,7 @@ export class ConversationRunner {
   /** Per-conversation, because it only ever compares a caller to the agent talking to them. */
   private echoFilter = new SpeakerEchoFilter();
 
-  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
+  private turnData: TurnData = { startMs: null, promptRenderStartMs: null, promptRenderEndMs: null, llmStartMs: null, firstTokenMs: null, firstAudioMs: null, assistantMessageEventId: null, fillerDurationMs: null, fillerLlmUsage: null, moderationDurationMs: null, moderationStartMs: null, moderationEndMs: null, asrStartMs: null, stageTransitionStartMs: null, stageTransitionEndMs: null, ttsConnectStartMs: null, ttsConnectEndMs: null, ttsStartMs: null, turnIndex: 0, fillerSentence: null, interstitials: [], prescriptedText: null, completionTruncationInfo: null, accumulatedText: null };
 
   /**
    * Executes a function under the runner mutex, serializing all operations.
@@ -995,7 +1003,7 @@ export class ConversationRunner {
 
       completionLlmProvider.setOnGenerationCompleted(async (result) => {
         const textContent = extractTextFromContent(result.content);
-        const fullResponseText = joinFillerToReply(this.turnData.fillerSentence, textContent);
+        const fullResponseText = joinFillerToReply(this.spokenBeforeReply(), textContent);
         const contentSize = getContentSize(result.content);
         const llmEndMs = Date.now();
 
@@ -2663,6 +2671,7 @@ export class ConversationRunner {
       ttsStartMs: null,
       turnIndex: this.turnData.turnIndex + 1,
       fillerSentence: null,
+      interstitials: [],
       prescriptedText: null,
       completionTruncationInfo: null,
       accumulatedText: null,
@@ -2677,6 +2686,10 @@ export class ConversationRunner {
    * executor stops and reports, and every consequence - the stage change, the hang-up, the
    * spoken reply - is abandoned here, in one place, rather than each being suppressed at its own
    * site where the next effect type added would quietly miss out.
+   *
+   * It deliberately does NOT close an output turn the filler left open, or end the synthesiser.
+   * Being superseded means a successor turn exists and is running on the same TTS provider;
+   * tidying up on the way out would cut off the reply the caller is about to hear.
    */
   private abandonIfSuperseded(isSuperseded: () => boolean, outcome: ActionsExecutionOutcome, turnGeneration: number): boolean {
     if (!outcome.superseded && !isSuperseded()) return false;
@@ -2696,6 +2709,16 @@ export class ConversationRunner {
     // against the value captured here.
     const turnGeneration = ++this.inputTurnGeneration;
     const isSuperseded = () => this.inputTurnGeneration !== turnGeneration;
+    // A tool acknowledgement's progress line is on a timer, and the timer does not know the
+    // caller has spoken since. Routing every mid-turn line through this closure means the same
+    // rule covers it as covers the rest of the turn: a turn that has been superseded is silent.
+    const speakInterstitial = async (text: string): Promise<void> => {
+      if (isSuperseded()) {
+        logger.info({ conversationId: this.conversation.id, turnGeneration }, 'Not speaking a mid-turn line for a turn the caller has moved on from');
+        return;
+      }
+      await this.speakInterstitial(text);
+    };
 
     // Barge-in bookkeeping. NOT accumulation - the caller sites already did that.
     //
@@ -3116,14 +3139,14 @@ export class ConversationRunner {
     if (actions.length === 0 && onFallbackAction) {
       logger.debug({ conversationId: this.conversation.id }, 'No actions matched - executing __on_fallback lifecycle action');
       actionsStartMs = Date.now();
-      executionOutcome = await this.actionsExecutor.executeActions([onFallbackAction], context, this.stageData.id, 'on_fallback', this.saveAndSendEvent.bind(this), isSuperseded);
+      executionOutcome = await this.actionsExecutor.executeActions([onFallbackAction], context, this.stageData.id, 'on_fallback', this.saveAndSendEvent.bind(this), isSuperseded, speakInterstitial);
       actionsEndMs = Date.now();
       actionsDurationMs = actionsEndMs - actionsStartMs;
       if (this.abandonIfSuperseded(isSuperseded, executionOutcome, turnGeneration)) return;
       await this.applyActionOutcome(context, executionOutcome);
     } else {
       actionsStartMs = Date.now();
-      executionOutcome = await this.actionsExecutor.executeActions(actions, context, this.stageData.id, null, this.saveAndSendEvent.bind(this), isSuperseded);
+      executionOutcome = await this.actionsExecutor.executeActions(actions, context, this.stageData.id, null, this.saveAndSendEvent.bind(this), isSuperseded, speakInterstitial);
       actionsEndMs = Date.now();
       actionsDurationMs = actionsEndMs - actionsStartMs;
       if (this.abandonIfSuperseded(isSuperseded, executionOutcome, turnGeneration)) return;
@@ -3318,7 +3341,7 @@ export class ConversationRunner {
         const completionLimits = resolveProviderModelLimits(this.stageData.costManagementConfig, this.stageData.completionLlmProviderInfo?.id ?? '', this.stageData.stage.llmSettings?.model);
         const completionMaxTokens = resolveOutputCap((this.stageData.stage.llmSettings as any)?.defaultMaxTokens, completionLimits, 'completion');
         const completionInputCap = completionLimits?.inputTokensLimits?.completion;
-        await this.responseGenerator.generateResponse(context, this.stageData.stage, this.stageData.lastCompletionPrompt, this.stageData.completionLlmProvider, this.lastFillerSentence ?? undefined, completionMaxTokens, completionInputCap, this.stageData.stage.llmSettings?.model, (info) => { this.turnData.completionTruncationInfo = info; });
+        await this.responseGenerator.generateResponse(context, this.stageData.stage, this.stageData.lastCompletionPrompt, this.stageData.completionLlmProvider, this.spokenBeforeReply(this.lastFillerSentence) ?? undefined, completionMaxTokens, completionInputCap, this.stageData.stage.llmSettings?.model, (info) => { this.turnData.completionTruncationInfo = info; });
       }
       this.lastFillerSentence = null;
       this.lastFillerPrompt = null;
@@ -3563,6 +3586,85 @@ export class ConversationRunner {
   }
 
   /**
+   * Everything the caller has already heard this turn, before the reply itself: the filler, then
+   * any lines a tool acknowledgement spoke while it was working.
+   *
+   * Two places need it and both need it for the same reason - it is what was actually said. The
+   * transcript event would otherwise record a reply that begins mid-thought, and the reply model
+   * is handed this as an assistant prefill so it continues from "let me check Thursday for you"
+   * instead of greeting the caller a second time.
+   *
+   * @param fillerSentence - the filler to lead with; defaults to this turn's.
+   */
+  private spokenBeforeReply(fillerSentence: string | null = this.turnData.fillerSentence): string | null {
+    const parts = [fillerSentence, ...this.turnData.interstitials]
+      .filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
+    if (parts.length === 0) return null;
+    return parts.reduce((spoken, part) => joinFillerToReply(spoken, part));
+  }
+
+  /**
+   * Says one line in the middle of a turn and leaves the turn open.
+   *
+   * This is the filler's delivery path, reached later: open the output turn if nothing has
+   * opened it yet, push the text at the synthesiser, tell the client, and flush - because a
+   * sentence-splitting provider holds text until it sees a full stop, and these lines are
+   * deliberately written without one. What it is NOT is deliverPrescriptedResponse, which marks
+   * the chunk final and ends the TTS stream; the reply is still coming.
+   */
+  private async speakInterstitial(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const conversationId = this.conversation.id;
+    const tts = this.stageData.ttsProvider;
+
+    if (!this.responseOutputTurnStarted) {
+      this.turnData.outputTurnId = generateId(ID_PREFIXES.OUTPUT);
+      const startMsg: CALStartAiGenerationOutputMessage = {
+        type: 'start_ai_generation_output',
+        conversationId,
+        outputTurnId: this.turnData.outputTurnId,
+        expectVoice: !!tts,
+      };
+      await this.channel.sendMessage(startMsg);
+      if (tts) {
+        this.turnData.ttsConnectStartMs = Date.now();
+        await tts.start();
+        this.turnData.ttsConnectEndMs = Date.now();
+      }
+      this.responseOutputTurnStarted = true;
+    }
+
+    if (tts) {
+      this.ttsUsedInTurn = true;
+      await tts.sendText(trimmed);
+    }
+
+    const chunkMsg: CALAiTranscribedChunkMessage = {
+      type: 'ai_transcribed_chunk',
+      conversationId,
+      outputTurnId: this.turnData.outputTurnId,
+      chunkId: generateId(ID_PREFIXES.CHUNK),
+      chunkText: trimmed,
+      ordinal: 0,
+      isFinal: false,
+    };
+    await this.channel.sendMessage(chunkMsg);
+
+    // Spoken aloud, so it can come back off a speakerphone like anything else - and it lands in
+    // the quiet window while the caller is most likely to say something.
+    this.echoFilter.noteAgentSpeech(trimmed);
+    this.turnData.interstitials.push(trimmed);
+
+    if (tts) {
+      await tts.flushPendingText?.();
+    }
+
+    logger.info({ conversationId, textLength: trimmed.length }, `Spoke a mid-turn acknowledgement for conversation ${conversationId}`);
+  }
+
+  /**
    * Delivers a prescripted response text directly to the client and TTS pipeline,
    * bypassing LLM generation. Mirrors the chunk + complete callback flow used by
    * the completion LLM provider so that TTS, WebSocket messages, and conversation
@@ -3576,7 +3678,7 @@ export class ConversationRunner {
     logger.info({ conversationId, responseLength: text.length }, `Delivering prescripted response for conversation ${conversationId}`);
 
     this.turnData.prescriptedText = text;
-    const eventText = joinFillerToReply(this.turnData.fillerSentence, text);
+    const eventText = joinFillerToReply(this.spokenBeforeReply(), text);
 
     if (ttsProvider) {
       this.ttsUsedInTurn = true;

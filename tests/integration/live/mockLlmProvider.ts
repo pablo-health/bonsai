@@ -1,4 +1,5 @@
-import type { ILlmProvider, LlmMessage, LlmGenerationResult, LlmGenerationOptions, LlmChunk, LlmChunkCallback, SimpleCallback, LlmCompleteCallback, ErrorCallback } from '../../../src/services/providers/llm/ILlmProvider';
+import type { ILlmProvider, LlmMessage, LlmGenerationResult, LlmGenerationOptions, LlmChunk, LlmChunkCallback, SimpleCallback, LlmCompleteCallback, ErrorCallback, StructuredGenerationResult } from '../../../src/services/providers/llm/ILlmProvider';
+import type { ZodType } from 'zod';
 import type { LlmModelInfo } from '../../../src/services/providers/ProviderCatalogService';
 
 /**
@@ -74,6 +75,22 @@ export class MockLlmProvider implements ILlmProvider {
       finishReason: 'stop',
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
+  }
+
+  /**
+   * Structured generation, which is how every classifier in the runtime asks its question.
+   *
+   * Without this the mock simply had no such method, so any test that reached a classifier died
+   * on `generateStructured is not a function`, the error was swallowed as "classification
+   * failed", and the turn ran with no actions at all - a test asserting that an action fired
+   * would pass on an execution_plan emitted by something else entirely. Queue the classifier's
+   * answer as JSON text, the same way a real provider returns it.
+   */
+  async generateStructured<T>(messages: LlmMessage[], validator: ZodType<T>, options?: LlmGenerationOptions): Promise<StructuredGenerationResult<T>> {
+    const raw = await this.generate(messages, options);
+    const text = raw.content.find(c => c.contentType === 'text');
+    const value = validator.parse(JSON.parse(text ? text.text : '{}'));
+    return { value, raw, mode: 'json', attempts: 1 };
   }
 
   async generateStream(messages: LlmMessage[], _options?: LlmGenerationOptions): Promise<void> {

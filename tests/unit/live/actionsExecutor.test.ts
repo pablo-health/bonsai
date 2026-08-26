@@ -850,4 +850,168 @@ describe('ActionsExecutor', () => {
       expect(outcome.superseded).to.be.undefined;
     });
   });
+
+  /**
+   * What the caller hears while a tool call is running.
+   *
+   * The filler at the top of a turn cannot do this job: it is chosen before anything is known
+   * about what the turn will do, and it fires once. An availability lookup is unbounded, so the
+   * line has to be able to say something true when the request goes out, say something again if
+   * it drags on, and eventually give up honestly rather than leaving a dead line.
+   */
+  describe('speaking while a tool call runs', () => {
+    const TOOL = 'tool_availability';
+    const NEXT_TOOL = 'tool_book';
+
+    let spoken: string[];
+    let executedTools: string[];
+    /** Resolves the tool call, so a test decides exactly when the lookup comes back. */
+    let finishTool: (result: any) => void;
+
+    beforeEach(() => {
+      spoken = [];
+      executedTools = [];
+      deps.toolService.getToolTypesByIds = async () =>
+        new Map([[TOOL, 'webhook'], [NEXT_TOOL, 'webhook']]);
+      deps.toolService.getToolById = async (_projectId: string, id: string) => ({
+        id, name: id, type: 'webhook', inputType: 'json', outputType: 'json', parameters: [],
+      });
+      deps.toolExecutor.executeTool = async (tool: { id: string }) => {
+        executedTools.push(tool.id);
+        if (tool.id !== TOOL) return { success: true, result: {} };
+        return new Promise((resolve) => { finishTool = resolve; });
+      };
+      // Enough of Handlebars for {{parameters.day}}; the real engine is covered by its own tests.
+      deps.templatingEngine.render = async (template: string, ctx: any) =>
+        template.replace(/\{\{\s*parameters\.(\w+)\s*\}\}/g, (_m: string, key: string) => String(ctx.parameters?.[key] ?? ''));
+    });
+
+    const speak = async (text: string) => { spoken.push(text); };
+    const noEvents = async () => { };
+
+    function lookupAction(acknowledgement: any, withFollowingEffect = false): StageAction {
+      const effects: Effect[] = [
+        { type: 'call_tool', toolId: TOOL, parameters: { day: 'Thursday' }, asynchronous: false, priority: 1, acknowledgement } as CallToolEffect,
+      ];
+      if (withFollowingEffect) {
+        effects.push({ type: 'call_tool', toolId: NEXT_TOOL, parameters: {}, asynchronous: false, priority: 2 } as CallToolEffect);
+      }
+      return buildAction(effects);
+    }
+
+    function run(action: StageAction): Promise<any> {
+      return (executor as any).executeActions(
+        [action], buildContext(), 'stage_test', null, noEvents, undefined, speak,
+      );
+    }
+
+    /** Lets pending timers and microtasks run without waiting on the tool. */
+    const settle = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    it('names what it is checking, and only once the request is out', async () => {
+      const pending = run(lookupAction({ text: 'let me check {{parameters.day}} for you' }));
+      await settle();
+
+      // Spoken with the call already dispatched - that is what makes the sentence true, and it
+      // is what lets it name Thursday, since the parameters are only resolved by then.
+      expect(executedTools).to.deep.equal([TOOL]);
+      expect(spoken).to.deep.equal(['let me check Thursday for you']);
+
+      finishTool({ success: true, result: { slots: [] } });
+      await pending;
+    });
+
+    it('says nothing when the lookup returns before it could', async () => {
+      deps.toolExecutor.executeTool = async (tool: { id: string }) => {
+        executedTools.push(tool.id);
+        return { success: true, result: { slots: [] } };
+      };
+
+      await run(lookupAction({ text: 'let me check {{parameters.day}} for you' }));
+
+      // A short pause after someone finishes speaking is just what people do. Covering it would
+      // only put the acknowledgement in front of an answer that was already ready.
+      expect(spoken).to.be.empty;
+    });
+
+    it('speaks again when the wait drags on', async () => {
+      const pending = run(lookupAction({
+        text: 'let me check {{parameters.day}} for you',
+        progressAfterMs: 30,
+        progressText: 'still looking, thanks for bearing with me',
+      }));
+      await settle(60);
+
+      expect(spoken).to.deep.equal([
+        'let me check Thursday for you',
+        'still looking, thanks for bearing with me',
+      ]);
+
+      finishTool({ success: true, result: { slots: [] } });
+      await pending;
+    });
+
+    it('does not repeat the progress line once the lookup returns', async () => {
+      const pending = run(lookupAction({
+        text: 'let me check {{parameters.day}} for you',
+        progressAfterMs: 200,
+        progressText: 'still looking, thanks for bearing with me',
+      }));
+      await settle();
+      finishTool({ success: true, result: { slots: [] } });
+      await pending;
+      await settle(250);
+
+      expect(spoken).to.deep.equal(['let me check Thursday for you']);
+    });
+
+    it('gives up honestly at the ceiling and moves to taking a message', async () => {
+      const outcome = await run(lookupAction({
+        text: 'let me check {{parameters.day}} for you',
+        timeoutMs: 30,
+        timeoutText: 'I am not getting an answer from our diary just now - let me take a message and someone will call you back.',
+        timeoutGoToStageId: 'stage_take_message',
+      }, true));
+
+      expect(outcome.shouldGenerateResponse).to.be.true;
+      expect(outcome.prescriptedResponse).to.contain('let me take a message');
+      expect(outcome.goToStageId).to.equal('stage_take_message');
+      // The call is not hung up on - the caller is still there and still wants something.
+      expect(outcome.shouldEndConversation).to.be.false;
+      // Booking was queued behind a lookup that never landed. Running it would book against
+      // slots nobody found.
+      expect(executedTools).to.deep.equal([TOOL]);
+
+      finishTool({ success: true, result: { slots: ['Thursday 2pm'] } });
+    });
+
+    it('leaves a tool with no acknowledgement completely silent', async () => {
+      deps.toolExecutor.executeTool = async (tool: { id: string }) => {
+        executedTools.push(tool.id);
+        return { success: true, result: {} };
+      };
+
+      await run(lookupAction(undefined));
+
+      expect(spoken).to.be.empty;
+      expect(executedTools).to.deep.equal([TOOL]);
+    });
+
+    it('completes the lookup even when the line cannot be spoken', async () => {
+      // A synthesiser hiccup must not turn a working availability call into an error.
+      const failingSpeak = async () => { throw new Error('tts is down'); };
+      deps.toolExecutor.executeTool = async (tool: { id: string }) => {
+        executedTools.push(tool.id);
+        return { success: true, result: { slots: ['Thursday 2pm'] } };
+      };
+
+      const outcome = await (executor as any).executeActions(
+        [lookupAction({ text: 'let me check {{parameters.day}} for you' })],
+        buildContext(), 'stage_test', null, noEvents, undefined, failingSpeak,
+      );
+
+      expect(outcome.success).to.be.true;
+      expect(executedTools).to.deep.equal([TOOL]);
+    });
+  });
 });

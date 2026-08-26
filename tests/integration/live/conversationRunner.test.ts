@@ -7,6 +7,8 @@ import { MockLlmProvider } from './mockLlmProvider';
 import { EventCollectorClientConnection } from './eventCollectorClientConnection';
 import { authed, resetDatabase } from '../../utils';
 import { MINIMAL_PROJECT, MINIMAL_AGENT } from '../../fixtures';
+import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
 
 describe('ConversationRunner', () => {
   let harness: ConversationTestHarness;
@@ -586,6 +588,159 @@ describe('ConversationRunner', () => {
 
       expect(response).to.equal('Got your message!');
       expect(harness.events.aiResponses).to.have.length(2);
+    });
+  });
+
+  /**
+   * The acknowledgement spoken while a tool call runs, driven through the real runner rather
+   * than the executor alone - so what is asserted is what the caller's client actually received.
+   *
+   * A slow HTTP endpoint stands in for the availability lookup. It is the same shape as the one
+   * the practice line will call, and the same shape as the mock the booking work is built
+   * against: a real request, deliberately slow to answer.
+   */
+  describe('speaking while a tool call runs', () => {
+    let server: Server;
+    let baseUrl: string;
+    /** How long the stand-in endpoint sits on a request before answering. */
+    let delayMs: number;
+
+    beforeEach(async () => {
+      delayMs = 0;
+      server = createServer((_req, res) => {
+        setTimeout(() => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ slots: ['14:00', '15:30'] }));
+        }, delayMs);
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address() as AddressInfo;
+      baseUrl = `http://127.0.0.1:${address.port}/availability`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    /** Creates the lookup tool, a classifier that always picks it, and the stage that calls it. */
+    async function setupBookingStage(acknowledgement: any): Promise<void> {
+      await harness.setup({
+        name: 'Booking',
+        prompt: 'You are a receptionist.',
+        llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+      });
+
+      const toolRes = await authed()
+        .post(`/api/projects/${harness.projectId}/tools`)
+        .send({ type: 'webhook', name: 'Check availability', url: baseUrl });
+      expect(toolRes.status).to.equal(201);
+
+      const classifierRes = await authed()
+        .post(`/api/projects/${harness.projectId}/classifiers`)
+        .send({
+          name: 'Booking classifier',
+          prompt: 'Classify the caller intent.',
+          llmProviderId: harness._providerId,
+          llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0 },
+        });
+      expect(classifierRes.status).to.equal(201);
+
+      const stageRes = await authed()
+        .put(`/api/projects/${harness.projectId}/stages/${harness.stageId}`)
+        .send({
+          name: 'Booking',
+          prompt: 'You are a receptionist.',
+          llmProviderId: harness._providerId,
+          llmSettings: { provider: 'openai', model: 'gpt-4', temperature: 0.7 },
+          agentId: harness.agentId,
+          defaultClassifierId: classifierRes.body.id,
+          version: 1,
+          actions: {
+            check_availability: {
+              name: 'check_availability',
+              triggerOnUserInput: true,
+              triggerOnClientCommand: false,
+              parameters: [],
+              effects: [
+                { type: 'call_tool', toolId: toolRes.body.id, parameters: { day: 'Thursday' }, acknowledgement },
+                { type: 'generate_response', responseMode: 'generated' },
+              ],
+            },
+          },
+        });
+      expect(stageRes.status).to.equal(200);
+
+      await harness.rePrepare();
+      // The greeting takes a queue slot whether or not anything is queued for it - the mock
+      // advances its index either way - so it gets one explicitly, and everything queued after
+      // this line lines up with the turn that asks for it.
+      harness.mockLlm.queueResponse('Pablo Bear\'s practice, how can I help?');
+      await harness.start();
+      // From here on the collector holds one turn's worth of messages, so an assertion about
+      // what the caller heard first is about the booking turn rather than the greeting.
+      harness.events.reset();
+    }
+
+    /** The classification the (mock) classifier returns, consumed before the reply. */
+    function queueClassification(): void {
+      harness.mockLlm.queueResponse(JSON.stringify({ actions: { check_availability: {} } }));
+    }
+
+    it('tells the caller which day it is checking, and the reply continues from it', async () => {
+      delayMs = 150;
+      await setupBookingStage({ text: 'let me check {{parameters.day}} for you' });
+
+      queueClassification();
+      harness.mockLlm.queueResponse('- yes, two o\'clock is free.');
+      await harness.sendInput('can I come in on Thursday?');
+
+      const spoken = harness.events.aiChunks.map((c) => c.chunkText).filter((t) => t.length > 0);
+      expect(spoken[0]).to.equal('let me check Thursday for you');
+
+      // The transcript records what was said out loud, in one piece. Without the acknowledgement
+      // folded in, the stored assistant message would begin mid-sentence.
+      const messages = harness.events.getEventsByType('message');
+      const assistant = messages.filter((m: any) => m.eventData.role === 'assistant');
+      expect(assistant[assistant.length - 1].eventData.text).to.equal(
+        'let me check Thursday for you - yes, two o\'clock is free.',
+      );
+    });
+
+    it('still names the day when the lookup answers immediately', async () => {
+      delayMs = 0;
+      await setupBookingStage({ text: 'let me check {{parameters.day}} for you' });
+
+      queueClassification();
+      harness.mockLlm.queueResponse(' - two o\'clock is free.');
+      await harness.sendInput('can I come in on Thursday?');
+
+      // The executor skips the acknowledgement when the tool has already returned, but that is
+      // a tool resolving with no I/O at all. A real endpoint - even this one, on loopback, with
+      // no delay asked of it - takes longer than rendering one line of Handlebars, so the line
+      // is spoken. Which is fine: naming the day back is worth saying whether or not the wait
+      // needed covering.
+      const spoken = harness.events.aiChunks.map((c) => c.chunkText).filter((t) => t.length > 0);
+      expect(spoken[0]).to.equal('let me check Thursday for you');
+    });
+
+    it('takes a message when the lookup passes its ceiling', async () => {
+      delayMs = 2000;
+      await setupBookingStage({
+        text: 'let me check {{parameters.day}} for you',
+        timeoutMs: 100,
+        timeoutText: 'I am not getting an answer from our diary just now, so let me take a message.',
+      });
+
+      queueClassification();
+      const callsBefore = harness.mockLlm.calls.length;
+      await harness.sendInput('can I come in on Thursday?');
+
+      const spoken = harness.events.aiChunks.map((c) => c.chunkText).filter((t) => t.length > 0);
+      expect(spoken[0]).to.equal('let me check Thursday for you');
+      expect(spoken).to.include('I am not getting an answer from our diary just now, so let me take a message.');
+      // Answered without the reply model - there was nothing for it to work from. The only call
+      // this turn made was the classifier's.
+      expect(harness.mockLlm.calls.length - callsBefore).to.equal(1);
     });
   });
 });

@@ -2610,6 +2610,9 @@
         "priority": {
           "type": "number",
           "description": "Optional execution priority override. Lower numbers execute first. Default: 1000 (webhook), 2000 (smart_function), 6000 (script)."
+        },
+        "acknowledgement": {
+          "$ref": "#/definitions/ToolAcknowledgement"
         }
       },
       "required": [
@@ -2617,6 +2620,44 @@
         "toolId",
         "parameters"
       ]
+    },
+    "ToolAcknowledgement": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Spoken once the request has been sent, never before - so it describes something that is actually happening. Name what is being looked up: \"let me check {{parameters.day}} for you\" rather than \"let me check availability\""
+        },
+        "progressAfterMs": {
+          "type": "integer",
+          "minimum": 0,
+          "exclusiveMinimum": true,
+          "description": "Speak progressText if the tool has still not returned after this many milliseconds. Around 15000 is what a receptionist does, and it is what turns an unbounded wait into an ordinary one"
+        },
+        "progressText": {
+          "type": "string",
+          "description": "Spoken once, at progressAfterMs, if the tool is still running. Ignored without progressAfterMs"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 0,
+          "exclusiveMinimum": true,
+          "description": "Hard ceiling. Stop waiting for the tool at this point, skip the effects that would have used its result, and answer with timeoutText instead"
+        },
+        "timeoutText": {
+          "type": "string",
+          "description": "The turn's reply when the ceiling is reached - an honest fallback such as taking a message. Unlike the fields above this one IS the response, so it is a complete sentence. Ignored without timeoutMs"
+        },
+        "timeoutGoToStageId": {
+          "type": "string",
+          "description": "Stage to move to when the ceiling is reached, typically the one that takes a message. Ignored without timeoutMs"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "description": "What to say out loud while this call runs. Synchronous calls only - an asynchronous one does not hold the turn up, so there is nothing to cover"
     },
     "SaveArtifactEffect": {
       "type": "object",

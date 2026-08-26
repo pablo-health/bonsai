@@ -2646,11 +2646,15 @@
         "properties": {
           "accessKeyId": {
             "type": "string",
-            "description": "AWS access key ID"
+            "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
           },
           "secretAccessKey": {
             "type": "string",
-            "description": "AWS secret access key"
+            "description": "AWS secret access key. Omit to use the default credential provider chain"
+          },
+          "sessionToken": {
+            "type": "string",
+            "description": "AWS session token, when using temporary credentials"
           },
           "region": {
             "type": "string",
@@ -2662,8 +2666,6 @@
           }
         },
         "required": [
-          "accessKeyId",
-          "secretAccessKey",
           "region"
         ],
         "additionalProperties": false
@@ -3157,6 +3159,9 @@
           "priority": {
             "type": "number",
             "description": "Optional execution priority override. Lower numbers execute first. Default: 1000 (webhook), 2000 (smart_function), 6000 (script)."
+          },
+          "acknowledgement": {
+            "$ref": "#/components/schemas/ToolAcknowledgement"
           }
         },
         "required": [
@@ -3164,6 +3169,44 @@
           "toolId",
           "parameters"
         ]
+      },
+      "ToolAcknowledgement": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Spoken once the request has been sent, never before - so it describes something that is actually happening. Name what is being looked up: \"let me check {{parameters.day}} for you\" rather than \"let me check availability\""
+          },
+          "progressAfterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Speak progressText if the tool has still not returned after this many milliseconds. Around 15000 is what a receptionist does, and it is what turns an unbounded wait into an ordinary one"
+          },
+          "progressText": {
+            "type": "string",
+            "description": "Spoken once, at progressAfterMs, if the tool is still running. Ignored without progressAfterMs"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Hard ceiling. Stop waiting for the tool at this point, skip the effects that would have used its result, and answer with timeoutText instead"
+          },
+          "timeoutText": {
+            "type": "string",
+            "description": "The turn's reply when the ceiling is reached - an honest fallback such as taking a message. Unlike the fields above this one IS the response, so it is a complete sentence. Ignored without timeoutMs"
+          },
+          "timeoutGoToStageId": {
+            "type": "string",
+            "description": "Stage to move to when the ceiling is reached, typically the one that takes a message. Ignored without timeoutMs"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "description": "What to say out loud while this call runs. Synchronous calls only - an asynchronous one does not hold the turn up, so there is nothing to cover"
       },
       "GenerateResponseEffect": {
         "type": "object",
@@ -12933,6 +12976,31 @@
               {
                 "type": "object",
                 "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
                   "apiKey": {
                     "type": "string",
                     "description": "API key for authenticating with ElevenLabs"
@@ -13020,6 +13088,31 @@
                 },
                 "required": [
                   "apiKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
                 ],
                 "additionalProperties": false
               },
@@ -13136,6 +13229,29 @@
                 "additionalProperties": false
               },
               {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "default": "us-east-1",
+                    "description": "AWS region hosting the Transcribe streaming endpoint"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential chain."
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
                 "$ref": "#/components/schemas/S3StorageConfig"
               },
               {
@@ -13161,6 +13277,9 @@
               },
               {
                 "$ref": "#/components/schemas/SmtpImapChannelConfig"
+              },
+              {
+                "$ref": "#/components/schemas/LiveKitChannelConfig"
               }
             ],
             "description": "Provider-specific configuration object (varies by providerType and apiType)"
@@ -13572,6 +13691,101 @@
         "additionalProperties": false,
         "description": "Optional OAuth2/XOAUTH2 configuration. When present, supersedes password-based authentication for both SMTP and IMAP."
       },
+      "LiveKitChannelConfig": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "LiveKit server URL, e.g. wss://livekit.example.com or ws://127.0.0.1:7880"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "LiveKit API key used to mint participant access tokens and verify webhooks"
+          },
+          "apiSecret": {
+            "type": "string",
+            "description": "LiveKit API secret paired with apiKey"
+          },
+          "identity": {
+            "type": "string",
+            "description": "Participant identity Bonsai joins rooms under. Defaults to \"bonsai-agent\"."
+          },
+          "roomPrefix": {
+            "type": "string",
+            "description": "Only join rooms whose name starts with this prefix. Omit to join every room the webhook reports."
+          },
+          "apiKeyValue": {
+            "type": "string",
+            "description": "Bonsai API key whose project owns these conversations. Rooms have no way to carry credentials, so routing is bound to the provider."
+          },
+          "outboundTrunkId": {
+            "type": "string",
+            "description": "LiveKit outbound SIP trunk used to dial a second leg into the room. Required only for direct-connect callers; omit to disable outbound entirely."
+          },
+          "neverDial": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Destinations the channel must refuse to dial, in E.164. Put any number that forwards INTO this channel here: dialing it would loop the call straight back to the agent."
+          },
+          "announceTemplate": {
+            "type": "string",
+            "description": "Spoken privately to whoever answers a dialed leg, before the two legs are joined. \"{caller}\" is replaced with the calling party's profile name. Omit to bridge silently; the announcement is also skipped when the caller has no name on file."
+          },
+          "handoffDecision": {
+            "type": "boolean",
+            "description": "Ask whoever answers a dialed leg whether they want the call before joining the two legs. They may answer in speech, or press 1 to accept and 2 to decline. Defaults to false, which joins the legs as soon as the announcement finishes."
+          },
+          "handoffRelayStageId": {
+            "type": "string",
+            "description": "Stage the conversation moves to when the answering party declines but asked for something to be passed on. Its prompt should speak the relay variable to the caller. Omit to decline silently and carry on screening."
+          },
+          "escalateStageId": {
+            "type": "string",
+            "description": "Stage whose ENTRY means \"put this caller through\". When the conversation moves here, the channel dials escalateTo and runs the ordinary announce / accept / decline bridge. Used by a line that screens strangers and escalates the ones worth taking, as opposed to one that bridges known callers on sight."
+          },
+          "escalateTo": {
+            "type": "string",
+            "description": "Destination dialled when the conversation enters escalateStageId, in E.164. Fixed for the line rather than read from the caller profile, because a stranger has no profile to read."
+          },
+          "bridgeFailedStageId": {
+            "type": "string",
+            "description": "Stage the conversation moves to when a dialed leg does NOT connect - voicemail, no answer, a silent decline, or a bridge that never resolved. Its prompt should tell the caller they could not be put through and offer to take a message. Omit to leave the caller in silence with the agent, which is what used to happen."
+          },
+          "handoffRelayVariable": {
+            "type": "string",
+            "description": "Variable on the relay stage the passed-on message is written to. Defaults to \"handoffMessage\"."
+          },
+          "demoStageId": {
+            "type": "string",
+            "description": "Stage whose ENTRY means \"play the recording\". When the conversation moves here, the channel plays demoAudioPath into the call and then moves to demoDoneStageId. Entry rather than an effect, for the same reason as escalateStageId: moving stage is something the model can be given an action for, and playing audio is not."
+          },
+          "demoAudioPath": {
+            "type": "string",
+            "description": "Absolute path to the recording played on entering demoStageId. RAW PCM, mono, signed 16-bit little-endian, at the session sample rate - not MP3 or WAV. Decoding is deliberately not done here: a codec in the media path is a dependency that can fail mid-call, and converting once at deploy time cannot."
+          },
+          "demoDoneStageId": {
+            "type": "string",
+            "description": "Stage the conversation moves to when the recording finishes or the caller talks over it. Its prompt should pick the conversation back up. Omit and the caller is left in silence after the recording, which is worse than not playing one."
+          },
+          "stageId": {
+            "type": "string",
+            "description": "Stage to start conversations in. Overridable per room via room metadata."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Agent to start conversations with. Overridable per room via room metadata."
+          }
+        },
+        "required": [
+          "url",
+          "apiKey",
+          "apiSecret",
+          "apiKeyValue"
+        ],
+        "additionalProperties": false
+      },
       "UpdateProviderRequest": {
         "type": "object",
         "properties": {
@@ -13732,6 +13946,31 @@
               {
                 "type": "object",
                 "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
                   "apiKey": {
                     "type": "string",
                     "description": "API key for authenticating with ElevenLabs"
@@ -13819,6 +14058,31 @@
                 },
                 "required": [
                   "apiKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
                 ],
                 "additionalProperties": false
               },
@@ -13935,6 +14199,29 @@
                 "additionalProperties": false
               },
               {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "default": "us-east-1",
+                    "description": "AWS region hosting the Transcribe streaming endpoint"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential chain."
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
                 "$ref": "#/components/schemas/S3StorageConfig"
               },
               {
@@ -13960,6 +14247,9 @@
               },
               {
                 "$ref": "#/components/schemas/SmtpImapChannelConfig"
+              },
+              {
+                "$ref": "#/components/schemas/LiveKitChannelConfig"
               }
             ],
             "description": "Updated provider-specific configuration"
@@ -14148,6 +14438,31 @@
               {
                 "type": "object",
                 "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
                   "apiKey": {
                     "type": "string",
                     "description": "API key for authenticating with ElevenLabs"
@@ -14235,6 +14550,31 @@
                 },
                 "required": [
                   "apiKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials"
+                  }
+                },
+                "required": [
+                  "region"
                 ],
                 "additionalProperties": false
               },
@@ -14351,6 +14691,29 @@
                 "additionalProperties": false
               },
               {
+                "type": "object",
+                "properties": {
+                  "region": {
+                    "type": "string",
+                    "default": "us-east-1",
+                    "description": "AWS region hosting the Transcribe streaming endpoint"
+                  },
+                  "accessKeyId": {
+                    "type": "string",
+                    "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                  },
+                  "secretAccessKey": {
+                    "type": "string",
+                    "description": "AWS secret access key. Omit to use the default credential chain."
+                  },
+                  "sessionToken": {
+                    "type": "string",
+                    "description": "AWS session token, when using temporary credentials."
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
                 "$ref": "#/components/schemas/S3StorageConfig"
               },
               {
@@ -14376,6 +14739,9 @@
               },
               {
                 "$ref": "#/components/schemas/SmtpImapChannelConfig"
+              },
+              {
+                "$ref": "#/components/schemas/LiveKitChannelConfig"
               }
             ],
             "description": "Provider-specific configuration object"
@@ -14586,6 +14952,31 @@
                     {
                       "type": "object",
                       "properties": {
+                        "region": {
+                          "type": "string",
+                          "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                        },
+                        "accessKeyId": {
+                          "type": "string",
+                          "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                        },
+                        "secretAccessKey": {
+                          "type": "string",
+                          "description": "AWS secret access key. Omit to use the default credential provider chain"
+                        },
+                        "sessionToken": {
+                          "type": "string",
+                          "description": "AWS session token, when using temporary credentials"
+                        }
+                      },
+                      "required": [
+                        "region"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
                         "apiKey": {
                           "type": "string",
                           "description": "API key for authenticating with ElevenLabs"
@@ -14673,6 +15064,31 @@
                       },
                       "required": [
                         "apiKey"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "region": {
+                          "type": "string",
+                          "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                        },
+                        "accessKeyId": {
+                          "type": "string",
+                          "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                        },
+                        "secretAccessKey": {
+                          "type": "string",
+                          "description": "AWS secret access key. Omit to use the default credential provider chain"
+                        },
+                        "sessionToken": {
+                          "type": "string",
+                          "description": "AWS session token, when using temporary credentials"
+                        }
+                      },
+                      "required": [
+                        "region"
                       ],
                       "additionalProperties": false
                     },
@@ -14789,6 +15205,29 @@
                       "additionalProperties": false
                     },
                     {
+                      "type": "object",
+                      "properties": {
+                        "region": {
+                          "type": "string",
+                          "default": "us-east-1",
+                          "description": "AWS region hosting the Transcribe streaming endpoint"
+                        },
+                        "accessKeyId": {
+                          "type": "string",
+                          "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                        },
+                        "secretAccessKey": {
+                          "type": "string",
+                          "description": "AWS secret access key. Omit to use the default credential chain."
+                        },
+                        "sessionToken": {
+                          "type": "string",
+                          "description": "AWS session token, when using temporary credentials."
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
                       "$ref": "#/components/schemas/S3StorageConfig"
                     },
                     {
@@ -14814,6 +15253,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LiveKitChannelConfig"
                     }
                   ],
                   "description": "Provider-specific configuration object"
@@ -39984,6 +40426,31 @@
                       {
                         "type": "object",
                         "properties": {
+                          "region": {
+                            "type": "string",
+                            "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential provider chain"
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials"
+                          }
+                        },
+                        "required": [
+                          "region"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "apiKey": {
                             "type": "string",
                             "description": "API key for authenticating with ElevenLabs"
@@ -40071,6 +40538,31 @@
                         },
                         "required": [
                           "apiKey"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "region": {
+                            "type": "string",
+                            "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential provider chain"
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials"
+                          }
+                        },
+                        "required": [
+                          "region"
                         ],
                         "additionalProperties": false
                       },
@@ -40187,6 +40679,29 @@
                         "additionalProperties": false
                       },
                       {
+                        "type": "object",
+                        "properties": {
+                          "region": {
+                            "type": "string",
+                            "default": "us-east-1",
+                            "description": "AWS region hosting the Transcribe streaming endpoint"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential chain."
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials."
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
                         "$ref": "#/components/schemas/S3StorageConfig"
                       },
                       {
@@ -40212,6 +40727,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                      },
+                      {
+                        "$ref": "#/components/schemas/LiveKitChannelConfig"
                       }
                     ],
                     "description": "Provider-specific configuration object (varies by providerType and apiType)"
@@ -40396,6 +40914,31 @@
                         {
                           "type": "object",
                           "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
                             "apiKey": {
                               "type": "string",
                               "description": "API key for authenticating with ElevenLabs"
@@ -40483,6 +41026,31 @@
                           },
                           "required": [
                             "apiKey"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
                           ],
                           "additionalProperties": false
                         },
@@ -40599,6 +41167,29 @@
                           "additionalProperties": false
                         },
                         {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "default": "us-east-1",
+                              "description": "AWS region hosting the Transcribe streaming endpoint"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential chain."
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials."
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
                           "$ref": "#/components/schemas/S3StorageConfig"
                         },
                         {
@@ -40624,6 +41215,9 @@
                         },
                         {
                           "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                        },
+                        {
+                          "$ref": "#/components/schemas/LiveKitChannelConfig"
                         }
                       ],
                       "description": "Provider-specific configuration object"
@@ -40987,6 +41581,31 @@
                               {
                                 "type": "object",
                                 "properties": {
+                                  "region": {
+                                    "type": "string",
+                                    "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                                  },
+                                  "accessKeyId": {
+                                    "type": "string",
+                                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                                  },
+                                  "secretAccessKey": {
+                                    "type": "string",
+                                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                                  },
+                                  "sessionToken": {
+                                    "type": "string",
+                                    "description": "AWS session token, when using temporary credentials"
+                                  }
+                                },
+                                "required": [
+                                  "region"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
                                   "apiKey": {
                                     "type": "string",
                                     "description": "API key for authenticating with ElevenLabs"
@@ -41074,6 +41693,31 @@
                                 },
                                 "required": [
                                   "apiKey"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "region": {
+                                    "type": "string",
+                                    "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                                  },
+                                  "accessKeyId": {
+                                    "type": "string",
+                                    "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                                  },
+                                  "secretAccessKey": {
+                                    "type": "string",
+                                    "description": "AWS secret access key. Omit to use the default credential provider chain"
+                                  },
+                                  "sessionToken": {
+                                    "type": "string",
+                                    "description": "AWS session token, when using temporary credentials"
+                                  }
+                                },
+                                "required": [
+                                  "region"
                                 ],
                                 "additionalProperties": false
                               },
@@ -41190,6 +41834,29 @@
                                 "additionalProperties": false
                               },
                               {
+                                "type": "object",
+                                "properties": {
+                                  "region": {
+                                    "type": "string",
+                                    "default": "us-east-1",
+                                    "description": "AWS region hosting the Transcribe streaming endpoint"
+                                  },
+                                  "accessKeyId": {
+                                    "type": "string",
+                                    "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                                  },
+                                  "secretAccessKey": {
+                                    "type": "string",
+                                    "description": "AWS secret access key. Omit to use the default credential chain."
+                                  },
+                                  "sessionToken": {
+                                    "type": "string",
+                                    "description": "AWS session token, when using temporary credentials."
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
                                 "$ref": "#/components/schemas/S3StorageConfig"
                               },
                               {
@@ -41215,6 +41882,9 @@
                               },
                               {
                                 "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                              },
+                              {
+                                "$ref": "#/components/schemas/LiveKitChannelConfig"
                               }
                             ],
                             "description": "Provider-specific configuration object"
@@ -41481,6 +42151,31 @@
                         {
                           "type": "object",
                           "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
                             "apiKey": {
                               "type": "string",
                               "description": "API key for authenticating with ElevenLabs"
@@ -41568,6 +42263,31 @@
                           },
                           "required": [
                             "apiKey"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
                           ],
                           "additionalProperties": false
                         },
@@ -41684,6 +42404,29 @@
                           "additionalProperties": false
                         },
                         {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "default": "us-east-1",
+                              "description": "AWS region hosting the Transcribe streaming endpoint"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential chain."
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials."
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
                           "$ref": "#/components/schemas/S3StorageConfig"
                         },
                         {
@@ -41709,6 +42452,9 @@
                         },
                         {
                           "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                        },
+                        {
+                          "$ref": "#/components/schemas/LiveKitChannelConfig"
                         }
                       ],
                       "description": "Provider-specific configuration object"
@@ -41946,6 +42692,31 @@
                       {
                         "type": "object",
                         "properties": {
+                          "region": {
+                            "type": "string",
+                            "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential provider chain"
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials"
+                          }
+                        },
+                        "required": [
+                          "region"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
                           "apiKey": {
                             "type": "string",
                             "description": "API key for authenticating with ElevenLabs"
@@ -42033,6 +42804,31 @@
                         },
                         "required": [
                           "apiKey"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "region": {
+                            "type": "string",
+                            "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential provider chain"
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials"
+                          }
+                        },
+                        "required": [
+                          "region"
                         ],
                         "additionalProperties": false
                       },
@@ -42149,6 +42945,29 @@
                         "additionalProperties": false
                       },
                       {
+                        "type": "object",
+                        "properties": {
+                          "region": {
+                            "type": "string",
+                            "default": "us-east-1",
+                            "description": "AWS region hosting the Transcribe streaming endpoint"
+                          },
+                          "accessKeyId": {
+                            "type": "string",
+                            "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                          },
+                          "secretAccessKey": {
+                            "type": "string",
+                            "description": "AWS secret access key. Omit to use the default credential chain."
+                          },
+                          "sessionToken": {
+                            "type": "string",
+                            "description": "AWS session token, when using temporary credentials."
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
                         "$ref": "#/components/schemas/S3StorageConfig"
                       },
                       {
@@ -42174,6 +42993,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                      },
+                      {
+                        "$ref": "#/components/schemas/LiveKitChannelConfig"
                       }
                     ],
                     "description": "Updated provider-specific configuration"
@@ -42356,6 +43178,31 @@
                         {
                           "type": "object",
                           "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region hosting the Bedrock endpoint (e.g., \"us-east-1\", \"eu-central-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
                             "apiKey": {
                               "type": "string",
                               "description": "API key for authenticating with ElevenLabs"
@@ -42443,6 +43290,31 @@
                           },
                           "required": [
                             "apiKey"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "description": "AWS region where Amazon Polly is available (e.g., \"us-east-1\", \"eu-west-1\")"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key ID. Omit to use the default credential provider chain (IAM role, instance profile, environment)"
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential provider chain"
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials"
+                            }
+                          },
+                          "required": [
+                            "region"
                           ],
                           "additionalProperties": false
                         },
@@ -42559,6 +43431,29 @@
                           "additionalProperties": false
                         },
                         {
+                          "type": "object",
+                          "properties": {
+                            "region": {
+                              "type": "string",
+                              "default": "us-east-1",
+                              "description": "AWS region hosting the Transcribe streaming endpoint"
+                            },
+                            "accessKeyId": {
+                              "type": "string",
+                              "description": "AWS access key id. Omit to use the default credential chain (instance or task role)."
+                            },
+                            "secretAccessKey": {
+                              "type": "string",
+                              "description": "AWS secret access key. Omit to use the default credential chain."
+                            },
+                            "sessionToken": {
+                              "type": "string",
+                              "description": "AWS session token, when using temporary credentials."
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
                           "$ref": "#/components/schemas/S3StorageConfig"
                         },
                         {
@@ -42584,6 +43479,9 @@
                         },
                         {
                           "$ref": "#/components/schemas/SmtpImapChannelConfig"
+                        },
+                        {
+                          "$ref": "#/components/schemas/LiveKitChannelConfig"
                         }
                       ],
                       "description": "Provider-specific configuration object"
