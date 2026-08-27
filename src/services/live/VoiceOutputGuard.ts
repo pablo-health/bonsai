@@ -49,6 +49,43 @@ const SPELLED_DIGIT_RUN =
  * reach the operator at all - see ProtectedProfileFields.
  */
 
+/**
+ * The agent asking for a number it can reach the caller on.
+ *
+ * Matched against the agent's OWN output, which is the trick that makes this need no wiring: the
+ * guard already sees every sentence before it is spoken, so it can notice its own question and
+ * does not have to be told what stage the conversation is in.
+ *
+ * Deliberately narrow. "Is it alright to leave a message on that number?" mentions a number and
+ * is not a request for one, and matching it would arm the length check over a stretch of the call
+ * where no number is coming.
+ */
+const PHONE_ASK =
+  /\b(?:(?:phone|contact|callback|call-back|cell|mobile|best|good)\s+number|number\s+(?:to|that|we\s+can|I\s+can|where\s+we\s+can)\s+(?:reach|call|contact))\b/i;
+
+/**
+ * Said instead of reading back a number that cannot be a number.
+ *
+ * A retry, not a refusal: the caller has done nothing wrong and the call should continue. Naming
+ * the area code is deliberate - it is the part that goes missing, because it is spoken first and
+ * a line that has just been noisy loses the beginning of an utterance rather than the end.
+ */
+const PHONE_RETRY =
+  "Sorry - I only caught part of that number. Could you give me the whole thing, starting with the area code?";
+
+/**
+ * A North American number as a caller would say one: ten digits, or eleven with a leading 1.
+ *
+ * The area code and the exchange may not begin with 0 or 1 - that is the numbering plan, not a
+ * heuristic, and a number that breaks it cannot be dialled. Everything else is left alone: this
+ * exists to catch a number with digits MISSING, which is the failure that actually happened, and
+ * a stricter rule would start rejecting real numbers to catch nothing.
+ */
+function isPlausibleNanp(run: string): boolean {
+  const digits = run.length === 11 && run.startsWith('1') ? run.slice(1) : run;
+  return /^[2-9]\d{2}[2-9]\d{6}$/.test(digits);
+}
+
 const RULES: OutputRule[] = [
   {
     name: 'digits',
@@ -121,6 +158,14 @@ export class VoiceOutputGuard {
   private readonly violations: GuardViolation[] = [];
   /** Digit runs the CALLER has spoken this conversation, normalised to bare digits. */
   private readonly callerDigits = new Set<string>();
+  /**
+   * True once the agent has asked for a callback number, until a usable one is read back.
+   *
+   * This is the "are we in the part of the call where a number is expected" question, answered
+   * from the agent's own speech rather than from conversation state the guard would otherwise
+   * have to be handed and kept in step with.
+   */
+  private awaitingPhoneNumber = false;
   /** Digit runs the operator wrote into the agent's own script, normalised the same way. */
   private readonly scriptedDigits = new Set<string>();
 
@@ -175,7 +220,54 @@ export class VoiceOutputGuard {
       return rule.replacement;
     }
 
+    // A second question, on a different axis from the rules above.
+    //
+    // Those ask "may this number be said at all", and the echo exemption answers yes for anything
+    // the caller said - which is right, and is why an eight-digit number sailed through on
+    // 2026-08-27. The caller HAD said it; nobody had asked whether it could be a phone number.
+    // This asks that.
+    if (this.isImplausiblePhoneReadback(sentence)) {
+      this.record('phone-length', sentence, PHONE_RETRY);
+      return PHONE_RETRY;
+    }
+
+    // Only sentences that survive arm the check, and only after they have been screened - a
+    // sentence that was replaced was never said, so it cannot have asked the caller for anything.
+    this.noteOwnQuestion(sentence);
+
     return sentence;
+  }
+
+  /** Arms the length check when the agent asks for a number it can call back on. */
+  private noteOwnQuestion(sentence: string): void {
+    if (PHONE_ASK.test(sentence)) this.awaitingPhoneNumber = true;
+  }
+
+  /**
+   * True when the agent is about to read back, as a phone number, something that cannot be one.
+   *
+   * Scoped three ways, because the cost of a false positive here is refusing to repeat a number
+   * the caller correctly gave:
+   *
+   *  - only while a callback number has actually been asked for, so a date of birth or a member
+   *    ID read back elsewhere in the call is not held to a phone number's shape;
+   *  - only for runs the CALLER spoke, since a run the agent invented is the other rule's
+   *    business and has already been dealt with above;
+   *  - and never when any run in the sentence is a plausible number, which also disarms the
+   *    check - once a usable number has been read back, the call has moved on.
+   */
+  private isImplausiblePhoneReadback(sentence: string): boolean {
+    if (!this.awaitingPhoneNumber) return false;
+
+    const echoed = digitRuns(sentence).filter((run) => this.callerDigits.has(run));
+    if (echoed.length === 0) return false;
+
+    if (echoed.some(isPlausibleNanp)) {
+      this.awaitingPhoneNumber = false;
+      return false;
+    }
+
+    return true;
   }
 
   /**

@@ -166,3 +166,69 @@ describe('ProtectedProfileFields', () => {
     }
   });
 });
+
+/**
+ * A number with digits missing is not a disclosure problem, so the echo exemption above waves it
+ * through: the caller DID say it. On 2026-08-27 this line read back "4-7-5-4-4-2-0-1", the caller
+ * said yes, and an appointment was booked with no way to reach them. A readback only invites
+ * agreement, and "yes" is the cheapest thing a caller in a noisy place can say - so the count has
+ * to be the check.
+ */
+describe('VoiceOutputGuard phone number length', () => {
+  /** The agent's own question is what arms the check, so tests have to ask it first. */
+  function askedForNumber(): VoiceOutputGuard {
+    const guard = new VoiceOutputGuard();
+    guard.screen('And what is a good number to reach you on?');
+    return guard;
+  }
+
+  it('will not read back a number that is too short to be one', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('47544201');
+    const spoken = guard.screen('Got it - let me read that back to you: 4-7-5-4-4-2-0-1. Is that right?');
+    expect(spoken).to.not.contain('4-7-5-4-4-2-0-1');
+    expect(spoken).to.contain('area code');
+  });
+
+  it('reads back a full ten-digit number unchanged', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('it is 404-754-4201');
+    expect(guard.screen('Let me read that back: 404-754-4201?')).to.contain('404-754-4201');
+  });
+
+  it('accepts eleven digits with a leading one', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('one, four zero four, seven five four, four two zero one');
+    expect(guard.screen('That is 1-404-754-4201?')).to.contain('404-754-4201');
+  });
+
+  it('holds nothing to a phone number.s shape until a phone number has been asked for', () => {
+    // A date of birth or a member ID read back earlier in the call is not a phone number and
+    // must not be judged as one.
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerSpeech('03151985');
+    expect(guard.screen('So that is 0-3-1-5-1-9-8-5?')).to.contain('0-3-1-5-1-9-8-5');
+  });
+
+  it('stops checking once a usable number has been read back', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('404-754-4201');
+    guard.screen('Let me read that back: 404-754-4201?');
+    guard.noteCallerSpeech('my member id is 8891 2247');
+    expect(guard.screen('And the member ID is 8891 2247?')).to.contain('8891 2247');
+  });
+
+  it('rejects an area code that cannot exist', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('0447544201');
+    expect(guard.screen('Reading that back: 044-754-4201?')).to.contain('area code');
+  });
+
+  it('records what it replaced, so the call record shows it', () => {
+    const guard = askedForNumber();
+    guard.noteCallerSpeech('47544201');
+    guard.screen('Let me read that back: 4-7-5-4-4-2-0-1?');
+    const violations = guard.getViolations();
+    expect(violations.map((v) => v.rule)).to.contain('phone-length');
+  });
+});
