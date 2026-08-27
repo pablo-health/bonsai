@@ -155,6 +155,14 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     if (this.isRecognizing) return;
     if (!this.client) await this.init();
 
+    // getAllTextChunks() is documented as returning what was recognised SINCE THE LAST start(),
+    // and the runner reads it that way: on every end-of-utterance it takes the whole chunk list
+    // as the caller's utterance. Every other provider clears here; this one did not, so the
+    // chunks survived into the next turn and the runner replayed the previous sentence as if it
+    // had just been spoken. On a barged-in call that repeats: each replay opens a turn, and the
+    // new turn's TTS cancels the reply still being spoken, so the agent talks over itself and
+    // never finishes a sentence.
+    this.textChunks = [];
     this.queue = [];
     this.waiter = null;
     this.ended = false;
