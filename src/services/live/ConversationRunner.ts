@@ -22,6 +22,7 @@ import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/ll
 import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
 import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
+import { decideCallEnding, CLOSING_QUESTION } from "./callEnding";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
@@ -278,6 +279,19 @@ export class ConversationRunner {
 
   /** Partial ASR transcript accumulated during barge-in (silent barge-in captures partial text). Null when not in barge-in mode. */
   private bargeInPartialText: string | null = null;
+  /** The caller's most recent transcript, after the agent's own speech has been filtered out. */
+  private lastUserUtterance: string | null = null;
+
+  /**
+   * True once the agent has asked whether there is anything else, and is waiting for the answer.
+   *
+   * Hanging up is the one thing on a call that cannot be taken back - the caller has to dial again
+   * and start over, having already given their name and their number - so it takes a confirming
+   * exchange rather than a single classification. Same shape as cancelling the agent's speech on
+   * barge-in: do the cheap reversible thing first.
+   */
+  private endConfirmationAsked = false;
+
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
 
@@ -2034,10 +2048,31 @@ export class ConversationRunner {
     }
 
     if (outcome.shouldEndConversation) {
+      if (decideCallEnding(this.lastUserUtterance, this.endConfirmationAsked) === 'confirm-first') {
+        // Not a goodbye, and nobody has been asked. On 2026-08-27 a single misheard sentence -
+        // "I got the fucking apartment." - was classified as the caller being finished and the
+        // call was ended on them, having taken nothing and given nothing. So ask, and let the
+        // answer to the question decide instead of the guess that produced this outcome.
+        this.endConfirmationAsked = true;
+        logger.info({ conversationId, lastUserUtterance: this.lastUserUtterance }, 'Asked to end the call without a goodbye - confirming before hanging up');
+        try {
+          await this.speakInterstitial(CLOSING_QUESTION);
+        } catch (error) {
+          // Never let a failure to ASK become a hang-up. Staying on a call a beat too long is
+          // recoverable; ending one wrongly is not.
+          logger.warn({ conversationId, error: error instanceof Error ? error.message : String(error) }, 'Could not speak the closing question; staying on the line regardless');
+        }
+        return true;
+      }
+
       logger.info({ conversationId }, `Conversation marked for ending by action execution`);
       this.stageData.shouldEndConversation = true; // Flag to indicate conversation should end after current processing completes
       return true;
     }
+
+    // The caller answered the closing question with something other than an ending, so the call
+    // is live again and the next request to end it starts from scratch.
+    this.endConfirmationAsked = false;
 
     logger.debug({ conversationId, hasModifiedVars: outcome.hasModifiedVars, hasModifiedUserInput: outcome.hasModifiedUserInput, hasModifiedUserProfile: outcome.hasModifiedUserProfile, shouldEndConversation: outcome.shouldEndConversation, shouldAbortConversation: outcome.shouldAbortConversation }, `Action outcome applied successfully`);
     return true;
@@ -2880,6 +2915,12 @@ export class ConversationRunner {
     }
 
     this.voiceOutputGuard?.noteCallerSpeech(userInput || '');
+
+    // Kept for the end-of-call decision, and taken from here rather than the raw transcript on
+    // purpose: the de-echo above has already removed the agent's own words, and the agent says
+    // "take care" at the end of every call. Reading the raw transcript would let its own farewell
+    // come back as the caller's.
+    this.lastUserUtterance = userInput || null;
 
     const preliminaryMessageEventData: MessageEventData = {
       role: 'user',
