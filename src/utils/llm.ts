@@ -26,7 +26,22 @@ export function joinFillerToReply(filler: string | null, reply: string): string 
   // for a different Pablo" - and closing it up to "Got it- you're" is just a different typo from
   // the one this function exists to prevent.
   const needsSpace = rest.length > 0 && !/^[,.!?;:)\]}]/.test(rest);
-  return `${filler}${needsSpace ? ' ' : ''}${rest}`.trim();
+  if (!needsSpace) return `${filler}${rest}`.trim();
+
+  // A filler that ends mid-thought and a reply that starts a new sentence are two utterances, and
+  // a bare space between them is not a boundary the synthesiser can hear: "Sure" + "Of course.
+  // What's your first and last name?" was spoken as "Sure Of course", running the two together
+  // with no pause. Terminal punctuation is what tells TTS to breathe.
+  //
+  // Only when the reply genuinely starts a new sentence, though. The reply model is prefilled
+  // with the filler and is meant to continue it - "Let me check that" + "for you right now" is
+  // one sentence in two pieces, and a full stop in the middle of it would be the same defect
+  // pointing the other way. A lowercase opening is that continuation; a capital is not.
+  const fillerEndsMidThought = !/[.!?…,;:)\]}\u2014\u2013-]$/.test(filler.trimEnd());
+  const replyStartsSentence = /^["'\u201c\u2018(\[]?[A-Z0-9]/.test(rest);
+  const separator = fillerEndsMidThought && replyStartsSentence ? '. ' : ' ';
+
+  return `${filler.trimEnd()}${separator}${rest}`.trim();
 }
 
 /**
