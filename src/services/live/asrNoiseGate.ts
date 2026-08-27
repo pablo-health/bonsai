@@ -13,6 +13,12 @@ import type { TextChunk } from '../providers/asr/IAsrProvider';
  * never as "low". Reading it as low would silence every provider except Transcribe the moment a
  * threshold was switched on.
  *
+ * CALLERS: this belongs to barge-in and nowhere else. The two directions are not symmetric. While
+ * the agent is talking, a false reject costs a repeat. While the agent is WAITING for an answer
+ * it has just asked for, a false reject ends the call in silence - and the answer most likely to
+ * score low is a name, since a proper noun is precisely what a language model cannot help with.
+ * Applying this to an awaited answer aims the rejection at the input least able to afford it.
+ *
  * @param chunks - the turn's recognised chunks.
  * @param threshold - minimum mean confidence, 0..1. Undefined disables the gate entirely.
  * @returns the mean confidence weighed, and whether it passes.

@@ -790,15 +790,27 @@ export class ConversationRunner {
           const allTextChunks = asrProvider.getAllTextChunks();
           const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
 
-          // A transcript the recogniser is not sure of is the room, not the caller. A phone gives
-          // us one mixed stream - the caller's mouth is centimetres from the mic and everyone
-          // else is metres away - so nearby speech comes back confident and background speech
-          // comes back as confident-sounding fragments with low scores behind them. Dropping
-          // those here, before a turn exists, is the difference between a line that works in a
-          // waiting room and one that answers other people's conversations.
-          if (fullText && !this.isConfidentEnoughForATurn(allTextChunks)) {
+          // A transcript the recogniser is not sure of is the room, not the caller - but ONLY
+          // while the agent is the one talking.
+          //
+          // The two directions are not symmetric and the first cut of this got it wrong. When the
+          // agent is mid-sentence, a false reject costs nothing: the caller repeats themselves and
+          // is heard. When the agent has just asked a question and is waiting, a false reject is
+          // the worst outcome the line has - the caller answers, hears nothing back, and the call
+          // is over. And the answer most likely to score low is a NAME, because a proper noun is
+          // exactly what a recogniser's language model cannot help with. Gating an awaited answer
+          // therefore aimed the rejection at the one input that could least afford it: asked for
+          // a name on 2026-08-27, the reply came back as "I'll just leave that." at 0.515, was
+          // dropped, and the caller got silence.
+          //
+          // So the gate belongs to barge-in, where the noise does its damage, and nowhere else.
+          if (fullText && this.isBargeIn && !this.isConfidentEnoughForATurn(allTextChunks)) {
             this.isBargeIn = false;
             this.bargeInPartialText = null;
+            // Never hand back dead air. Dropping the transcript ends the turn without a reply, so
+            // without this the conversation sits in receiving_user_voice with no timer running
+            // and nothing will ever speak again - which is how the drop above was found.
+            await this.changeState('awaiting_user_input');
             return;
           }
 

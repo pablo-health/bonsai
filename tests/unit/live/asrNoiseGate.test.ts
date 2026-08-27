@@ -43,4 +43,19 @@ describe('assessTranscriptConfidence', () => {
   it('passes a transcript exactly on the threshold', () => {
     expect(assessTranscriptConfidence([chunk('maybe', 0.6)], 0.6).passes).to.equal(true);
   });
+
+  /**
+   * A name is the input a recogniser is least able to score well - a proper noun is exactly what
+   * its language model cannot help with. Asked for a name on 2026-08-27, the caller's reply came
+   * back as "I'll just leave that." at 0.515 and was dropped, and the caller heard nothing at all.
+   *
+   * This function still reports it as failing, and that is correct - the judgement is unchanged.
+   * What changed is WHERE the runner is allowed to ask: during barge-in only, never while waiting
+   * for an answer it has just requested. The value below is the real one from that call, kept so
+   * the cost of moving the gate back is written down.
+   */
+  it('scores a garbled name below a 0.6 bar - which is why the runner only asks during barge-in', () => {
+    const garbledName = assessTranscriptConfidence([chunk("I'll just leave that.", 0.515)], 0.6);
+    expect(garbledName.passes).to.equal(false);
+  });
 });
