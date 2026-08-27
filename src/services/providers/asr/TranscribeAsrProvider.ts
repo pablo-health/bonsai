@@ -54,6 +54,21 @@ const KEEPALIVE_INTERVAL_MS = 4000;
 /** Duration of each keepalive silence frame. */
 const KEEPALIVE_FRAME_MS = 100;
 
+/**
+ * Mean confidence over the spoken words of a final result.
+ *
+ * Transcribe reports confidence per item rather than per result, and only for finals. Punctuation
+ * carries its own confidence that says nothing about whether a word was heard, so it is left out.
+ * Returns undefined when nothing usable is present, which downstream reads as "unknown" rather
+ * than "low" - the distinction matters, because a gate that treated the two alike would mute a
+ * provider the moment it stopped reporting.
+ */
+export function meanItemConfidence(items?: Array<{ Type?: string; Confidence?: number }>): number | undefined {
+  const scored = (items ?? []).filter((item) => item.Type === 'pronunciation' && typeof item.Confidence === 'number');
+  if (scored.length === 0) return undefined;
+  return scored.reduce((total, item) => total + (item.Confidence as number), 0) / scored.length;
+}
+
 /** Maps the settings stability enum onto the SDK enum. */
 const STABILITY_MAP: Record<string, PartialResultsStability> = {
   high: PartialResultsStability.HIGH,
@@ -347,7 +362,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
             this.handleRecognizing(this.currentChunkId, text);
           } else {
             this.lastPartial = '';
-            this.handleRecognized(this.currentChunkId, text);
+            this.handleRecognized(this.currentChunkId, text, meanItemConfidence(result.Alternatives?.[0]?.Items));
             this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
           }
         }

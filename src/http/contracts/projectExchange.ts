@@ -47,6 +47,8 @@ export const asrConfigExchangeV1Schema = z.object({
   silenceTimeoutMs: z.number().int().min(0).optional().describe('Timeout in milliseconds before silence triggers an AI response'),
   maxSilences: z.number().int().min(0).optional().describe('Maximum consecutive silence-triggered responses before ending conversation'),
   silencePlaceholder: z.string().optional().describe('Text sent as user input when silence is detected'),
+  minConfidence: z.number().min(0).max(1).optional().describe('Minimum mean recogniser confidence, 0..1, for a transcript to open a turn. Below it the audio is treated as room noise and the agent keeps listening. Omit to accept every transcript. Providers that report no confidence are always accepted.'),
+  maxConsecutiveUnintelligible: z.number().int().min(0).optional().describe('How many times in a row the agent may answer audio it could not make out before it stops re-prompting and just keeps listening. Defaults to 1.'),
   serverVad: serverVadConfigSchema.optional().describe('Server-side VAD configuration'),
 }).openapi('AsrConfigExchangeV1').optional().describe('ASR configuration with provider hint instead of provider UUID');
 

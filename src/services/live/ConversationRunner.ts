@@ -19,7 +19,8 @@ import type { IClientConnection } from '../../channels/IClientConnection';
 import type { CALUserTranscribedChunkMessage, CALAiTranscribedChunkMessage, CALStartAiGenerationOutputMessage, CALSendAiVoiceChunkMessage, CALEndAiGenerationOutputMessage, CALConversationEventMessage, CALConversationEventUpdateMessage, CALAbortAiGenerationOutputMessage,   CALUserSpeakingStartedMessage, CALAttachFileOutputMessage } from '../../channels/messages';
 import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../providers/llm/ILlmProvider";
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
-import { IAsrProvider } from "../providers/asr/IAsrProvider";
+import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
+import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
@@ -278,6 +279,15 @@ export class ConversationRunner {
   private bargeInPartialText: string | null = null;
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
+
+  /**
+   * How many turns in a row have been answered with an unintelligible placeholder.
+   *
+   * Reset by any transcript that actually said something. A caller in a noisy place otherwise
+   * puts the line in a loop: noise opens a turn, the agent says it did not catch that, the reply
+   * is itself covered by noise, and it asks again - forever, and never about anything.
+   */
+  private consecutiveUnintelligible = 0;
 
   /**
    * Monotonic counter of user-input turns, bumped once at the top of processUserInput.
@@ -780,25 +790,40 @@ export class ConversationRunner {
           const allTextChunks = asrProvider.getAllTextChunks();
           const fullText = allTextChunks.map(chunk => chunk.text).join(' ').trim();
 
+          // A transcript the recogniser is not sure of is the room, not the caller. A phone gives
+          // us one mixed stream - the caller's mouth is centimetres from the mic and everyone
+          // else is metres away - so nearby speech comes back confident and background speech
+          // comes back as confident-sounding fragments with low scores behind them. Dropping
+          // those here, before a turn exists, is the difference between a line that works in a
+          // waiting room and one that answers other people's conversations.
+          if (fullText && !this.isConfidentEnoughForATurn(allTextChunks)) {
+            this.isBargeIn = false;
+            this.bargeInPartialText = null;
+            return;
+          }
+
           if (this.isBargeIn && fullText) {
             this.bargeInPartialText = this.bargeInPartialText ? `${this.bargeInPartialText} ${fullText}`.trim() : fullText;
             logger.info({ conversationId }, `Barge-in: processing accumulated text`);
+            this.consecutiveUnintelligible = 0;
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
             return;
           }
 
           if (fullText) {
             logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
+            this.consecutiveUnintelligible = 0;
             await this.processUserInput(fullText, 'voice', asrEndMs);
           } else if (this.isBargeIn && this.bargeInPartialText) {
             logger.info({ conversationId }, `Barge-in: ASR timed out with silence, processing accumulated text`);
+            this.consecutiveUnintelligible = 0;
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
             logger.warn({ conversationId }, `No text recognized in VAD mode for conversation ${conversationId}, ignoring unintelligible audio`);
             await this.triggerBargeInSilenceResponse();
           } else {
             logger.warn({ conversationId }, `No text recognized for conversation ${conversationId}`);
-            await this.processUserInput(this.stageData.project.asrConfig.unintelligiblePlaceholder ?? '**inaudible**', 'voice', asrEndMs);
+            await this.answerUnintelligible(this.stageData.project.asrConfig.unintelligiblePlaceholder ?? '**inaudible**', asrEndMs);
           }
         });
 
@@ -2291,7 +2316,51 @@ export class ConversationRunner {
   private async triggerBargeInSilenceResponse(): Promise<void> {
     const placeholder = this.stageData.project.asrConfig?.serverVad?.bargeInSilencePlaceholder
       ?? '[unintelligible]';
-    await this.processUserInput(placeholder, 'voice');
+    await this.answerUnintelligible(placeholder);
+  }
+
+  /**
+   * Says "I didn't catch that" - but only while saying it is still worth anything.
+   *
+   * One re-prompt helps a caller who was cut off or spoke over the greeting. The second and the
+   * ones after it help nobody: if the reason the agent heard nothing usable is that the caller is
+   * somewhere loud, then asking again produces more of the same noise, and the line spends the
+   * whole call apologising instead of listening. Past the limit the agent stays quiet and keeps
+   * the microphone open, which is what a person would do.
+   */
+  private async answerUnintelligible(placeholder: string, asrEndMs?: number): Promise<void> {
+    const limit = this.stageData.project.asrConfig?.maxConsecutiveUnintelligible ?? 1;
+    if (this.consecutiveUnintelligible >= limit) {
+      logger.info({
+        conversationId: this.stageData.conversation.id,
+        consecutiveUnintelligible: this.consecutiveUnintelligible,
+        limit,
+      }, 'Heard nothing usable again - staying quiet and listening rather than asking a second time');
+      return;
+    }
+    this.consecutiveUnintelligible += 1;
+    await this.processUserInput(placeholder, 'voice', asrEndMs);
+  }
+
+  /**
+   * Whether a transcript is confident enough to be treated as the caller speaking to us.
+   *
+   * Undefined confidence means the provider does not report one, and that must read as "unknown",
+   * never as "low" - otherwise switching on a threshold would silence every provider in this
+   * directory except Transcribe. Only scores actually present are weighed.
+   */
+  private isConfidentEnoughForATurn(chunks: TextChunk[]): boolean {
+    const threshold = this.stageData.project.asrConfig?.minConfidence;
+    const { passes, meanConfidence } = assessTranscriptConfidence(chunks, threshold);
+    if (passes) return true;
+
+    logger.info({
+      conversationId: this.stageData.conversation.id,
+      meanConfidence: meanConfidence === undefined ? undefined : Number(meanConfidence.toFixed(3)),
+      threshold,
+      text: chunks.map((chunk) => chunk.text).join(' ').trim(),
+    }, 'Discarded a low-confidence transcript as background noise rather than opening a turn');
+    return false;
   }
 
   /** Clears the barge-in silence timer if active. */

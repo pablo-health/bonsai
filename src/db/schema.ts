@@ -93,6 +93,8 @@ asrConfig: jsonb('asr_config').$type<{
     silenceTimeoutMs?: number;
     maxSilences?: number;
     silencePlaceholder?: string;
+    minConfidence?: number;
+    maxConsecutiveUnintelligible?: number;
     serverVad?: {
       algorithm?: 'legacy' | 'silero' | 'firered';
       mode?: number;

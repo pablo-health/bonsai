@@ -107,6 +107,8 @@ export const asrConfigSchema = z.object({
   silenceTimeoutMs: z.number().int().min(0).optional().describe('Milliseconds of user silence in voice conversations before triggering an AI response. Set to 0 or omit to disable.'),
   maxSilences: z.number().int().min(0).optional().describe('Maximum number of consecutive silence responses before ending the conversation. Set to 0 or omit for unlimited.'),
   silencePlaceholder: z.string().nullable().optional().describe('Text fed to the AI as user input when silence is detected. The stage prompt can reference this text to generate an appropriate response.'),
+  minConfidence: z.number().min(0).max(1).optional().describe('Minimum mean recogniser confidence, 0..1, for a transcript to open a turn. Below it the audio is treated as room noise and the agent keeps listening. Omit to accept every transcript. Providers that report no confidence are always accepted.'),
+  maxConsecutiveUnintelligible: z.number().int().min(0).optional().describe('How many times in a row the agent may answer audio it could not make out before it stops re-prompting and just keeps listening. Defaults to 1.'),
   serverVad: serverVadConfigSchema.optional().describe('Server-side VAD configuration. When set, the server autonomously detects speech boundaries — clients send continuous audio without calling start/end_user_voice_input.'),
 }).openapi('AsrConfig').optional().describe('ASR configuration settings');
 

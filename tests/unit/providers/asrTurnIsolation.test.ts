@@ -3,6 +3,7 @@ import { describe, it } from 'mocha';
 import { expect } from 'chai';
 import {
   TranscribeAsrProvider,
+  meanItemConfidence,
   transcribeAsrProviderConfigSchema,
   transcribeAsrSettingsSchema,
 } from '../../../src/services/providers/asr/TranscribeAsrProvider';
@@ -60,5 +61,27 @@ describe('TranscribeAsrProvider turn isolation', () => {
     await provider.stop();
 
     await provider.cleanup();
+  });
+});
+
+/**
+ * Transcribe reports confidence per item and only on final results, so the value the noise gate
+ * weighs has to be built here. Punctuation carries a confidence of its own that says nothing
+ * about whether a word was heard, so it is excluded.
+ */
+describe('meanItemConfidence', () => {
+  it('averages the spoken words and ignores punctuation', () => {
+    const mean = meanItemConfidence([
+      { Type: 'pronunciation', Confidence: 0.9 },
+      { Type: 'pronunciation', Confidence: 0.7 },
+      { Type: 'punctuation', Confidence: 0.0 },
+    ]);
+    expect(mean).to.be.closeTo(0.8, 0.0001);
+  });
+
+  it('is undefined when nothing carries a score, so the gate reads it as unknown', () => {
+    expect(meanItemConfidence([{ Type: 'pronunciation' }])).to.equal(undefined);
+    expect(meanItemConfidence([])).to.equal(undefined);
+    expect(meanItemConfidence(undefined)).to.equal(undefined);
   });
 });

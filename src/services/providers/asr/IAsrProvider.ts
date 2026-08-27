@@ -19,6 +19,14 @@ export type TextChunk = {
   text: string;
   /** Timestamp when the text chunk was recognized */
   timestamp: Date;
+  /**
+   * Mean recogniser confidence for this chunk, 0..1, where the provider reports one.
+   *
+   * Optional because most providers here do not surface it. Absent means "unknown", NOT "bad" -
+   * anything gating on this must treat undefined as passing, or enabling a threshold would mute
+   * every provider that does not report.
+   */
+  confidence?: number;
 };
 
 /**

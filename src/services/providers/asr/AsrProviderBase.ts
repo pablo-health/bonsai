@@ -145,9 +145,11 @@ export abstract class AsrProviderBase<TConfig = Record<string, any>> implements 
    * Called by subclasses when final recognition results are available
    * @param chunkId Unique identifier for the text chunk
    * @param text The final recognized text
+   * @param confidence Mean recogniser confidence 0..1, where the provider reports one. Omit when
+   *   the provider does not: undefined reads as "unknown" downstream, never as "low".
    */
-  protected handleRecognized(chunkId: string, text: string): void {
-    const chunk: TextChunk = { chunkId, text, timestamp: new Date() };
+  protected handleRecognized(chunkId: string, text: string, confidence?: number): void {
+    const chunk: TextChunk = { chunkId, text, timestamp: new Date(), confidence };
     this.textChunks.push(chunk);
     if (this.onRecognizedCallback) {
       this.onRecognizedCallback(chunkId, text);
