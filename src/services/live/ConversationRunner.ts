@@ -21,6 +21,7 @@ import { ILlmProvider, LlmChunk, LlmGenerationResult, LlmMessage } from "../prov
 import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/llmUsage';
 import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
 import { assessTranscriptConfidence } from "./asrNoiseGate";
+import { callerFromUserId } from "./callerNumber";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
@@ -686,6 +687,10 @@ export class ConversationRunner {
         // callback number: there is no earlier caller turn for the echo exemption to match, so
         // the guard substitutes a refusal for the one sentence the call was about.
         this.voiceOutputGuard.noteScriptedDigits(stage?.prompt ?? '');
+        // The caller's own number, so the agent can offer it back instead of asking them to
+        // recite it. Note the RAW prompt above is what is scanned, so a `{{caller.*}}` template
+        // is still a template at that point and contributes no digits of its own.
+        this.voiceOutputGuard.noteCallerNumber(callerFromUserId(this.conversation.userId).number);
         stageData.ttsProvider = new GuardedTtsProvider(voiced, this.voiceOutputGuard);
       }
     }

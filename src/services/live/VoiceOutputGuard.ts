@@ -186,6 +186,34 @@ export class VoiceOutputGuard {
   }
 
   /**
+   * Records the caller's own number as the network reported it, and its last four digits.
+   *
+   * A number the network handed us is the caller's own just as surely as one they read out, and
+   * rather more reliably - so the same exemption applies. Without this the guard blocks the one
+   * sentence that makes asking for a number unnecessary: "can I use the number you're calling
+   * from, ending in 4201?" is four digits in a row, which is a digit run, which is refused.
+   *
+   * Both forms go in. The full number covers a prompt that reads the whole thing back; the last
+   * four covers what a line should normally say, since the caller already knows their own number
+   * and the rest of it is nobody's business on a speakerphone in a waiting room.
+   */
+  noteCallerNumber(e164: string | null | undefined): void {
+    const digits = (e164 ?? '').replace(/\D/g, '');
+    if (digits.length < 4) return;
+
+    this.callerDigits.add(digits);
+    this.callerDigits.add(digits.slice(-4));
+
+    // The national form too, because that is how the number gets said. E.164 carries the country
+    // code and an American reading their number aloud does not - "404-754-4201", not
+    // "1-404-754-4201" - so storing only the stored form blocks the agent from repeating the
+    // number in the one shape a caller would recognise.
+    if (digits.length === 11 && digits.startsWith('1')) {
+      this.callerDigits.add(digits.slice(1));
+    }
+  }
+
+  /**
    * Records digit runs the operator deliberately put in the agent's own prompt.
    *
    * The rule is "never say a number nobody gave you", and a number written into the script by the

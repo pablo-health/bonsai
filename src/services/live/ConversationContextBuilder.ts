@@ -1,4 +1,5 @@
 import { and, asc, eq, param } from "drizzle-orm";
+import { callerFromUserId, type CallerNumber } from './callerNumber';
 import type { ApiKeyChannel } from '../../apiKeyFeatures';
 import { conversationEvents, db, projects, stages, users } from "../../db";
 import { Session } from "../../channels/SessionManager";
@@ -100,6 +101,20 @@ export type ConversationContext = {
 
   /** ID of the user associated with this conversation */
   userId: string;
+
+  /**
+   * The caller's own telephone number, where the channel knows it.
+   *
+   * On a phone call the network hands us this before anyone speaks - the SIP gateway names the
+   * participant `sip_<e164>` and that becomes the conversation's user id - so a line that asks a
+   * caller to read their number out is asking for something it already has. In a quiet room that
+   * is merely redundant. In a noisy one it is the hardest thing in the whole call to get right,
+   * and on 2026-08-27 it took four failed attempts and ended the call.
+   *
+   * Null off the phone, and null when the caller withholds their number, so a prompt must always
+   * have a path for not having it.
+   */
+  caller: CallerNumber;
 
   /** Stage variables */
   vars: Record<string, any>;
@@ -521,6 +536,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       stageId: conversation.stageId,
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
@@ -585,6 +601,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -661,6 +678,7 @@ export class ConversationContextBuilder {
        conversationId: conversation.id,
        projectId: conversation.projectId,
        userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
        vars: conversation.stageVars[conversation.stageId] || {},
        stageVars: conversation.stageVars,
        userProfile: user?.profile || {},
@@ -728,6 +746,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -814,6 +833,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -896,6 +916,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -986,6 +1007,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: stageVars,
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -1065,6 +1087,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: user?.profile || {},
@@ -1126,6 +1149,7 @@ export class ConversationContextBuilder {
       conversationId: conversation.id,
       projectId: conversation.projectId,
       userId: conversation.userId,
+      caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       userProfile: userProfile || {}, // Not loaded in raw context

@@ -232,3 +232,40 @@ describe('VoiceOutputGuard phone number length', () => {
     expect(violations.map((v) => v.rule)).to.contain('phone-length');
   });
 });
+
+/**
+ * Offering the number back is the whole point of knowing it, and "ending in 4201" is a four-digit
+ * run - which the digits rule refuses unless the guard has been told the number is the caller's.
+ */
+describe('VoiceOutputGuard caller number from the network', () => {
+  it('lets the agent offer the last four back', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerNumber('+14047544201');
+    expect(guard.screen('Can I use the number you are calling from, ending in 4201?')).to.contain('4201');
+  });
+
+  it('lets the agent read the whole number back', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerNumber('+14047544201');
+    expect(guard.screen('That is 404-754-4201, is that right?')).to.contain('404-754-4201');
+  });
+
+  it('still refuses a number that is neither the caller.s nor scripted', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerNumber('+14047544201');
+    expect(guard.screen('You can reach the office on 404-555-0199.')).to.not.contain('0199');
+  });
+
+  it('does nothing when the caller withheld their number', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerNumber(null);
+    expect(guard.screen('Your number ends in 4201?')).to.not.contain('4201');
+  });
+
+  it('a known caller number satisfies the length check', () => {
+    const guard = new VoiceOutputGuard();
+    guard.noteCallerNumber('+14047544201');
+    guard.screen('And what is a good number to reach you on?');
+    expect(guard.screen('I have 404-754-4201 for you.')).to.contain('404-754-4201');
+  });
+});
