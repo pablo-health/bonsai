@@ -57,9 +57,39 @@ async function main(): Promise<void> {
   await provider.init();
   await provider.start();
 
-  for (let at = 0; at < audio.length; at += CHUNK_BYTES) {
-    await provider.sendAudio(audio.subarray(at, Math.min(at + CHUNK_BYTES, audio.length)));
-    await new Promise((r) => setTimeout(r, CHUNK_MS));
+  // Delivery shape is a variable, not a detail. Live audio arrives from LiveKit as small frames
+  // with network jitter; a replay that pushes big regular chunks is not reproducing the live
+  // conditions, it is giving the recogniser an easier problem. Transcribe segments on timing and
+  // commits partial hypotheses early, so this can change the transcript.
+  const frameMs = Number(arg('frame-ms') ?? CHUNK_MS);
+  const jitterMs = Number(arg('jitter-ms') ?? 0);
+  const gapEveryMs = Number(arg('gap-every-ms') ?? 0);
+  const gapMs = Number(arg('gap-ms') ?? 0);
+  const frameBytes = Math.max(2, Math.round((SAMPLE_RATE * BYTES_PER_SAMPLE * frameMs) / 1000) & ~1);
+
+  // Deterministic pseudo-jitter: a replay that varies run to run cannot be compared against
+  // itself, and Math.random would make every sweep a different experiment.
+  let seed = 12345;
+  const rand = (): number => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  let elapsedMs = 0;
+  let sinceGapMs = 0;
+  for (let at = 0; at < audio.length; at += frameBytes) {
+    await provider.sendAudio(audio.subarray(at, Math.min(at + frameBytes, audio.length)));
+
+    let waitMs = frameMs + (jitterMs ? (rand() * 2 - 1) * jitterMs : 0);
+    if (waitMs < 0) waitMs = 0;
+
+    sinceGapMs += frameMs;
+    if (gapEveryMs && gapMs && sinceGapMs >= gapEveryMs) {
+      // A starved queue, which is what a real gap looks like from the provider's side: it stops
+      // being fed, and past its keepalive interval it starts inserting silence of its own.
+      waitMs += gapMs;
+      sinceGapMs = 0;
+    }
+
+    elapsedMs += waitMs;
+    await new Promise((r) => setTimeout(r, waitMs));
   }
 
   await provider.stop();
@@ -72,6 +102,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     label,
     vocabulary: vocabulary ?? null,
+    frameMs, jitterMs, gapEveryMs, gapMs,
     seconds: Number((audio.length / (SAMPLE_RATE * BYTES_PER_SAMPLE)).toFixed(2)),
     heard: text,
     meanConfidence: mean === undefined ? null : Number(mean.toFixed(3)),
