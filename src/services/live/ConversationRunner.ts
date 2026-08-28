@@ -962,7 +962,17 @@ export class ConversationRunner {
           }
 
           if (fullText) {
-            logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
+            // The proximity verdict rides out with every turn that produced words, because the
+            // two noise mechanisms are supposed to cover for each other and the only way to know
+            // which one missed is to see both verdicts on the same turn. Measured on a concert
+            // replay: proximity called "room" three times, none of them on the turns that
+            // produced "It" or "Oh. OK It's Yeah that." out of crowd noise - so the widened
+            // confidence gate never got the chance to reject them, and the leak is bounded by
+            // proximity's accuracy rather than by the gate's.
+            logger.info(
+              { conversationId, text: fullText, farField: this.lastUtteranceWasFarField, chunkCount: allTextChunks.length },
+              'Turn produced text',
+            );
             this.consecutiveUnintelligible = 0;
             this.consecutiveEmptyTurns = 0;
             await this.processUserInput(fullText, 'voice', asrEndMs);
