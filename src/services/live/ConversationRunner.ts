@@ -266,6 +266,26 @@ export class ConversationRunner {
   private latestPartialText = '';
 
   /**
+   * Consecutive turns that opened, ran, and produced no recognised words at all.
+   *
+   * Measured on the concert recording in which the caller was silent: four of eight turns came
+   * back with zero finals, and each one made the agent say "I didn't quite catch that" to an empty
+   * room. Zero finals is the recogniser's own verdict that nothing was said - free, and needing no
+   * threshold that somebody has to tune.
+   */
+  private consecutiveEmptyTurns = 0;
+
+  /**
+   * How many empty turns pass in silence before the agent checks in anyway.
+   *
+   * There has to be a number. An agent that answers a room is bad; an agent that has quietly
+   * decided never to speak again is worse, and four separate bugs in this system were exactly
+   * that. At the ~19s per false turn measured in a concert queue this is about a minute of quiet
+   * before the caller hears anything, which is roughly how long a person would leave it.
+   */
+  private static readonly MAX_SILENT_EMPTY_TURNS = 3;
+
+  /**
    * The last "they are still talking" verdict, kept so the NEXT thing that happens can grade it.
    *
    * Every continuation is a prediction with an answer arriving within seconds: either the caller
@@ -903,12 +923,37 @@ export class ConversationRunner {
           if (fullText) {
             logger.debug({ conversationId, chunkCount: allTextChunks.length }, `ASR complete text for conversation ${conversationId}`);
             this.consecutiveUnintelligible = 0;
+            this.consecutiveEmptyTurns = 0;
             await this.processUserInput(fullText, 'voice', asrEndMs);
           } else if (this.isBargeIn && this.bargeInPartialText) {
             logger.info({ conversationId }, `Barge-in: ASR timed out with silence, processing accumulated text`);
             this.consecutiveUnintelligible = 0;
             await this.processUserInput(this.bargeInPartialText, 'voice', asrEndMs);
           } else if (this.isVadMode) {
+            // A TURN THAT PRODUCED NO WORDS IS THE ROOM, NOT THE CALLER, and answering it is worse
+            // than ignoring it.
+            //
+            // Measured by replaying a concert recording in which the caller said almost nothing:
+            // four of eight turns came back with zero finals, and each one produced "I didn't
+            // quite catch that" at an empty room. With the gate opening on 150ms of speech there
+            // are more of those than there used to be, and this is what keeps an eager gate free.
+            //
+            // Zero finals is the recogniser's own verdict rather than a threshold anyone tuned,
+            // and it is the reliable direction of that signal: noise can still be hallucinated
+            // INTO words - the same replay produced "OK" out of crowd noise twice - but words are
+            // not hallucinated out of nothing.
+            //
+            // BOUNDED, because an agent that has quietly decided never to speak again is worse
+            // than one that answers a room, and this system has produced that bug four times.
+            if (this.usesContinuousAsrStream && this.consecutiveEmptyTurns < ConversationRunner.MAX_SILENT_EMPTY_TURNS) {
+              this.consecutiveEmptyTurns += 1;
+              logger.info(
+                { conversationId, consecutiveEmptyTurns: this.consecutiveEmptyTurns },
+                'Turn produced no words at all - treating it as the room and staying quiet',
+              );
+              return;
+            }
+            this.consecutiveEmptyTurns = 0;
             logger.warn({ conversationId }, `No text recognized in VAD mode for conversation ${conversationId}, ignoring unintelligible audio`);
             await this.triggerBargeInSilenceResponse();
           } else {
