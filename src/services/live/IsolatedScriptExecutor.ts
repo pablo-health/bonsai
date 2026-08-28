@@ -72,6 +72,8 @@ export type ScriptExecutionResult = {
  * - `time` - Rich time context: iso, date, time, dayOfWeek, timezone, calendar, anchor, etc.
  * - `userInputSource` - Input channel: 'text' | 'voice' | null
  * - `stageVars` - Variables for all stages keyed by stage id
+ * - `intake` - Where the booking intake has got to: { complete, current, remaining, filled, deferred }.
+ *   Null unless the stage declares a slot sequence in its metadata.
  * - `channel` - Communication channel: 'websocket' | 'webrtc' | 'twilio_voice' | 'twilio_messaging' | 'whatsapp' | 'telegram' | 'testing'
  * - `project` - Project settings: { timezone, languageCode, language }
  *
@@ -166,6 +168,12 @@ export class IsolatedScriptExecutor {
       await jail.set('time', new ivm.ExternalCopy(context.time).copyInto());
       await jail.set('userInputSource', new ivm.ExternalCopy(context.userInputSource || null).copyInto());
       await jail.set('stageVars', new ivm.ExternalCopy(context.stageVars || null).copyInto());
+      // Injected so an action's `condition` can ask whether the intake is finished. That is what
+      // turns "do not end the call before you have a number" from an instruction the classifier
+      // may ignore into an action it is never offered - an action whose condition is false is not
+      // enumerated to the classifier at all, so it cannot be emitted and there is no guard to
+      // forget. Null on a stage that declares no slot sequence.
+      await jail.set('intake', new ivm.ExternalCopy(context.intake || null).copyInto());
       await jail.set('events', new ivm.ExternalCopy(context.events).copyInto());
       await jail.set('consts', new ivm.ExternalCopy(context.consts || null).copyInto());
       await jail.set('userId', new ivm.ExternalCopy(context.userId).copyInto());

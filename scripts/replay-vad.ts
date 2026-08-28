@@ -22,6 +22,7 @@
  */
 import { promises as fs } from 'fs';
 import { VadProcessor } from '../src/services/audio/VadProcessor';
+import { proximityFeatures } from '../src/services/audio/proximity';
 
 const SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
@@ -41,8 +42,14 @@ function num(name: string, fallback: number): number {
   return v === undefined ? fallback : Number(v);
 }
 
-/** A stretch of audio the VAD would have let through to the recogniser. */
-type Segment = { startMs: number; endMs: number; durationMs: number };
+/**
+ * A stretch of audio the VAD would have let through to the recogniser, with what its acoustics
+ * say about how far away the source was standing.
+ */
+type Segment = {
+  startMs: number; endMs: number; durationMs: number;
+  spectralTilt: number; modulationDepth: number; onsetSharpness: number; activeFrames: number;
+};
 
 async function main(): Promise<void> {
   const file = arg('file');
@@ -78,7 +85,18 @@ async function main(): Promise<void> {
   vad.on('end_of_utterance', () => {
     if (openedAtMs === null) return;
     const endMs = atMs();
-    segments.push({ startMs: openedAtMs, endMs, durationMs: endMs - openedAtMs });
+    // Measured from the file rather than from the VAD's own utterance buffer, so the window is
+    // exactly the stretch reported above and the two numbers cannot drift apart.
+    const bytesPerMs = (SAMPLE_RATE * BYTES_PER_SAMPLE) / 1000;
+    const slice = audio.subarray(Math.round(openedAtMs * bytesPerMs), Math.round(endMs * bytesPerMs));
+    const features = proximityFeatures(Buffer.from(slice), SAMPLE_RATE);
+    segments.push({
+      startMs: openedAtMs, endMs, durationMs: endMs - openedAtMs,
+      spectralTilt: Number(features.spectralTilt.toFixed(3)),
+      modulationDepth: Number(features.modulationDepth.toFixed(3)),
+      onsetSharpness: Number(features.onsetSharpness.toFixed(3)),
+      activeFrames: features.activeFrames,
+    });
     openedAtMs = null;
   });
 

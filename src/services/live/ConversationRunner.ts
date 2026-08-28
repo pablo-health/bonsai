@@ -24,6 +24,8 @@ import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
 import { decideCallEnding, endsWithAQuestion, CLOSING_QUESTION } from "./callEnding";
 import { AsrFeedTap } from "./AsrFeedTap";
+import { isNearField } from "../audio/proximity";
+import { parseIntakeDefinition, intakeState, turnLooksComplete } from "./intakeSequence";
 import { sanitiseFiller } from "./fillerSanity";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
@@ -843,6 +845,8 @@ export class ConversationRunner {
           await this.channel.sendMessage(message);
           this.clearBargeInSilenceTimer();
           chunkOrdinal = 0;
+
+          await this.endTurnIfTheAnswerIsAlreadyComplete();
         });
 
         asrProvider.setOnRecognitionStopped(async () => {
@@ -2337,6 +2341,8 @@ export class ConversationRunner {
     if (this.conversation.status === 'awaiting_user_input') {
       logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in awaiting_user_input state');
       if (this.waitingForPlaybackEnd) { // 1a
+        // The agent's audio is still playing out, so this is an interruption and has to earn it.
+        if (!this.bargeInIsTheCaller()) return;
         // send abort_ai_generation_output && user_speaking_started
         await this.sendAbortAiGeneration();
         await this.sendUserSpeakingStarted();
@@ -2366,6 +2372,9 @@ export class ConversationRunner {
     // Scenario 3: VAD reacted when generating_response: barge-in interrupt during AI response generation.
     if (this.conversation.status === 'generating_response') {
       logger.info({ status: this.conversation.status }, '**VAD** Handling VAD speech start in generating_response state: barge-in interrupt');
+      // Cutting the agent off mid-sentence is the expensive direction, so the room does not get to
+      // do it. See bargeInIsTheCaller().
+      if (!this.bargeInIsTheCaller()) return;
       // abort TTS completely
       await this.abortCurrentResponse();
       // send abort_ai_generation_output && user_speaking_started
@@ -2431,6 +2440,93 @@ export class ConversationRunner {
       } catch (error) {
         logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to stop pre-warmed ASR during barge-in end-of-utterance (non-fatal)`);
       }
+    }
+  }
+
+
+
+  /**
+   * Ends the turn the moment the answer we asked for is provably in hand.
+   *
+   * ENDPOINTING WITHOUT SILENCE, which is the point. `minSilenceFrame: 80` makes 800ms of silence
+   * the primary signal that a caller has finished, and in a noisy room that signal DOES NOT EXIST -
+   * the probability may never fall below threshold for 800ms, so the primary turn-ending cue is one
+   * the environment can withhold indefinitely. Humans do not wait for silence either: gaps average
+   * around 200ms, far too short to be a reaction, so listeners PROJECT completion from what was
+   * said and use silence only as late confirmation.
+   *
+   * "I asked for ten digits and I am holding ten digits" needs no silence, no speaker identity and
+   * no acoustic quality. It is the same judgement in a concert queue as in a hotel room.
+   *
+   * AN ACCELERATOR, NEVER A GATE. This can only end a turn SOONER. It has no path that holds one
+   * open, no path that suppresses a response, and where the answer is not exactly expressible -
+   * a yes, a free-text reply - `turnLooksComplete` returns null and the acoustic and temporal
+   * signals stay in charge, exactly as they are today. A missed "I guess so" therefore costs
+   * nothing worse than the status quo, which matters more than usual here: four separate bugs in
+   * this system were a suppression path with no exit, and a completeness check that could block
+   * would be the fifth.
+   */
+  private async endTurnIfTheAnswerIsAlreadyComplete(): Promise<void> {
+    if (this.conversation.status !== 'receiving_user_voice') return;
+
+    const definition = parseIntakeDefinition(this.stageData.stage?.metadata);
+    if (!definition) return;
+
+    const vars = this.conversation.stageVars[this.conversation.stageId] || {};
+    const current = intakeState(definition, vars).current;
+    if (!current) return;
+
+    const heard = (this.stageData.asrProvider?.getAllTextChunks() ?? [])
+      .map((chunk) => chunk.text).join(' ').trim();
+    if (turnLooksComplete(current.kind, heard) !== true) return;
+
+    logger.info(
+      { conversationId: this.stageData.conversation.id, slot: current.name, kind: current.kind },
+      `Turn ends on a complete answer rather than on silence: ${current.kind} satisfied`,
+    );
+    try {
+      // Same exit handleVadEndOfUtterance uses: stop() signals EOF, the provider finalises, and
+      // setOnRecognitionStopped drives processUserInput onward.
+      await this.stageData.asrProvider?.stop();
+    } catch (error) {
+      // Failing to end early is not a failure - the silence path still ends the turn.
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Could not end the turn early on a complete answer (non-fatal)');
+    }
+  }
+
+  /**
+   * Whether the speech that just triggered the VAD sounds like the person holding the phone.
+   *
+   * ONLY EVER CONSULTED ON THE BARGE-IN PATH, and the asymmetry is the entire point. The VAD does
+   * two jobs with one threshold - "should I start listening?" and "should I stop the agent
+   * mid-sentence?" - and their costs are opposite. A false open while the agent is silent costs a
+   * turn that yields no transcript. A false open while the agent is SPEAKING costs the caller the
+   * sentence, and it happens before any transcript exists, so the confidence gate that would have
+   * rejected the room runs far too late to prevent the interruption.
+   *
+   * Measured against the corpus at the threshold in `proximity.ts`: no caller utterance in fifteen
+   * was misread as the room, and six of seven room-only openings were caught. Unknown - too short
+   * or too quiet to judge - counts as the caller, because the direction that must never fail is
+   * the one where a caller goes unanswered.
+   */
+  private bargeInIsTheCaller(): boolean {
+    if (!this.vadProcessor) return true;
+    try {
+      const audio = this.vadProcessor.getBufferedAudio();
+      const asrFormat = this.stageData.asrProvider?.getSupportedInputFormats()[0] as AudioFormat | undefined;
+      const sampleRate = asrFormat ? VadProcessor.getSampleRateFromFormat(asrFormat) : null;
+      if (!sampleRate || audio.length === 0) return true;
+
+      const near = isNearField(audio, sampleRate);
+      if (near === false) {
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Barge-in looks like the room rather than the caller; not interrupting the agent');
+      }
+      return near !== false;
+    } catch (error) {
+      // A detector that throws must not be able to silence the line. Anything unexpected here
+      // reads as "the caller", which is exactly today's behaviour.
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Proximity check failed; treating barge-in as the caller');
+      return true;
     }
   }
 
