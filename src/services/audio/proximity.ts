@@ -98,6 +98,16 @@ export type ProximityFeatures = {
   activeFrames: number;
 };
 
+/** Float32 samples in [-1, 1] to 16-bit signed little-endian PCM. */
+function float32ToPcm16(samples: Float32Array): Buffer {
+  const buffer = Buffer.allocUnsafe(samples.length * 2);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    buffer.writeInt16LE(Math.round(s * 32767), i * 2);
+  }
+  return buffer;
+}
+
 /** In-place real FFT, decimation in time. `data` is interleaved re/im, length 2n. */
 function fft(data: Float64Array, n: number): void {
   for (let i = 1, j = 0; i < n; i++) {
@@ -146,7 +156,11 @@ function bandEnergy(power: Float64Array, sampleRate: number, fromHz: number, toH
  * @param sampleRate - Sample rate of `pcm`.
  * @returns The three features, plus how much of the segment was loud enough to measure.
  */
-export function proximityFeatures(pcm: Buffer, sampleRate = 16000): ProximityFeatures {
+export function proximityFeatures(audio: Buffer | Float32Array, sampleRate = 16000): ProximityFeatures {
+  // Accepts both shapes the runtime actually holds: the VAD hands out utterances as Float32Array
+  // and everything else moves 16-bit PCM. Converting at the boundary keeps every caller from
+  // writing the same eight lines.
+  const pcm = audio instanceof Float32Array ? float32ToPcm16(audio) : audio;
   const frameSamples = Math.round((sampleRate * FRAME_MS) / 1000);
   const frameCount = Math.floor(pcm.length / 2 / frameSamples);
   if (frameCount < 4) {
@@ -260,8 +274,8 @@ export const NEAR_FIELD_TILT_THRESHOLD = -0.75;
  * @returns Null when the segment is too short or too quiet to judge - which must be read as
  *   "unknown", never as "the room".
  */
-export function isNearField(pcm: Buffer, sampleRate = 16000): boolean | null {
-  const features = proximityFeatures(pcm, sampleRate);
+export function isNearField(audio: Buffer | Float32Array, sampleRate = 16000): boolean | null {
+  const features = proximityFeatures(audio, sampleRate);
   // Below about 20 active frames the tilt is computed from a couple of hundred milliseconds of
   // voiced audio and is not stable. Saying so is better than guessing.
   if (features.activeFrames < 8) return null;

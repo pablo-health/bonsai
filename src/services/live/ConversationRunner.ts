@@ -2409,11 +2409,33 @@ export class ConversationRunner {
     if (this.conversation.status === 'receiving_user_voice') {
       if (!this.stageData.asrProvider) return;
 
+      // THE ENDPOINTING HIERARCHY, in the order it is consulted. Each tier can only end a turn
+      // SOONER than the one below it; none of them can hold a turn open that the next would have
+      // closed, which is what keeps this from becoming a fifth suppression path with no exit.
+      //
+      //   1. DETERMINISTIC - "I asked for ten digits and I am holding ten digits." Runs in
+      //      setOnRecognized, so a satisfied slot never reaches here at all. Needs no silence, no
+      //      speaker identity and no acoustic quality: the same judgement in a concert queue as in
+      //      a hotel room. See endTurnIfTheAnswerIsAlreadyComplete().
+      //
+      //   2. ACOUSTIC, near versus far - immediately below. Smart Turn's job is to decide whether
+      //      the caller is pausing mid-thought and the turn should stay open. If the utterance was
+      //      the ROOM rather than the caller, there is nobody mid-thought to wait for, and holding
+      //      the turn open is how a turn hangs in a concert queue. So proximity is allowed to skip
+      //      the deferral - and nothing else. It cannot extend a turn and it cannot discard one.
+      //
+      //   3. TEMPORAL - Smart Turn and the silence timer, exactly as before. This is what carries
+      //      the entire decision today, and in a loud room the silence it waits for may never
+      //      arrive, which is why the two tiers above it exist.
       const smartTurnConfig = this.stageData.project.asrConfig?.serverVad?.smartTurn;
       if (smartTurnConfig?.enabled && this.smartTurnAudioBuffer) {
-        const shouldStop = await this.handleSmartTurnDetection(smartTurnConfig.threshold ?? 0.5);
-        if (!shouldStop) {
-          return;
+        if (this.utteranceWasTheRoom()) {
+          this.smartTurnAudioBuffer = null;
+        } else {
+          const shouldStop = await this.handleSmartTurnDetection(smartTurnConfig.threshold ?? 0.5);
+          if (!shouldStop) {
+            return;
+          }
         }
       }
 
@@ -2444,6 +2466,38 @@ export class ConversationRunner {
   }
 
 
+
+
+  /**
+   * Whether the utterance that just ended came from the room rather than from the caller.
+   *
+   * Used at exactly one decision - whether to let Smart Turn hold the turn open - and deliberately
+   * nowhere else. Waiting for somebody to finish a thought is only sensible if somebody is
+   * thinking; a crowd surge has no continuation to wait for, and with the gate opening on 150ms of
+   * speech there are more of those than there used to be. Skipping the deferral is the only thing
+   * this is allowed to do: the turn still ends the way it always did, just without the wait.
+   *
+   * Unknown - too short or too quiet to judge - counts as the caller, so an unmeasurable utterance
+   * gets exactly today's behaviour.
+   */
+  private utteranceWasTheRoom(): boolean {
+    const audio = this.smartTurnAudioBuffer;
+    if (!audio || audio.length === 0) return false;
+    try {
+      const asrFormat = this.stageData.asrProvider?.getSupportedInputFormats()[0] as AudioFormat | undefined;
+      const sampleRate = asrFormat ? VadProcessor.getSampleRateFromFormat(asrFormat) : null;
+      if (!sampleRate) return false;
+
+      const near = isNearField(audio, sampleRate);
+      if (near === false) {
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Utterance sounds like the room; not waiting on Smart Turn for a continuation that is not coming');
+      }
+      return near === false;
+    } catch (error) {
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Proximity check failed at end-of-utterance; treating it as the caller');
+      return false;
+    }
+  }
 
   /**
    * Ends the turn the moment the answer we asked for is provably in hand.
