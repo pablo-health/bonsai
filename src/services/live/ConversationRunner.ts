@@ -22,7 +22,7 @@ import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/ll
 import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
 import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
-import { decideCallEnding, CLOSING_QUESTION } from "./callEnding";
+import { decideCallEnding, endsWithAQuestion, CLOSING_QUESTION } from "./callEnding";
 import { AsrFeedTap } from "./AsrFeedTap";
 import { sanitiseFiller } from "./fillerSanity";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
@@ -283,6 +283,14 @@ export class ConversationRunner {
   private bargeInPartialText: string | null = null;
   /** The caller's most recent transcript, after the agent's own speech has been filtered out. */
   private lastUserUtterance: string | null = null;
+
+  /**
+   * The agent's most recent complete utterance.
+   *
+   * Kept so the end-of-call decision can tell whether the caller was answering a question rather
+   * than leaving - which is a fact about what the agent said, not a judgement about the caller.
+   */
+  private lastAgentUtterance: string | null = null;
 
   /**
    * True once the agent has asked whether there is anything else, and is waiting for the answer.
@@ -1109,6 +1117,7 @@ export class ConversationRunner {
       completionLlmProvider.setOnGenerationCompleted(async (result) => {
         const textContent = extractTextFromContent(result.content);
         const fullResponseText = joinFillerToReply(this.spokenBeforeReply(), textContent);
+        this.lastAgentUtterance = fullResponseText;
         const contentSize = getContentSize(result.content);
         const llmEndMs = Date.now();
 
@@ -2098,7 +2107,24 @@ export class ConversationRunner {
     }
 
     if (outcome.shouldEndConversation) {
-      if (decideCallEnding(this.lastUserUtterance, this.endConfirmationAsked) === 'confirm-first') {
+      const ending = decideCallEnding(
+        this.lastUserUtterance,
+        this.endConfirmationAsked,
+        endsWithAQuestion(this.lastAgentUtterance),
+      );
+
+      if (ending === 'ignore') {
+        // The caller was answering something the agent asked. Carry on with the intake rather
+        // than either hanging up or derailing it with "is there anything else?".
+        logger.info({
+          conversationId,
+          lastAgentUtterance: this.lastAgentUtterance?.slice(-120),
+          lastUserUtterance: this.lastUserUtterance,
+        }, 'Asked to end the call while the caller was answering a question - ignoring');
+        return true;
+      }
+
+      if (ending === 'confirm-first') {
         // Not a goodbye, and nobody has been asked. On 2026-08-27 a single misheard sentence -
         // "I got the fucking apartment." - was classified as the caller being finished and the
         // call was ended on them, having taken nothing and given nothing. So ask, and let the

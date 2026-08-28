@@ -35,10 +35,50 @@ const EXPLICIT_FAREWELL =
 export function decideCallEnding(
   lastUserUtterance: string | null | undefined,
   alreadyAsked: boolean,
-): 'end' | 'confirm-first' {
-  if (alreadyAsked) return 'end';
+  agentAskedAQuestion = false,
+): 'end' | 'confirm-first' | 'ignore' {
+  // A plain goodbye ends the call from anywhere. Making somebody say it twice is its own insult,
+  // and it is unambiguous enough to trust.
   if (EXPLICIT_FAREWELL.test(lastUserUtterance ?? '')) return 'end';
+
+  // The caller is ANSWERING A QUESTION. They cannot also be leaving.
+  //
+  // This is the case that keeps happening, and it needs no knowledge of what the intake requires:
+  // on 2026-08-28 the agent asked "how do you spell Mimi?", the caller said "N I E M I.", and the
+  // classifier returned caller_finished. Twice, in two consecutive calls. A reply to a question
+  // the agent itself just asked is the middle of an exchange by construction, whatever a
+  // classifier makes of its content.
+  //
+  // Ignored outright rather than confirmed, because asking "is there anything else?" in the middle
+  // of taking somebody's name derails the booking just as thoroughly as hanging up would - it is
+  // simply less rude about it. The agent should carry on with what it was doing.
+  // Checked BEFORE the question rule, and the order is load-bearing. The closing question is
+  // itself a question, so a caller answering it would otherwise be read as mid-exchange forever
+  // and the call could never end - a suppression path with no exit, which is the same mistake
+  // this file was written to correct.
+  if (alreadyAsked) return 'end';
+
+  if (agentAskedAQuestion) return 'ignore';
+
   return 'confirm-first';
+}
+
+/**
+ * Whether the agent's own last utterance put a question to the caller.
+ *
+ * Read off the agent's speech rather than any model's opinion of it. A question mark is the
+ * signal; the trailing-fragment allowance exists because a turn often ends with a short aside
+ * after the question - "Can I get your first and last name? Take your time."
+ */
+export function endsWithAQuestion(agentUtterance: string | null | undefined): boolean {
+  const text = (agentUtterance ?? '').trim();
+  if (!text) return false;
+  const tail = text.slice(-160);
+  if (!tail.includes('?')) return false;
+  // Nothing but a short aside may follow the question mark, or this was a question earlier in a
+  // turn that has since moved on to something else.
+  const after = tail.slice(tail.lastIndexOf('?') + 1).trim();
+  return after.split(/\s+/).filter(Boolean).length <= 8;
 }
 
 /** Asked before hanging up on a caller who has not actually said goodbye. */
