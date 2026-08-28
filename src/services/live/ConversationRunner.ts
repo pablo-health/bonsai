@@ -276,6 +276,16 @@ export class ConversationRunner {
   private consecutiveEmptyTurns = 0;
 
   /**
+   * What the proximity detector made of the utterance that just ended: true for the room, false
+   * for the caller, null for "not enough to judge".
+   *
+   * Computed at end-of-utterance because that is the only moment the VAD's utterance buffer still
+   * exists - Smart Turn consumes it - and read later, when the transcript arrives and the decision
+   * about whether to believe it is actually made.
+   */
+  private lastUtteranceWasFarField: boolean | null = null;
+
+  /**
    * How many empty turns pass in silence before the agent checks in anyway.
    *
    * There has to be a number. An agent that answers a room is bad; an agent that has quietly
@@ -902,7 +912,38 @@ export class ConversationRunner {
           // dropped, and the caller got silence.
           //
           // So the gate belongs to barge-in, where the noise does its damage, and nowhere else.
-          if (fullText && this.isBargeIn && !this.isConfidentEnoughForATurn(allTextChunks)) {
+          //
+          // WIDENED, and only where the widening is safe. The paragraph above is still exactly
+          // right about an AWAITED answer: rejecting a name because it scored 0.515 is aiming the
+          // rejection at the one input least able to afford it. But it assumed only two cases,
+          // barge-in and everything else, and there is now a third - a turn whose audio the
+          // proximity detector says came from the ROOM rather than from the caller.
+          //
+          // There, a low-confidence transcript is not a caller being misheard; it is crowd noise
+          // arriving as words. Replaying a concert recording where the caller was silent produced
+          // "OK" twice, "It" once and "Oh. OK It's Yeah that." once, all as ordinary finals with
+          // nothing to distinguish them from speech. Discarding empty turns does not catch these,
+          // because something genuinely was recognised.
+          //
+          // Far-field ONLY. Near-field and unknown both keep today's behaviour, so the case the
+          // original comment protects - the caller answering a question - is untouched, and a
+          // detector that has no opinion cannot cost anyone their turn.
+          const soundedLikeTheRoom = this.lastUtteranceWasFarField === true;
+          if (fullText && (this.isBargeIn || soundedLikeTheRoom) && !this.isConfidentEnoughForATurn(allTextChunks)) {
+            if (soundedLikeTheRoom && !this.isBargeIn) {
+              // Counted against the same bound as an empty turn: whether the room produced no
+              // words or unconvincing ones, three in a row and the agent checks in anyway.
+              this.consecutiveEmptyTurns += 1;
+              logger.info(
+                { conversationId, text: fullText, consecutiveEmptyTurns: this.consecutiveEmptyTurns },
+                'Far-field audio recognised as low-confidence words - treating it as the room',
+              );
+              if (this.consecutiveEmptyTurns >= ConversationRunner.MAX_SILENT_EMPTY_TURNS) {
+                this.consecutiveEmptyTurns = 0;
+                await this.triggerBargeInSilenceResponse();
+                return;
+              }
+            }
             this.isBargeIn = false;
             this.bargeInPartialText = null;
             // Never hand back dead air. Dropping the transcript ends the turn without a reply, so
@@ -2455,6 +2496,11 @@ export class ConversationRunner {
     if (this.conversation.status === 'receiving_user_voice') {
       if (!this.stageData.asrProvider) return;
 
+      // Judged here and nowhere else: Smart Turn consumes the utterance buffer below, so this is
+      // the last moment the audio exists to be measured. The verdict is read again when the
+      // transcript arrives.
+      this.assessUtteranceProximity();
+
       // THE ENDPOINTING HIERARCHY, in the order it is consulted. Each tier can only end a turn
       // SOONER than the one below it; none of them can hold a turn open that the next would have
       // closed, which is what keeps this from becoming a fifth suppression path with no exit.
@@ -2527,21 +2573,32 @@ export class ConversationRunner {
    * gets exactly today's behaviour.
    */
   private utteranceWasTheRoom(): boolean {
+    return this.lastUtteranceWasFarField === true;
+  }
+
+  /**
+   * Judges how far away the source of the utterance that just ended was, and remembers it.
+   *
+   * Runs once per turn, at the only point the audio is still available. Anything unexpected reads
+   * as the caller: a detector that throws must not be able to silence the line.
+   */
+  private assessUtteranceProximity(): void {
+    this.lastUtteranceWasFarField = null;
     const audio = this.smartTurnAudioBuffer;
-    if (!audio || audio.length === 0) return false;
+    if (!audio || audio.length === 0) return;
     try {
       const asrFormat = this.stageData.asrProvider?.getSupportedInputFormats()[0] as AudioFormat | undefined;
       const sampleRate = asrFormat ? VadProcessor.getSampleRateFromFormat(asrFormat) : null;
-      if (!sampleRate) return false;
+      if (!sampleRate) return;
 
       const near = isNearField(audio, sampleRate);
+      this.lastUtteranceWasFarField = near === null ? null : !near;
       if (near === false) {
-        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Utterance sounds like the room; not waiting on Smart Turn for a continuation that is not coming');
+        logger.info({ conversationId: this.stageData.conversation.id }, '**VAD** Utterance sounds like the room rather than the caller');
       }
-      return near === false;
     } catch (error) {
-      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Proximity check failed at end-of-utterance; treating it as the caller');
-      return false;
+      logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Proximity check failed; treating the utterance as the caller');
+      this.lastUtteranceWasFarField = null;
     }
   }
 
