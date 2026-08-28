@@ -125,10 +125,23 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   private static readonly FINALIZE_TIMEOUT_MS = 800;
 
   /**
+   * How long a continuous-mode turn waits for an outstanding final before falling back to the
+   * partial it already has.
+   *
+   * Shorter than FINALIZE_TIMEOUT_MS because it is a different wait: that one followed an EOF and
+   * had to cover a whole stream draining, this one is the tail of a segment on a stream that is
+   * still running, and our VAD has already spent 800ms of silence getting here.
+   */
+  private static readonly FINAL_WAIT_MS = 500;
+
+  /**
    * Optional recorder of what this provider actually feeds Transcribe. Off unless set, and when
    * set it may only push and count - see the contract on AsrFeedTap.
    */
   private tap: AsrFeedTap | null = null;
+
+  /** Resolved by consume() the moment a final arrives, so a turn can wait for one. */
+  private finalArrived: (() => void) | null = null;
 
   setFeedTap(tap: AsrFeedTap | null): void { this.tap = tap; }
 
@@ -284,50 +297,60 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    * promoted exactly as before. Our VAD needs 800ms of silence to call the turn over, by which
    * point Transcribe has almost always finalised on its own.
    */
-  private stopTurn(): void {
+  private async stopTurn(): Promise<void> {
     this.tap?.mark('turn-end');
 
-    // PROMOTE ONLY AS A LAST RESORT - when the turn would otherwise be empty.
+    // WAIT FOR THE FINAL. It is going to arrive: on a stream that never closes, Transcribe
+    // finalises the segment on its own schedule whether or not we are still listening. A partial
+    // is a latency affordance, not the truth, and taking one when the truth is seconds away is how
+    // the same words ended up in two turns at once.
     //
-    // Measured over six turns of a replay on 2026-08-28: four ended cleanly on finals with
-    // nothing outstanding, one ended with a final AND an unfinalised partial, and one ended with
-    // ONLY an unfinalised partial and no final at all.
+    // The wait is rarely paid. Measured over six turns of a replay, four had already finalised by
+    // the time the turn ended - unsurprising, since our VAD needs 800ms of silence before it calls
+    // a turn over, and that is a long time for a recogniser.
     //
-    // That last case is why "just take the finals" is not the answer. Dropping the promotion
-    // outright would have left that turn empty, and an empty turn is the agent telling a caller
-    // who was plainly speaking that it did not catch them - the failure this whole area exists to
-    // remove. Silence must never be a terminal state.
-    //
-    // The middle case is the one that duplicates: the turn already had its words from a final, and
-    // promoting the partial on top added a second copy that Transcribe then finalised again into
-    // the NEXT turn. So promote only when there is nothing else - which keeps the safety net and
-    // removes the duplication in the common case.
-    //
-    // The residue is a turn that has one final and a long unfinalised tail: the tail is lost here
-    // and its final still lands in the next turn. That is what timestamp attribution fixes, and
-    // it is the whole of what THERAPY-b5xwm.40 has left to do.
-    if (this.textChunks.length === 0 && this.lastPartial.trim()) {
-      // Instrumented rather than assumed. Promoting an unfinalised partial is the source of the
-      // cross-turn duplication in THERAPY-b5xwm.40: the real final for the same audio arrives a
-      // moment later and lands at the head of the NEXT turn, so the words appear twice. Dropping
-      // the promotion would delete that outright and trade it for truncation - the tail of an
-      // utterance simply missing. Which is worse depends on how often Transcribe is still
-      // uncommitted once our VAD has seen 800ms of silence, and that is a measurement, so it is
-      // logged here and taken off a replay rather than argued about.
+    // THE DEADLINE IS NOT OPTIONAL, and it is the whole reason a partial is still kept. A final
+    // that never comes - a stream error, or a segment Transcribe decides was not speech - would
+    // hang the turn forever and the agent would simply never speak. Four separate bugs in this
+    // system were a suppression path with no exit, and an unbounded wait here would be the fifth.
+    // So: prefer the final, fall back to the partial, and never wait indefinitely for either.
+    if (this.lastPartial.trim()) {
+      await this.waitForFinal();
+    }
+
+    if (this.lastPartial.trim()) {
       logger.info(
-        { promotedPartial: this.lastPartial.trim(), finalsThisTurn: this.textChunks.length },
-        '[ASR] Turn would have been empty; promoting the unfinalised partial',
+        { fellBackToPartial: this.lastPartial.trim(), finalsThisTurn: this.textChunks.length },
+        `[ASR] No final within ${TranscribeAsrProvider.FINAL_WAIT_MS}ms; using the partial`,
       );
       this.handleRecognized(this.currentChunkId, this.lastPartial.trim());
       this.lastPartial = '';
     } else {
-      logger.info(
-        { finalsThisTurn: this.textChunks.length, discardedPartial: this.lastPartial.trim() || undefined },
-        '[ASR] Turn ended on finals',
-      );
-      this.lastPartial = '';
+      logger.info({ finalsThisTurn: this.textChunks.length }, '[ASR] Turn ended on finals');
     }
+
     this.handleRecognitionStopped();
+  }
+
+  /**
+   * Waits for the next final, or for the deadline, whichever comes first.
+   *
+   * Cheaper than it looks: the waiter is only armed while something is genuinely outstanding, and
+   * it is resolved by the consume loop rather than polled.
+   */
+  private waitForFinal(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        this.finalArrived = null;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, TranscribeAsrProvider.FINAL_WAIT_MS);
+      this.finalArrived = finish;
+    });
   }
 
   /**
@@ -342,7 +365,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     // In continuous mode the call owns the stream, so ending a turn must not end it. cleanup()
     // is the only thing that closes it.
     if (this.settings.continuousStream) {
-      this.stopTurn();
+      await this.stopTurn();
       return;
     }
 
@@ -500,6 +523,8 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
             this.lastPartial = '';
             this.handleRecognized(this.currentChunkId, text, meanItemConfidence(result.Alternatives?.[0]?.Items));
             this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
+            // Releases a turn that is holding on for exactly this.
+            this.finalArrived?.();
           }
         }
       }

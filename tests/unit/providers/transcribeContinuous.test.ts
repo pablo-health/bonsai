@@ -68,40 +68,63 @@ describe('TranscribeAsrProvider continuous stream', () => {
       expect(provider.getAllTextChunks()).to.have.length(0);
     });
 
-    it('promotes an unfinalised partial ONLY when the turn would otherwise be empty', async () => {
-      // Measured over six turns of a replay: four ended cleanly on finals, one ended with a final
-      // AND a partial, one ended with ONLY a partial. Promoting unconditionally duplicated the
-      // middle case into the next turn; never promoting would have left the last case empty, and
-      // an empty turn is the agent telling a caller who was speaking that it did not catch them.
+    it('WAITS for an outstanding final rather than taking the partial', async () => {
+      // A partial is a latency affordance, not the truth. On a stream that never closes the final
+      // is coming whether or not we are still listening, and taking a guess when the truth is
+      // moments away is how the same words ended up in two turns at once.
       const provider = makeProvider(true);
-      const asInternals = provider as unknown as { lastPartial: string; handleRecognized(id: string, t: string): void };
+      const asInternals = provider as unknown as {
+        lastPartial: string;
+        handleRecognized(id: string, t: string): void;
+        finalArrived: (() => void) | null;
+      };
 
-      // A turn that already has words: the partial is dropped rather than added on top.
       await provider.start();
-      asInternals.handleRecognized('chunk_1', 'my name is Kurt');
-      asInternals.lastPartial = 'my name is Kurt';
-      await provider.stop();
-      expect(provider.getAllTextChunks().map(c => c.text)).to.deep.equal(['my name is Kurt']);
+      asInternals.lastPartial = "it's Kur";
 
-      // A turn with nothing else: the partial is the only record of what was said, so it is kept.
-      await provider.start();
-      asInternals.lastPartial = "it's Kurt";
-      await provider.stop();
-      expect(provider.getAllTextChunks().map(c => c.text)).to.deep.equal(["it's Kurt"]);
+      const stopped = provider.stop();
+      // The final lands while the turn is holding on for it, which is the ordinary case.
+      await new Promise((r) => setTimeout(r, 10));
+      asInternals.lastPartial = '';
+      asInternals.handleRecognized('chunk_final', "it's Kurt");
+      asInternals.finalArrived?.();
+      await stopped;
+
+      expect(provider.getAllTextChunks().map((c) => c.text)).to.deep.equal(["it's Kurt"]);
     });
 
-    it('does not carry a discarded partial into the next turn', async () => {
+    it('falls back to the partial when no final arrives, rather than hanging the turn', async () => {
+      // THE DEADLINE IS THE POINT. A final that never comes - a stream error, or a segment
+      // Transcribe decides was not speech - must not hold the turn open forever, because an agent
+      // that never speaks is indistinguishable from a dropped call. Four bugs in this system have
+      // been a suppression path with no exit; an unbounded wait here would be the fifth.
       const provider = makeProvider(true);
-      const asInternals = provider as unknown as { lastPartial: string; handleRecognized(id: string, t: string): void };
+      const asInternals = provider as unknown as { lastPartial: string };
+
+      await provider.start();
+      asInternals.lastPartial = "it's Kurt";
+
+      const startedAt = Date.now();
+      await provider.stop();
+
+      expect(provider.getAllTextChunks().map((c) => c.text)).to.deep.equal(["it's Kurt"]);
+      expect(Date.now() - startedAt).to.be.greaterThan(100);
+    });
+
+    it('does not wait at all when the turn already has its final', async () => {
+      // Four of six turns in the replay were already finalised when the turn ended, because the
+      // VAD spends 800ms of silence getting there. Those must not pay a millisecond.
+      const provider = makeProvider(true);
+      const asInternals = provider as unknown as { handleRecognized(id: string, t: string): void };
 
       await provider.start();
       asInternals.handleRecognized('chunk_1', 'my name is Kurt');
-      asInternals.lastPartial = 'stale';
+
+      const startedAt = Date.now();
       await provider.stop();
 
-      await provider.start();
-      await provider.stop();
-      expect(provider.getAllTextChunks()).to.have.length(0);
+      expect(Date.now() - startedAt).to.be.lessThan(100);
+      expect(provider.getAllTextChunks().map((c) => c.text)).to.deep.equal(['my name is Kurt']);
     });
 
     it('is still able to accept audio after a turn ends', async () => {
