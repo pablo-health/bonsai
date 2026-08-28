@@ -24,6 +24,7 @@ import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
 import { decideCallEnding, CLOSING_QUESTION } from "./callEnding";
 import { AsrFeedTap } from "./AsrFeedTap";
+import { sanitiseFiller } from "./fillerSanity";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
@@ -324,6 +325,17 @@ export class ConversationRunner {
   private silenceCount: number = 0;
   /** True when the runner is waiting for the client to signal that AI audio playback has completed. */
   private waitingForPlaybackEnd: boolean = false;
+
+  /**
+   * True while the synthesiser is part-way through a response.
+   *
+   * The closure-local isGenerating flag below cannot be seen from anywhere else, and anything that
+   * wants to say a line of its own has to know whether a sentence is already on its way out. Push
+   * text in while one is streaming and the two interleave: a caller on 2026-08-28 was asked
+   * "Before I let you go - is there anything else I can help you with? today?", which is the
+   * closing question spliced through the middle of the model's own reply.
+   */
+  private ttsGenerating: boolean = false;
   /** Timer that fires when the user is silent in barge-in mode. */
   private bargeInSilenceTimer: NodeJS.Timeout | null = null;
 
@@ -331,6 +343,28 @@ export class ConversationRunner {
   private recorder: ConversationRecorder | null = null;
   /** Captures what the recogniser was actually fed. Only created when recording is enabled. */
   private asrFeedTap: AsrFeedTap | null = null;
+
+  /**
+   * Hands the ASR feed capture to the recorder, once, from whichever path gets there first.
+   *
+   * There are three call sites that flush a recording - cleanup, the terminal state change, and
+   * the channel teardown - and which one runs depends on how the call ended. Wiring the drain
+   * into only one of them, as the first version of this did, produced an instrument that fired on
+   * some calls and not others, which is worse than none: the absence of an artifact looked like
+   * evidence rather than a gap.
+   */
+  private handOverAsrFeed(): void {
+    if (!this.asrFeedTap || !this.recorder) return;
+    try {
+      this.recorder.setAsrFeed(this.asrFeedTap.drain());
+    } catch (error) {
+      logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'Could not assemble the ASR feed capture; the call recording itself is unaffected');
+    } finally {
+      // Cleared either way. A second attempt would drain an already-emptied tap and quietly
+      // replace a good capture with an empty one.
+      this.asrFeedTap = null;
+    }
+  }
 
   /** Serializes all public runner operations to prevent concurrent state corruption. */
   private mutex: Promise<void> = Promise.resolve();
@@ -909,6 +943,7 @@ export class ConversationRunner {
         ttsProvider.setOnGenerationStarted(async () => {
           logger.info({ conversationId }, `TTS generation started for conversation ${conversationId}`);
           isGenerating = true;
+          this.ttsGenerating = true;
           firstTtsChunkGenerated = false;
           if (this.turnData.ttsStartMs === null) {
             this.turnData.ttsStartMs = Date.now();
@@ -919,6 +954,7 @@ export class ConversationRunner {
           logger.info({ conversationId }, `TTS generation ended for conversation ${conversationId}`);
           firstTtsChunkGenerated = false;
           isGenerating = false;
+          this.ttsGenerating = false;
 
           // Snapshot turn data before any awaits to avoid reading mutated values
           const { startMs, assistantMessageEventId, outputTurnId, ttsStartMs, firstAudioMs, turnIndex, fillerSentence: snapshotFillerSentence, prescriptedText: snapshotPrescriptedText } = this.turnData;
@@ -1552,13 +1588,7 @@ export class ConversationRunner {
     // so relying on changeState() to flush loses the recording on every ordinary call.
     // flush() is idempotent via its isFlushing guard, so a double call here is harmless.
     try {
-      // Assembled here, never during the call: the tap does nothing but push buffers while audio
-      // is flowing, and the concat, the JSON and the upload all happen once, after the far end
-      // has gone. A capture that cost latency would be measuring its own interference.
-      if (this.asrFeedTap && this.recorder) {
-        this.recorder.setAsrFeed(this.asrFeedTap.drain());
-        this.asrFeedTap = null;
-      }
+      this.handOverAsrFeed();
       await this.recorder?.flush();
     } catch (error) {
       logger.warn({ conversationId, error: error instanceof Error ? error.message : String(error) }, 'Failed to flush recording during cleanup');
@@ -2076,6 +2106,12 @@ export class ConversationRunner {
         this.endConfirmationAsked = true;
         logger.info({ conversationId, lastUserUtterance: this.lastUserUtterance }, 'Asked to end the call without a goodbye - confirming before hanging up');
         try {
+          // Let the reply that is already streaming finish. Bounded, because waiting forever
+          // would turn a cosmetic fault into a silent call - and silence is the one outcome this
+          // whole path exists to avoid.
+          for (let waited = 0; this.ttsGenerating && waited < 4000; waited += 100) {
+            await new Promise((r) => setTimeout(r, 100));
+          }
           await this.speakInterstitial(CLOSING_QUESTION);
         } catch (error) {
           // Never let a failure to ASK become a hang-up. Staying on a call a beat too long is
@@ -2737,6 +2773,7 @@ export class ConversationRunner {
     await this.speakFailureNotice();
 
     // Flush recorder before closing connection
+    this.handOverAsrFeed();
     await this.recorder?.flush();
 
     // Close client connection on terminal state
@@ -3088,7 +3125,10 @@ export class ConversationRunner {
         this.turnData.fillerLlmUsage = buildLlmUsage(result.usage, this.stageData.fillerLlmProviderInfo, this.stageData.agent?.fillerSettings?.llmSettings?.model, truncationInfo) ?? null;
       }
 
-      const finalText = accumulatedText.trim();
+      // A filler that is not shaped like a filler is dropped rather than spoken. See
+      // fillerSanity: a small model on a short budget occasionally emits its own instructions,
+      // and a caller once heard "Acknowledge only:" read aloud.
+      const finalText = sanitiseFiller(accumulatedText) ?? '';
       if (finalText.length > 0) {
         this.lastFillerPrompt = renderedPrompt;
         this.lastFillerSentence = finalText;
@@ -3950,7 +3990,8 @@ export class ConversationRunner {
 
     const TERMINAL_STATES = ['finished', 'aborted', 'failed'] as const;
     if (TERMINAL_STATES.includes(newState as (typeof TERMINAL_STATES)[number])) {
-      await this.recorder?.flush();
+      this.handOverAsrFeed();
+    await this.recorder?.flush();
       try {
         await this.session.clientConnection?.close();
       } catch (error) {
