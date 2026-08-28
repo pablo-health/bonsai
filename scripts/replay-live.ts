@@ -44,8 +44,17 @@ async function main(): Promise<void> {
     try { ws.close(); } catch { /* already gone */ }
   }, deadlineMs);
   deadline.unref?.();
+  /** Turns as SUBMITTED - one entry per user turn the runtime acted on. */
   const heard: string[] = [];
   const said: string[] = [];
+  /**
+   * Individual finals as they arrived, which is not the same list.
+   *
+   * Kept apart because the difference between them is the open question in THERAPY-b5xwm.40: a
+   * turn reading "Kirk. Kirk." is two finals, and whether that is the caller saying it twice or
+   * the same audio counted twice is exactly what merging the two lists hides.
+   */
+  const chunks: string[] = [];
   let sessionId = '';
   let conversationId = '';
   let ordinal = 0;
@@ -119,7 +128,7 @@ async function main(): Promise<void> {
       // worked is worse than one that reports nothing at all, because the empty result reads as
       // evidence.
       if (m.type === 'user_transcribed_chunk' && m.isFinal && typeof m.chunkText === 'string' && m.chunkText.trim()) {
-        heard.push(m.chunkText.trim());
+        chunks.push(m.chunkText.trim());
         return;
       }
       if (m.type === 'conversation_event' && m.eventType === 'message') {
@@ -132,11 +141,11 @@ async function main(): Promise<void> {
     ws.on('close', () => resolve());
   });
 
-  console.log(JSON.stringify({ conversationId, caller: heard, agent: said }, null, 1));
+  console.log(JSON.stringify({ conversationId, caller: heard, agent: said, callerChunks: chunks }, null, 1));
 
   // A run that collected nothing is a broken rig, not a silent call, and the two must not look
   // alike from the outside.
-  if (heard.length === 0 && said.length === 0) {
+  if (heard.length === 0 && said.length === 0 && chunks.length === 0) {
     console.error('collected no transcript at all - the rig is broken, not the call');
     process.exitCode = 1;
   }
