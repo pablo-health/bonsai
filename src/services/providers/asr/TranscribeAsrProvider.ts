@@ -287,8 +287,21 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   private stopTurn(): void {
     this.tap?.mark('turn-end');
     if (this.lastPartial.trim()) {
+      // Instrumented rather than assumed. Promoting an unfinalised partial is the source of the
+      // cross-turn duplication in THERAPY-b5xwm.40: the real final for the same audio arrives a
+      // moment later and lands at the head of the NEXT turn, so the words appear twice. Dropping
+      // the promotion would delete that outright and trade it for truncation - the tail of an
+      // utterance simply missing. Which is worse depends on how often Transcribe is still
+      // uncommitted once our VAD has seen 800ms of silence, and that is a measurement, so it is
+      // logged here and taken off a replay rather than argued about.
+      logger.info(
+        { promotedPartial: this.lastPartial.trim(), finalsThisTurn: this.textChunks.length },
+        '[ASR] Turn ended with an unfinalised partial; promoting it',
+      );
       this.handleRecognized(this.currentChunkId, this.lastPartial.trim());
       this.lastPartial = '';
+    } else {
+      logger.info({ finalsThisTurn: this.textChunks.length }, '[ASR] Turn ended cleanly on finals; nothing to promote');
     }
     this.handleRecognitionStopped();
   }
