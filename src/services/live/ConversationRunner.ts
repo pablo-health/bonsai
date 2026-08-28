@@ -1392,11 +1392,11 @@ export class ConversationRunner {
       if (this.inboundConverter) {
         this.inboundConverter.push(voiceData);
       } else if (this.vadProcessor) {
-        // No converter: feed VAD directly and stream to ASR when speech is active.
+        // No converter: feed VAD directly. ASR is forwarded unconditionally for the reason
+        // given in setupInboundConverter's data handler - the provider's own isRecognizing is
+        // the gate, and the status check here only withheld utterance onsets.
         this.vadProcessor.push(voiceData);
-        if (this.conversation.status === 'receiving_user_voice') {
-          await this.forwardToAsr(voiceData);
-        }
+        await this.forwardToAsr(voiceData);
       }
       return;
     }
@@ -2098,11 +2098,24 @@ export class ConversationRunner {
 
     this.inboundConverter.on('data', async (chunk: Buffer) => {
       if (this.isVadMode && this.vadProcessor) {
-        // Always feed VAD for speech detection; additionally stream to ASR when speech is active.
+        // Always feed VAD for speech detection.
         this.vadProcessor.push(chunk);
-        if (this.conversation.status === 'receiving_user_voice') {
-          await this.forwardToAsr(chunk);
-        }
+        // Forwarded unconditionally. The ASR provider already refuses audio it is not ready for -
+        // sendAudio() returns immediately unless isRecognizing - and that gate is synchronous and
+        // correct. Gating again on conversation.status added nothing except a window: the status
+        // only becomes 'receiving_user_voice' after changeState(), which awaits a database write,
+        // so every frame arriving between the caller starting to speak and that write completing
+        // reached the VAD and the recorder and never reached the recogniser.
+        //
+        // Utterance onsets live in exactly that window. On 2026-08-27 a caller's phone number came
+        // through as '47544201' and their name as 'M I E M I'; replaying the SAME recording through
+        // the same provider returned '404-754-4201' and 'N I E M I', eight times out of eight. The
+        // leading '404' and the initial 'N' had been captured, and discarded before recognition.
+        //
+        // In a quiet room this costs nothing - the rest of the utterance is decisive on its own. In
+        // a noisy one there is no margin left to absorb it, and the decoder falls back on a language
+        // prior that is actively wrong for spelled letters, which is how 'N I E' becomes 'And I'.
+        await this.forwardToAsr(chunk);
       } else {
         await this.forwardToAsr(chunk);
       }
