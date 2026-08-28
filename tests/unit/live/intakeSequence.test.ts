@@ -131,6 +131,13 @@ describe('intakeSequence', () => {
       expect(state.current).to.equal(null);
     });
 
+    it('counts what is filled, so a prompt can ask whether there is anything to recite', () => {
+      // Handlebars treats {} as truthy, so without a count every call's first turn would tell the
+      // model "already taken: {}" and invite it to reason about nothing.
+      expect(intakeState(DEF, {}).filledCount).to.equal(0);
+      expect(intakeState(DEF, { first_name: 'Kurt', callback_number: '4047544201' }).filledCount).to.equal(2);
+    });
+
     it('treats a parked slot as settled rather than outstanding', () => {
       // Parking is how a field moves to a text confirmation instead of being asked a fourth time,
       // and it is what lets the rest of the flow be tested without writing a wrong name.

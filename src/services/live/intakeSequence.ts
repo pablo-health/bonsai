@@ -278,6 +278,14 @@ export type IntakeState = {
   remaining: SlotDefinition[];
   /** Filled slots, by name, for the prompt to refer to without re-asking. */
   filled: Record<string, string>;
+  /**
+   * How many slots are filled.
+   *
+   * Exists for the prompt rather than for the logic: Handlebars treats an empty object as truthy,
+   * so `{{#if intake.filled}}` would print "already taken: {}" on the first turn of every call and
+   * invite the model to reason about it. A number can be compared.
+   */
+  filledCount: number;
   /** Slots parked after their attempts ran out; these need a text confirmation, not another ask. */
   deferred: string[];
 };
@@ -304,7 +312,14 @@ export function intakeState(def: IntakeDefinition, vars: Record<string, unknown>
     if (slot.required) remaining.push(slot);
   }
 
-  return { complete: remaining.length === 0, current: remaining[0] ?? null, remaining, filled, deferred };
+  return {
+    complete: remaining.length === 0,
+    current: remaining[0] ?? null,
+    remaining,
+    filled,
+    filledCount: Object.keys(filled).length,
+    deferred,
+  };
 }
 
 /**
