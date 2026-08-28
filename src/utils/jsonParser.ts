@@ -35,6 +35,25 @@ export function removeJsonMarkers(input: string): unknown {
 }
 
 export function parseJsonFromMarkdown(input: string): unknown {
-  const jsonString = removeJsonMarkers(input);
-  return JSON.parse(jsonString as string);
+  const jsonString = removeJsonMarkers(input) as string;
+  try {
+    return JSON.parse(jsonString);
+  } catch (error) {
+    // Last resort: take the outermost braced span and try that.
+    //
+    // Every transformer prompt in this project already SHOUTS "output only JSON", and they shout
+    // it because models keep narrating anyway - "I'm listening to a therapy practice intake
+    // call..." followed by a perfectly good fenced object, or a correct object followed by a
+    // sentence explaining it. removeJsonMarkers only strips a fence when the fence is the whole
+    // string, so one stray sentence discarded an entire extraction and a caller's corrected name
+    // never reached their record.
+    //
+    // Recovering here rather than in each prompt means the failure costs a slightly odd log line
+    // instead of the turn's data. A prompt that produces no object at all still throws, which is
+    // the case that genuinely needs to be seen.
+    const first = jsonString.indexOf('{');
+    const last = jsonString.lastIndexOf('}');
+    if (first === -1 || last <= first) throw error;
+    return JSON.parse(jsonString.slice(first, last + 1));
+  }
 } 
