@@ -111,7 +111,15 @@ describe('ResponseGenerator', () => {
       expect(capturedMessages.at(-1).content).to.equal('hello');
     });
 
-    it('appends assistant prefix after user message', async () => {
+    it('appends assistant prefix after user message, WITHOUT its trailing punctuation', async () => {
+      // The prefix is a prefill the model continues from, not a message of its own, so a
+      // terminal full stop closes the sentence and the model has nothing left to add - which on a
+      // phone line is an empty turn, indistinguishable from a dropped call. See the comment in
+      // ResponseGenerator and commit b353922.
+      //
+      // This assertion used to expect the ellipsis preserved, and had been failing since that
+      // change landed. It was invisible because isolated-vm has no prebuild for the Node version
+      // on the developer machine, so the suite only ever ran in CI.
       const capturedMessages: LlmMessage[] = [];
       mockProvider.generateStream = async (messages: LlmMessage[]) => {
         capturedMessages.push(...messages);
@@ -122,7 +130,7 @@ describe('ResponseGenerator', () => {
       await generator.generateResponse(context, makeStage(), 'prompt', mockProvider, 'Let me help...');
 
       expect(capturedMessages.at(-1).role).to.equal('assistant');
-      expect(capturedMessages.at(-1).content).to.equal('Let me help...');
+      expect(capturedMessages.at(-1).content).to.equal('Let me help');
     });
 
     it('uses --- placeholder when userInput is null', async () => {
