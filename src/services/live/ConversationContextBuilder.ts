@@ -11,6 +11,7 @@ import { ConversationEventData } from "../../types/conversationEvents";
 import { IsolatedScriptExecutor } from "./IsolatedScriptExecutor";
 import { HistoryBuilder } from "./HistoryBuilder";
 import { isActionActive } from "../../utils/actions";
+import { parseIntakeDefinition, intakeState, type IntakeState } from "./intakeSequence";
 import { ActionClassificationResult } from "../../types/classification";
 import type { KnowledgeCategoryResponse } from "../../http/contracts/knowledge";
 import type { TimeContext, CalendarDay } from "../../types/TimeContext";
@@ -121,6 +122,18 @@ export type ConversationContext = {
 
   /** Full stage variables for referencing in other stages */
   stageVars?: Record<string, Record<string, any>>;
+
+  /**
+   * Where the booking intake has got to, when the stage declares a slot sequence in its metadata.
+   *
+   * Three readers, and they must agree: the stage prompt asks for `intake.current.asks` rather
+   * than deciding for itself what is still missing; an action's `condition` reads
+   * `intake.complete`, so an action that must not fire mid-intake is never enumerated to the
+   * classifier at all; and the turn-taking loop reads `intake.current.kind` to know what a
+   * complete answer would look like. Undefined on a stage with no sequence, which is every stage
+   * that has not opted in.
+   */
+  intake?: IntakeState;
 
   /** User profile data */
   userProfile: Record<string, any>;
@@ -540,6 +553,7 @@ export class ConversationContextBuilder {
       stageId: conversation.stageId,
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: stage?.agent?.prompt,
@@ -604,6 +618,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -681,6 +696,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
        vars: conversation.stageVars[conversation.stageId] || {},
        stageVars: conversation.stageVars,
+       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
        userProfile: user?.profile || {},
        consts: project?.constants || {},
        agent: (stage as any).agent?.prompt,
@@ -749,6 +765,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -836,6 +853,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -919,6 +937,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -1090,6 +1109,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -1137,6 +1157,18 @@ export class ConversationContextBuilder {
   }
 
   /**
+   * Computes the intake state for a stage that declares a slot sequence, or undefined for one
+   * that does not.
+   *
+   * Pure and cheap by design: it is recomputed for every context rather than cached, because the
+   * alternative is a second copy of the truth that can disagree with the variables.
+   */
+  private buildIntakeContext(stage: Stage, vars: Record<string, any>): IntakeState | undefined {
+    const definition = parseIntakeDefinition(stage.metadata);
+    return definition ? intakeState(definition, vars) : undefined;
+  }
+
+  /**
    * Builds a minimal context with only raw data for use in action condition evaluation.
    * No filtering is applied here. Use for evaluating condition statements in actions.
    * 
@@ -1152,6 +1184,7 @@ export class ConversationContextBuilder {
       caller: callerFromUserId(conversation.userId),
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
+      intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
       userProfile: userProfile || {}, // Not loaded in raw context
       consts,
       history: [], // Not loaded in raw context

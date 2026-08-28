@@ -15,6 +15,7 @@ import { TransformerRuntimeData } from './ConversationRunner';
 import { TemplatingEngine } from './TemplatingEngine';
 import type { ActionClassificationResult } from '../../types/classification';
 import { StageAction } from '../../types/actions';
+import { parseIntakeDefinition, validateSlotValue, ATTEMPTS_SUFFIX } from './intakeSequence';
 import { resolveProviderModelLimits, resolveOutputCap } from '../../utils/costManagement';
 import { truncateMessagesToTokenBudget } from '../../utils/contextTruncation';
 
@@ -106,10 +107,41 @@ export class ContextTransformerExecutor {
     const prevStageVars = { ...(conversation.stageVars[stage.id] || {}) };
 
     // Apply results sequentially to stage variables (respects order of transformers)
+    //
+    // A value bound for a declared intake slot is CHECKED before it is written, and a value that
+    // cannot be right is refused rather than stored. This is the only place a slot can be filled,
+    // which is what makes the check unavoidable rather than advisory.
+    //
+    // It exists because every wrong record this line has produced was written confidently: an
+    // eight-digit phone number read back digit by digit and agreed to, a surname whose first
+    // letter was wrong read back phonetically, and `[silence]` arriving where a first name should
+    // be. A readback cannot catch any of those - it only invites the caller to agree - whereas a
+    // digit count and a letter sequence are exactly expressible, so they are checked.
+    //
+    // A refusal is recorded as an attempt against the slot rather than as an error. Attempts are
+    // the caller's patience being spent, and spending too many on one field is the failure that
+    // ends calls; counting them is what lets a slot be parked instead of asked a fourth time.
+    const intakeDefinition = parseIntakeDefinition(stage.metadata);
+    const slotsByName = new Map((intakeDefinition?.slots ?? []).map(slot => [slot.name, slot]));
+
     const stageVars = { ...prevStageVars };
     for (const result of results) {
       for (const [key, value] of Object.entries(result.parsedValues)) {
-        stageVars[key] = value;
+        const slot = slotsByName.get(key);
+        if (!slot) { stageVars[key] = value; continue; }
+
+        const checked = validateSlotValue(slot.kind, value);
+        if (checked.ok) {
+          stageVars[key] = checked.value;
+          continue;
+        }
+
+        const attempts = Number(stageVars[`${key}${ATTEMPTS_SUFFIX}`] ?? 0) + 1;
+        stageVars[`${key}${ATTEMPTS_SUFFIX}`] = attempts;
+        logger.info(
+          { conversationId: conversation.id, slot: key, kind: slot.kind, reason: checked.reason, attempts },
+          `Refused a value for intake slot ${key}: ${checked.reason}`,
+        );
       }
     }
 
