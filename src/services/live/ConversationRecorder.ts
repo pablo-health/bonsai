@@ -13,6 +13,8 @@ export class ConversationRecorder {
   private inputConverter: IAudioConverter | null = null;
   private outputConverter: IAudioConverter | null = null;
   private inputChunks: Buffer[] = [];
+  /** What the recogniser was fed, and the report that explains it. Set at flush time. */
+  private asrFed: { audio: Buffer; report: Record<string, unknown> } | null = null;
   private outputChunks: Buffer[] = [];
   private recordingFormat: AudioFormat;
   private isFlushing = false;
@@ -54,6 +56,14 @@ export class ConversationRecorder {
     }
   }
 
+  /**
+   * Hands over the ASR feed capture. Called once, at teardown, with everything already
+   * assembled - the tap itself does no work during the call beyond pushing buffers.
+   */
+  setAsrFeed(fed: { audio: Buffer; report: Record<string, unknown> }): void {
+    this.asrFed = fed;
+  }
+
   pushOutput(chunk: Buffer): void {
     if (!this.recordOutput) return;
     if (this.outputConverter) {
@@ -67,7 +77,7 @@ export class ConversationRecorder {
     if (this.isFlushing) return;
     this.isFlushing = true;
 
-    if (this.inputChunks.length === 0 && this.outputChunks.length === 0) {
+    if (this.inputChunks.length === 0 && this.outputChunks.length === 0 && !this.asrFed) {
       return;
     }
 
@@ -111,6 +121,36 @@ export class ConversationRecorder {
       } catch (error) {
         logger.error({ conversationId: this.conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to flush AI voice recording for conversation ${this.conversationId}`);
       }
+    }
+
+    // The recogniser's own input, uploaded beside the caller's. The point of keeping both is
+    // that they are NOT the same thing, and every hour spent assuming otherwise has been wasted.
+    if (this.asrFed) {
+      const { audio, report } = this.asrFed;
+      try {
+        if (audio.length > 0) {
+          await this.storageService.uploadArtifact(
+            this.storageConfig, this.projectId, this.conversationId, 'asr_fed', audio,
+            { contentType, customMetadata: meta },
+          );
+        }
+        await this.storageService.uploadArtifact(
+          this.storageConfig, this.projectId, this.conversationId, 'asr_feed_report',
+          Buffer.from(JSON.stringify(report, null, 1), 'utf-8'),
+          { contentType: 'application/json' },
+        );
+        logger.info({
+          conversationId: this.conversationId,
+          fedBytes: report.fedBytes,
+          framesAccepted: report.framesAccepted,
+          framesDroppedNotRecognizing: report.framesDroppedNotRecognizing,
+          framesDroppedAfterEnded: report.framesDroppedAfterEnded,
+          sessions: report.sessions,
+        }, `Flushed ASR feed capture for conversation ${this.conversationId}`);
+      } catch (error) {
+        logger.error({ conversationId: this.conversationId, error: error instanceof Error ? error.message : String(error) }, `Failed to flush ASR feed capture for conversation ${this.conversationId}`);
+      }
+      this.asrFed = null;
     }
 
     this.inputChunks = [];

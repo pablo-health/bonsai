@@ -13,6 +13,7 @@ import { logger } from '../../../utils/logger';
 import type { AudioFormat } from '../../../types/audio';
 import { pcmSampleRate } from '../../audio/AudioFormatUtils';
 import { generateId, ID_PREFIXES } from '../../../utils/idGenerator';
+import type { AsrFeedTap } from '../../live/AsrFeedTap';
 
 extendZodWithOpenApi(z);
 
@@ -122,6 +123,14 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    */
   private static readonly FINALIZE_TIMEOUT_MS = 800;
 
+  /**
+   * Optional recorder of what this provider actually feeds Transcribe. Off unless set, and when
+   * set it may only push and count - see the contract on AsrFeedTap.
+   */
+  private tap: AsrFeedTap | null = null;
+
+  setFeedTap(tap: AsrFeedTap | null): void { this.tap = tap; }
+
   constructor(config: TranscribeAsrProviderConfig, settings: TranscribeAsrSettings) {
     super(config);
     this.settings = settings;
@@ -186,6 +195,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     this.isRecognizing = true;
     this.streamOpen = false;
 
+    this.tap?.newSession();
     this.onRecognitionStartedCallback?.();
   }
 
@@ -216,6 +226,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
 
     try {
       const response = await this.client!.send(command);
+      this.tap?.mark('stream-open');
       logger.info(`Transcribe ASR stream opened at ${sampleRate} Hz for language ${this.settings.language}`);
 
       if (response.TranscriptResultStream) {
@@ -236,6 +247,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    */
   async stop(): Promise<void> {
     if (!this.isRecognizing) return;
+    this.tap?.mark('stop');
     this.isRecognizing = false;
     this.streamOpen = false;
     this.ended = true;
@@ -284,7 +296,13 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    * @param format - Format of this frame; a mismatch is logged and the frame dropped.
    */
   async sendAudio(audio: Buffer, format?: AudioFormat): Promise<void> {
-    if (!this.isRecognizing || this.ended) return;
+    if (!this.isRecognizing || this.ended) {
+      // Both of these discard caller audio and neither has ever left a trace.
+      if (this.ended) this.tap?.countDroppedEnded();
+      else this.tap?.countDroppedNotRecognizing();
+      return;
+    }
+    this.tap?.countAccepted();
 
     if (format && format !== this.audioFormat) {
       logger.warn(`Transcribe ASR received ${format} but the session is ${this.audioFormat}, dropping frame`);
@@ -300,6 +318,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
 
   /** @inheritdoc */
   resetForNewTurn(): void {
+    this.tap?.mark('reset-for-new-turn');
     super.resetForNewTurn();
     this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
     this.lastPartial = '';
@@ -328,18 +347,22 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
         // stream die mid-conversation, wait a bounded interval and emit a frame of silence to keep
         // it open. Silence costs a few hundred bytes and does not affect the transcript.
         const gotAudio = await this.waitForAudio(KEEPALIVE_INTERVAL_MS);
-        if (!gotAudio && !this.ended) yield { AudioEvent: { AudioChunk: this.silenceFrame() } };
+        if (!gotAudio && !this.ended) {
+          const silence = this.silenceFrame();
+          this.tap?.fed(silence);
+          yield { AudioEvent: { AudioChunk: silence } };
+        }
         continue;
       }
 
       const chunk = this.queue.shift();
-      if (chunk) yield { AudioEvent: { AudioChunk: chunk } };
+      if (chunk) { this.tap?.fed(chunk); yield { AudioEvent: { AudioChunk: chunk } }; }
     }
 
     // Drain anything queued between the final wake and the end flag being observed.
     while (this.queue.length > 0) {
       const chunk = this.queue.shift();
-      if (chunk) yield { AudioEvent: { AudioChunk: chunk } };
+      if (chunk) { this.tap?.fed(chunk); yield { AudioEvent: { AudioChunk: chunk } }; }
     }
   }
 

@@ -528,7 +528,10 @@ export const savedFunnelQueries = pgTable('saved_funnel_queries', {
   index('idx_saved_funnel_queries_operator_id').on(table.operatorId),
 ]);
 
-export type ArtifactType = 'user_voice' | 'user_transcript' | 'ai_voice' | 'ai_transcript' | 'tool_input' | 'tool_output' | 'attachment' | 'other';
+// 'asr_fed' and 'asr_feed_report' are deliberately distinct from 'user_voice': the recorder taps
+// inbound audio BEFORE the recogniser does, so the caller's recording is not the recogniser's
+// input, and treating them as the same thing has repeatedly sent debugging down the wrong path.
+export type ArtifactType = 'user_voice' | 'user_transcript' | 'ai_voice' | 'ai_transcript' | 'asr_fed' | 'asr_feed_report' | 'tool_input' | 'tool_output' | 'attachment' | 'other';
 
 // Secrets table — stores AES-256-GCM encrypted secret values
 // Each row holds a single encrypted value; the ID is embedded in `@sec:name:id` references

@@ -23,6 +23,7 @@ import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
 import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
 import { decideCallEnding, CLOSING_QUESTION } from "./callEnding";
+import { AsrFeedTap } from "./AsrFeedTap";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
 import { LlmProviderFactory } from "../providers/llm/LlmProviderFactory";
 import { AsrProviderFactory } from "../providers/asr/AsrProviderFactory";
@@ -328,6 +329,8 @@ export class ConversationRunner {
 
   /** Handles audio recording for the conversation. */
   private recorder: ConversationRecorder | null = null;
+  /** Captures what the recogniser was actually fed. Only created when recording is enabled. */
+  private asrFeedTap: AsrFeedTap | null = null;
 
   /** Serializes all public runner operations to prevent concurrent state corruption. */
   private mutex: Promise<void> = Promise.resolve();
@@ -716,6 +719,16 @@ export class ConversationRunner {
       const asrProviderEntity = await db.query.providers.findFirst({ where: (providers, { eq }) => eq(providers.id, project.asrConfig.asrProviderId) });
       if (asrProviderEntity) {
         stageData.asrProvider = await this.asrProviderFactory.createProvider(asrProviderEntity, project.asrConfig.settings ?? {});
+        // Capture what the recogniser is handed, but only where a recording is already being
+        // kept - this holds audio in memory, and a line that is not recording has not consented
+        // to that. Duck-typed rather than instanceof so no other provider needs to care.
+        if (project.recordingConfig?.enabled) {
+          const tappable = stageData.asrProvider as unknown as { setFeedTap?: (t: AsrFeedTap) => void };
+          if (typeof tappable.setFeedTap === 'function') {
+            this.asrFeedTap = new AsrFeedTap();
+            tappable.setFeedTap(this.asrFeedTap);
+          }
+        }
       } else {
         throw new NotFoundError(`ASR Provider with ID ${project.asrConfig.asrProviderId} not found`);
       }
@@ -1539,6 +1552,13 @@ export class ConversationRunner {
     // so relying on changeState() to flush loses the recording on every ordinary call.
     // flush() is idempotent via its isFlushing guard, so a double call here is harmless.
     try {
+      // Assembled here, never during the call: the tap does nothing but push buffers while audio
+      // is flowing, and the concat, the JSON and the upload all happen once, after the far end
+      // has gone. A capture that cost latency would be measuring its own interference.
+      if (this.asrFeedTap && this.recorder) {
+        this.recorder.setAsrFeed(this.asrFeedTap.drain());
+        this.asrFeedTap = null;
+      }
       await this.recorder?.flush();
     } catch (error) {
       logger.warn({ conversationId, error: error instanceof Error ? error.message : String(error) }, 'Failed to flush recording during cleanup');
