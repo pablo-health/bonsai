@@ -1456,7 +1456,7 @@ export class ConversationRunner {
       } else if (this.vadProcessor) {
         // No converter: feed VAD directly and stream to ASR when speech is active.
         this.vadProcessor.push(voiceData);
-        if (this.conversation.status === 'receiving_user_voice') {
+        if (this.usesContinuousAsrStream || this.conversation.status === 'receiving_user_voice') {
           await this.forwardToAsr(voiceData);
         }
       }
@@ -2184,9 +2184,10 @@ export class ConversationRunner {
 
     this.inboundConverter.on('data', async (chunk: Buffer) => {
       if (this.isVadMode && this.vadProcessor) {
-        // Always feed VAD for speech detection; additionally stream to ASR when speech is active.
+        // Always feed VAD for speech detection; additionally stream to ASR when speech is active -
+        // or unconditionally, when the project holds one stream open for the whole call.
         this.vadProcessor.push(chunk);
-        if (this.conversation.status === 'receiving_user_voice') {
+        if (this.usesContinuousAsrStream || this.conversation.status === 'receiving_user_voice') {
           await this.forwardToAsr(chunk);
         }
       } else {
@@ -2546,6 +2547,22 @@ export class ConversationRunner {
       // Failing to end early is not a failure - the silence path still ends the turn.
       logger.warn({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, 'Could not end the turn early on a complete answer (non-fatal)');
     }
+  }
+
+
+  /**
+   * Whether this project holds one Transcribe stream open for the whole call.
+   *
+   * When it does, the conversation-status gate on feeding audio to the recogniser is DELETED
+   * rather than reconfigured. That gate exists only to make an ASR session boundary coincide with
+   * a conversational turn boundary, and forcing those two to line up is what the pre-warm, the
+   * pre-roll ring buffer, the 800ms finalize race and resetForNewTurn were all compensating for.
+   * With the stream always running there is nothing to line up: the VAD still decides when the
+   * agent responds, and Transcribe decides what was said, on its own schedule.
+   */
+  private get usesContinuousAsrStream(): boolean {
+    const settings = this.stageData?.project?.asrConfig?.settings as { continuousStream?: boolean } | undefined;
+    return settings?.continuousStream === true;
   }
 
   /**

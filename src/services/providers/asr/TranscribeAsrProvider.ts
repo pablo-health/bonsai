@@ -45,6 +45,7 @@ export const transcribeAsrSettingsSchema = z.looseObject({
   vocabularyFilterName: z.string().optional().describe('Name of a vocabulary filter to apply'),
   contentRedactionEnabled: z.boolean().default(false).describe('Enable PII redaction in transcripts, defaults to false'),
   piiEntityTypes: z.string().optional().describe('Comma-separated PII entity types to redact when content redaction is enabled, e.g. "NAME,PHONE"'),
+  continuousStream: z.boolean().default(false).describe('Hold ONE Transcribe stream open for the whole call, marking turn boundaries instead of opening a session per turn. Recognition is measurably better - a one-word answer inside a running stream beats the same word handed to a cold session - at about 4.25x the streamed audio, since silence is billed too. Off by default: it changes the session lifecycle the runner depends on, so it is opt-in per project.'),
 }).openapi('TranscribeAsrSettings').describe('Amazon Transcribe speech-to-text settings');
 
 export type TranscribeAsrSettings = z.infer<typeof transcribeAsrSettingsSchema>;
@@ -176,6 +177,26 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    * Deferring also avoids being billed for an idle stream.
    */
   async start(): Promise<void> {
+    // CONTINUOUS MODE. One Transcribe stream for the whole call, with turn boundaries marked
+    // rather than enforced by opening and closing sessions.
+    //
+    // Measured on 2026-08-28: the same 61 seconds of audio reads as "... Kurt. K. It's Kurt."
+    // through one continuous session and as "So / Kirk. / It's Kurt. / Kirk." through one session
+    // per turn. Identical bytes, same recogniser. A one-word answer handed to a cold session with
+    // no preceding context is a much harder recognition problem than the same word inside a
+    // running stream, and a caller's name is almost always a one-word answer.
+    //
+    // The two questions this separates were conflated before: WHEN TO RESPOND stays ours, decided
+    // by the VAD and by the endpointing tiers in ConversationRunner. WHAT WAS SAID belongs to
+    // Transcribe, on its own schedule, off a stream that never stops.
+    //
+    // Costs 4.25x more streamed audio - measured across seven real calls - which is two to nine
+    // cents on a five-minute call depending on whose published rate is right. See THERAPY-b5xwm.38.
+    if (this.settings.continuousStream && this.isRecognizing) {
+      this.beginTurn();
+      return;
+    }
+
     if (this.isRecognizing) return;
     if (!this.client) await this.init();
 
@@ -240,6 +261,39 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   }
 
   /**
+   * Marks a new turn on a stream that is already running.
+   *
+   * Everything cleared here is PER-TURN state - what the caller said this time. The stream, the
+   * queue and the `ended` flag are deliberately untouched, because they belong to the call.
+   */
+  private beginTurn(): void {
+    this.textChunks = [];
+    this.lastPartial = '';
+    this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
+    this.tap?.mark('turn-begin');
+  }
+
+  /**
+   * Ends the TURN without ending the stream.
+   *
+   * There is no finalize race here, and that is the point of the mode. In the per-turn design
+   * `stop()` had to send EOF and then wait up to 800ms for Transcribe to emit a final, because
+   * closing the session was the only way to make it commit - a wait that sat directly between the
+   * caller finishing and the agent answering. With the stream still running, whatever Transcribe
+   * has already emitted is simply taken, and a stabilised partial that never became a final is
+   * promoted exactly as before. Our VAD needs 800ms of silence to call the turn over, by which
+   * point Transcribe has almost always finalised on its own.
+   */
+  private stopTurn(): void {
+    this.tap?.mark('turn-end');
+    if (this.lastPartial.trim()) {
+      this.handleRecognized(this.currentChunkId, this.lastPartial.trim());
+      this.lastPartial = '';
+    }
+    this.handleRecognitionStopped();
+  }
+
+  /**
    * Ends the audio stream and stops recognition.
    *
    * Any stabilised partial that never reached a final result is promoted to a final chunk, so a
@@ -247,6 +301,14 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    */
   async stop(): Promise<void> {
     if (!this.isRecognizing) return;
+
+    // In continuous mode the call owns the stream, so ending a turn must not end it. cleanup()
+    // is the only thing that closes it.
+    if (this.settings.continuousStream) {
+      this.stopTurn();
+      return;
+    }
+
     this.tap?.mark('stop');
     this.isRecognizing = false;
     this.streamOpen = false;
@@ -319,6 +381,12 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
   /** @inheritdoc */
   resetForNewTurn(): void {
     this.tap?.mark('reset-for-new-turn');
+    if (this.settings.continuousStream) {
+      // super.resetForNewTurn() only clears the chunk list, which beginTurn already does, but
+      // going through the same door keeps the two paths from drifting apart.
+      this.beginTurn();
+      return;
+    }
     super.resetForNewTurn();
     this.currentChunkId = generateId(ID_PREFIXES.CHUNK);
     this.lastPartial = '';
@@ -326,6 +394,14 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
 
   /** @inheritdoc */
   async cleanup(): Promise<void> {
+    // The call is over, so the stream really does end here - stop() would only have ended a turn.
+    if (this.settings.continuousStream) {
+      this.isRecognizing = false;
+      this.streamOpen = false;
+      this.ended = true;
+      this.wake();
+      this.tap?.mark('stop');
+    }
     await this.stop();
     this.client?.destroy();
     this.client = null;
