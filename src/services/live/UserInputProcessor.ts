@@ -55,14 +55,25 @@ export class UserInputProcessor {
     // - Collect and return all detected actions from classifiers.
 
     try {
-      const classifiers = session.runner.getRuntimeData().classifiers;
-      const stage = session.runner.getRuntimeData().stage;
-      const conversation = session.runner.getRuntimeData().conversation;
-      const globalActions = session.runner.getRuntimeData().globalActions.filter(ga => !ga.id.startsWith('__'));
-      const guardrails = session.runner.getRuntimeData().guardrails;
-      const guardrailClassifier = session.runner.getRuntimeData().guardrailClassifier;
-      const sampleCopies = session.runner.getRuntimeData().sampleCopies;
-      const sampleCopyClassifier = session.runner.getRuntimeData().sampleCopyClassifier;
+      // Read ONCE, at the top, and hold it.
+      //
+      // This used to reach back into session.runner several more times further down, after the
+      // classifiers had been awaited - and a caller who hangs up mid-turn tears the session down
+      // in that window, so the late reads dereferenced null and the hang-up surfaced as an
+      // unhandled TypeError rather than as an ordinary end of call. Nothing here needs a fresher
+      // view than the one the turn started with; taking a second one was never deliberate.
+      const runtime = session.runner.getRuntimeData();
+      const classifiers = runtime.classifiers;
+      const stage = runtime.stage;
+      const conversation = runtime.conversation;
+      // Filtered for enumeration to the classifier; the unfiltered list is kept because the
+      // lookup map below has to be able to find a lifecycle action by name.
+      const globalActions = runtime.globalActions.filter(ga => !ga.id.startsWith('__'));
+      const allGlobalActions = runtime.globalActions;
+      const guardrails = runtime.guardrails;
+      const guardrailClassifier = runtime.guardrailClassifier;
+      const sampleCopies = runtime.sampleCopies;
+      const sampleCopyClassifier = runtime.sampleCopyClassifier;
 
       // Fetch knowledge categories for the default classifier when knowledge is enabled
       let knowledgeCategories: KnowledgeCategoryResponse[] = [];
@@ -222,8 +233,8 @@ export class UserInputProcessor {
         return map;
       };
 
-      const globalActionsMap = indexBy(session.runner.getRuntimeData().globalActions);
-      const guardrailsMap = indexBy(session.runner.getRuntimeData().guardrails);
+      const globalActionsMap = indexBy(allGlobalActions);
+      const guardrailsMap = indexBy(guardrails);
       const knowledgeCategoryIds = new Set(knowledgeCategories.map(c => `__knowledge_${c.id}`));
       const stageActionsMap = indexBy(Object.values(stage.actions));
       const filteredActions = allActions.filter(action => {
@@ -263,7 +274,7 @@ export class UserInputProcessor {
   private async classifyCopyForInput(session: Session, context: ConversationContext): Promise<SampleCopyClassificationResult & { renderedPrompt: string; result: string; llmUsage?: LlmUsageMetadata; durationMs: number; startMs: number; endMs: number }> {
     const classifyStartMs = Date.now();
     try {
-      const classifierData = session.runner.getRuntimeData().sampleCopyClassifier;
+      const classifierData = session.runner?.getRuntimeData()?.sampleCopyClassifier;
       if (!classifierData) {
         throw new InvalidOperationError('No sample copy classifier configured for this stage');
       }
@@ -285,7 +296,12 @@ export class UserInputProcessor {
       ];
 
       const copyModel = classifierData.classifier.llmSettings?.model;
-      const copyLimits = resolveProviderModelLimits(session.runner.getRuntimeData().costManagementConfig, classifierData.llmProviderInfo.id, copyModel);
+      // Optional, because these run inside awaited promises and a caller who hangs up mid-turn
+      // takes the session with them. Without the guard the hang-up is caught by the handler below
+      // and recorded as `classificationFailed`, which is the signal for "the classifier could not
+      // answer" - a torn-down session is not that, and conflating them makes the fault countable
+      // in the database for the wrong reason.
+      const copyLimits = resolveProviderModelLimits(session.runner?.getRuntimeData()?.costManagementConfig, classifierData.llmProviderInfo.id, copyModel);
       const copyMaxTokens = resolveOutputCap(classifierData.classifier.llmSettings?.defaultMaxTokens, copyLimits, 'classification');
       const copyInputCap = copyLimits?.inputTokensLimits?.classification;
       const { messages: truncatedCopyMessages, ...copyTruncation } = truncateMessagesToTokenBudget(messages, copyInputCap, copyModel);
@@ -344,7 +360,7 @@ export class UserInputProcessor {
       ];
 
       const classifyModel = classifierData.classifier.llmSettings?.model;
-      const classifyLimits = resolveProviderModelLimits(session.runner.getRuntimeData().costManagementConfig, classifierData.llmProviderInfo.id, classifyModel);
+      const classifyLimits = resolveProviderModelLimits(session.runner?.getRuntimeData()?.costManagementConfig, classifierData.llmProviderInfo.id, classifyModel);
       const classifyMaxTokens = resolveOutputCap(classifierData.classifier.llmSettings?.defaultMaxTokens, classifyLimits, 'classification');
       const classifyInputCap = classifyLimits?.inputTokensLimits?.classification;
       const { messages: truncatedClassifyMessages, ...classifyTruncation } = truncateMessagesToTokenBudget(messages, classifyInputCap, classifyModel);

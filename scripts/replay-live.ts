@@ -109,16 +109,37 @@ async function main(): Promise<void> {
         setTimeout(() => { ws.close(); resolve(); }, 1500);
         return;
       }
-      const text = m.text ?? m.transcript ?? m.data?.text;
-      if (typeof text === 'string' && text.trim()) {
-        if (m.type?.includes('user') || m.role === 'user') heard.push(text);
-        else if (m.role === 'assistant' || m.type?.includes('ai')) said.push(text);
+      // Read the shapes the server actually sends, rather than guessing at a `text` field.
+      //
+      // This collected nothing for a day. It looked for `m.text`, and the server sends the
+      // caller's words as `chunkText` on a user_transcribed_chunk and the agent's as
+      // `eventData.text` inside a conversation_event - so every run printed empty arrays for a
+      // call that had plainly happened, and the first intake replay was read as a total failure
+      // until the database was queried by hand. An instrument that reports nothing when it
+      // worked is worse than one that reports nothing at all, because the empty result reads as
+      // evidence.
+      if (m.type === 'user_transcribed_chunk' && m.isFinal && typeof m.chunkText === 'string' && m.chunkText.trim()) {
+        heard.push(m.chunkText.trim());
+        return;
+      }
+      if (m.type === 'conversation_event' && m.eventType === 'message') {
+        const event = m.eventData ?? {};
+        if (typeof event.text === 'string' && event.text.trim()) {
+          (event.role === 'user' ? heard : said).push(event.text.trim());
+        }
       }
     });
     ws.on('close', () => resolve());
   });
 
   console.log(JSON.stringify({ conversationId, caller: heard, agent: said }, null, 1));
+
+  // A run that collected nothing is a broken rig, not a silent call, and the two must not look
+  // alike from the outside.
+  if (heard.length === 0 && said.length === 0) {
+    console.error('collected no transcript at all - the rig is broken, not the call');
+    process.exitCode = 1;
+  }
 }
 
-main().then(() => process.exit(0)).catch((e) => { console.error(String(e)); process.exit(1); });
+main().then(() => process.exit(process.exitCode ?? 0)).catch((e) => { console.error(String(e)); process.exit(1); });
