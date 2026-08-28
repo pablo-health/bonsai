@@ -47,11 +47,22 @@ export class AsrFeedTap {
    */
   constructor(private readonly maxBytes = 40 * 1024 * 1024) {}
 
-  /** Called with each buffer yielded to the recogniser. Must stay this cheap. */
-  fed(chunk: Buffer): void {
+  private silenceBytes = 0;
+
+  /**
+   * Called with each buffer yielded to the recogniser. Must stay this cheap.
+   *
+   * @param isKeepaliveSilence - true for the silence the provider inserts on its own to stop
+   *   Transcribe closing an idle stream. Counted apart from the caller's audio because otherwise
+   *   the totals have to be picked apart by hand afterwards: on the first real call this was
+   *   needed, three of the eight seconds fed turned out to be silence, and working that out took
+   *   arithmetic and an assumption about frame size that the tap should simply have recorded.
+   */
+  fed(chunk: Buffer, isKeepaliveSilence = false): void {
     if (this.bytes >= this.maxBytes) return;
     this.chunks.push(chunk);
     this.bytes += chunk.length;
+    if (isKeepaliveSilence) this.silenceBytes += chunk.length;
   }
 
   countAccepted(): void { this.accepted++; }
@@ -78,6 +89,8 @@ export class AsrFeedTap {
       audio,
       report: {
         fedBytes: this.bytes,
+        fedKeepaliveSilenceBytes: this.silenceBytes,
+        fedCallerAudioBytes: this.bytes - this.silenceBytes,
         truncated: this.bytes >= this.maxBytes,
         framesAccepted: this.accepted,
         framesDroppedNotRecognizing: this.droppedNotRecognizing,

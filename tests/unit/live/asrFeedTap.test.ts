@@ -66,3 +66,18 @@ describe('AsrFeedTap', () => {
     expect((tap.drain().report.markers as unknown[]).length).to.equal(4096);
   });
 });
+
+describe('AsrFeedTap keepalive accounting', () => {
+  it('separates the caller from the silence the provider inserts', () => {
+    // Without this the totals have to be unpicked by hand, which on the first real call meant
+    // guessing a frame size to work out how much of eight seconds was actually the caller.
+    const tap = new AsrFeedTap();
+    tap.fed(Buffer.alloc(3200));
+    tap.fed(Buffer.alloc(1600), true);
+    tap.fed(Buffer.alloc(3200));
+    const r = tap.drain().report;
+    expect(r.fedBytes).to.equal(8000);
+    expect(r.fedKeepaliveSilenceBytes).to.equal(1600);
+    expect(r.fedCallerAudioBytes).to.equal(6400);
+  });
+});

@@ -2286,7 +2286,18 @@ export class ConversationRunner {
   async startAsrSessionIfNeeded(): Promise<void> {
     try {
       this.turnData.inputTurnId = generateId(ID_PREFIXES.INPUT);
-      await this.changeState('receiving_user_voice');
+
+      // ORDER MATTERS, and it used to be the other way round.
+      //
+      // changeState() awaits a database write, and until it lands the status gate below is still
+      // closed - so every frame arriving during that write reached the VAD and the recorder and
+      // never reached the recogniser. Starting the session and handing it the buffered pre-roll
+      // FIRST means the recogniser is ready and already holds the caller's opening words before
+      // the gate opens, and the write no longer sits inside the audio path.
+      //
+      // Measured on a call from a Delta Sky Club on 2026-08-28, before this change: across six
+      // turns the recogniser was fed about 0.9 seconds of real audio per turn, and the caller's
+      // first name came back as [silence] three times in a row while he was plainly speaking.
       if (this.asrPreWarmPromise) {
         await this.asrPreWarmPromise;
         this.asrPreWarmPromise = null;
@@ -2295,11 +2306,17 @@ export class ConversationRunner {
         await this.stageData.asrProvider?.start();
       }
 
-      // If VAD buffered any audio before ASR was started, send it now to avoid cutting off the start of the user's speech.
+      // The VAD sees every frame regardless of state, so its buffer holds the speech that
+      // triggered this turn - the part the recogniser would otherwise never hear. forwardToAsr
+      // goes straight to the provider and does not consult the gate, which is what makes this
+      // work before the state has changed.
       if (this.vadProcessor) {
         await this.forwardToAsr(this.vadProcessor.getBufferedAudio());
         this.vadProcessor.clearBufferedAudio();
       }
+
+      // Opened last, once there is something ready to receive what it lets through.
+      await this.changeState('receiving_user_voice');
     } catch (error) {
       logger.error({ conversationId: this.stageData.conversation.id, error: error instanceof Error ? error.message : String(error) }, `Failed to restart ASR during subsequent barge-in speech_start`);
     }

@@ -349,7 +349,7 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
         const gotAudio = await this.waitForAudio(KEEPALIVE_INTERVAL_MS);
         if (!gotAudio && !this.ended) {
           const silence = this.silenceFrame();
-          this.tap?.fed(silence);
+          this.tap?.fed(silence, true);
           yield { AudioEvent: { AudioChunk: silence } };
         }
         continue;
