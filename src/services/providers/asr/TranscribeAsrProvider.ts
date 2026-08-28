@@ -286,7 +286,27 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
    */
   private stopTurn(): void {
     this.tap?.mark('turn-end');
-    if (this.lastPartial.trim()) {
+
+    // PROMOTE ONLY AS A LAST RESORT - when the turn would otherwise be empty.
+    //
+    // Measured over six turns of a replay on 2026-08-28: four ended cleanly on finals with
+    // nothing outstanding, one ended with a final AND an unfinalised partial, and one ended with
+    // ONLY an unfinalised partial and no final at all.
+    //
+    // That last case is why "just take the finals" is not the answer. Dropping the promotion
+    // outright would have left that turn empty, and an empty turn is the agent telling a caller
+    // who was plainly speaking that it did not catch them - the failure this whole area exists to
+    // remove. Silence must never be a terminal state.
+    //
+    // The middle case is the one that duplicates: the turn already had its words from a final, and
+    // promoting the partial on top added a second copy that Transcribe then finalised again into
+    // the NEXT turn. So promote only when there is nothing else - which keeps the safety net and
+    // removes the duplication in the common case.
+    //
+    // The residue is a turn that has one final and a long unfinalised tail: the tail is lost here
+    // and its final still lands in the next turn. That is what timestamp attribution fixes, and
+    // it is the whole of what THERAPY-b5xwm.40 has left to do.
+    if (this.textChunks.length === 0 && this.lastPartial.trim()) {
       // Instrumented rather than assumed. Promoting an unfinalised partial is the source of the
       // cross-turn duplication in THERAPY-b5xwm.40: the real final for the same audio arrives a
       // moment later and lands at the head of the NEXT turn, so the words appear twice. Dropping
@@ -296,12 +316,16 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
       // logged here and taken off a replay rather than argued about.
       logger.info(
         { promotedPartial: this.lastPartial.trim(), finalsThisTurn: this.textChunks.length },
-        '[ASR] Turn ended with an unfinalised partial; promoting it',
+        '[ASR] Turn would have been empty; promoting the unfinalised partial',
       );
       this.handleRecognized(this.currentChunkId, this.lastPartial.trim());
       this.lastPartial = '';
     } else {
-      logger.info({ finalsThisTurn: this.textChunks.length }, '[ASR] Turn ended cleanly on finals; nothing to promote');
+      logger.info(
+        { finalsThisTurn: this.textChunks.length, discardedPartial: this.lastPartial.trim() || undefined },
+        '[ASR] Turn ended on finals',
+      );
+      this.lastPartial = '';
     }
     this.handleRecognitionStopped();
   }
