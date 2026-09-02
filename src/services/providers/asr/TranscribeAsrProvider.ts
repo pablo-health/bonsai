@@ -435,7 +435,16 @@ export class TranscribeAsrProvider extends AsrProviderBase<TranscribeAsrProvider
     this.wake();
 
     // First frame of the turn opens the stream. Queued above first so it is not lost.
-    if (!this.streamOpen) await this.openStream();
+    //
+    // NOT AWAITED. Opening is a network round trip, and this method sits on the audio frame path:
+    // the runner awaits sendAudio for every frame, and the LiveKit pump awaits the runner. When
+    // the runner pre-warms the session as the greeting ends, the very next frame used to pay the
+    // whole open here, the pump stalled behind it, the audio iterable the open was waiting on
+    // starved, and the two waited on each other until the next stop(). Measured on 2026-09-02:
+    // the VAD received no frames for 8.3 seconds after every greeting, and every phone call since
+    // 2026-08-31 lost the caller's first utterance to it. Frames keep queueing while the stream
+    // comes up and drain the moment it does; openStream handles its own failure.
+    if (!this.streamOpen) void this.openStream();
   }
 
   /** @inheritdoc */
