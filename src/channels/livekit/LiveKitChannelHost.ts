@@ -1971,6 +1971,7 @@ export class LiveKitChannelHost {
     }
 
     logger.info({ roomName, sessionId: call.sessionId }, 'LiveKit: tearing down session');
-    await call.connection.close();
+    // The party who dialled in has gone, so there is nobody left to play a goodbye out to.
+    await call.connection.close({ drain: false });
   }
 }

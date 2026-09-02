@@ -23,7 +23,12 @@ class FakeSource {
   }
   async waitForPlayout(): Promise<void> { this.playoutWaits += 1; }
   clearQueue(): void { /* nothing queued */ }
+  closed = false;
+  async close(): Promise<void> { this.closed = true; }
 }
+
+/** A room that can be left and nothing more. */
+const fakeRoom = { name: 'test-room', disconnect: async () => {} };
 
 /**
  * A clock that moves only when the test says so, and records every sleep it is asked for.
@@ -47,8 +52,8 @@ function fakeClock(): DrainClock & { sleeps: number[]; advance: (ms: number) => 
 const lastSleep = (clock: { sleeps: number[] }): number => clock.sleeps[clock.sleeps.length - 1];
 
 function connectionWith(source: FakeSource, clock: DrainClock): LiveKitConnection {
-  // Room and session manager are never touched by the paths under test.
-  return new LiveKitConnection({} as never, source as never, {} as never, async () => {}, undefined, undefined, clock);
+  // The session manager is never touched: no session is attached, so close() has nothing to unregister.
+  return new LiveKitConnection(fakeRoom as never, source as never, {} as never, async () => {}, undefined, undefined, clock);
 }
 
 function pcm(ms: number, rate = 16000): Buffer {
@@ -126,6 +131,55 @@ describe('LiveKitConnection.drainOutbound', () => {
     expect(drained.boundHit).to.equal(true);
     expect(drained.waitedMs).to.be.at.most(DRAIN_BOUND_MS);
     expect(lastSleep(clock)).to.equal(DRAIN_BOUND_MS);
+  });
+
+  it('close() plays the goodbye out before leaving the room', async () => {
+    // The runner closes the connection the instant it reaches `finished`, milliseconds after
+    // conversation_end. Leaving the room stops the agent's audio at the caller's ear, so the
+    // close itself has to wait - no other handler can protect the goodbye from it.
+    const source = new FakeSource();
+    const clock = fakeClock();
+    const order: string[] = [];
+    const origClose = source.close.bind(source);
+    source.close = async () => { order.push('source-closed'); await origClose(); };
+    const wrappedClock: DrainClock & { sleeps: number[]; advance: (ms: number) => void } = {
+      ...clock,
+      sleep: async (ms) => { order.push(`sleep-${ms}`); await clock.sleep(ms); },
+    };
+    const conn = connectionWith(source, wrappedClock);
+
+    await speak(conn, 2000);
+    await conn.close();
+
+    const sleepIdx = order.indexOf(`sleep-${2000 + PSTN_TAIL_MS}`);
+    const closeIdx = order.indexOf('source-closed');
+    expect(sleepIdx, 'the goodbye wait never happened').to.be.greaterThan(-1);
+    expect(sleepIdx).to.be.lessThan(closeIdx);
+  });
+
+  it('close({ drain: false }) leaves at once, for a caller who has already hung up', async () => {
+    const source = new FakeSource();
+    const clock = fakeClock();
+    const conn = connectionWith(source, clock);
+
+    await speak(conn, 2000);
+    await conn.close({ drain: false });
+
+    expect(clock.sleeps).to.deep.equal([]);
+    expect(source.closed).to.equal(true);
+  });
+
+  it('does not pay the tail twice when a drain already covered this turn', async () => {
+    const source = new FakeSource();
+    const clock = fakeClock();
+    const conn = connectionWith(source, clock);
+
+    await speak(conn, 1000);
+    await conn.drainOutbound();
+    const sleepsAfterDrain = clock.sleeps.length;
+    await conn.close();
+
+    expect(clock.sleeps.length).to.equal(sleepsAfterDrain);
   });
 
   it('restarts the accounting on a fresh turn but not on a filler that continues into the reply', async () => {

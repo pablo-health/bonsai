@@ -175,6 +175,12 @@ export class LiveKitConnection implements IClientConnection {
    */
   private inFlightChunks = 0;
   private inFlightWaiters: Array<() => void> = [];
+  /**
+   * The generation a completed drain covered. Three handlers may drain the same goodbye - the
+   * channel host, this connection's own conversation_end handler, and close() - and the tail
+   * only needs paying once.
+   */
+  private drainedGeneration = -1;
 
   /**
    * Whether it is safe to write non-conversational audio into this connection right now.
@@ -385,11 +391,24 @@ export class LiveKitConnection implements IClientConnection {
   /**
    * Disconnects from the LiveKit room and unregisters the session.
    *
-   * Any audio still queued is dropped rather than played out: the caller has either hung up or the
-   * conversation has ended, so draining would only delay teardown.
+   * THE GOODBYE PLAYS OUT FIRST. This used to say the opposite - "any audio still queued is
+   * dropped rather than played out, draining would only delay teardown" - and that sentence was
+   * the cut-off goodbye. The runner closes the connection the instant it reaches `finished`,
+   * which is milliseconds after it emits `conversation_end`, and disconnecting the agent from the
+   * room stops its audio at the caller's ear whatever any other handler was still waiting for.
+   * So close() itself drains, unless told not to (the caller already hung up, there is nobody
+   * to play out to) or the turn was superseded (a barge-in flushed whatever there was).
+   *
+   * @param opts.drain - false to leave immediately; the default plays out what has been said.
    */
-  async close(): Promise<void> {
+  async close(opts: { drain?: boolean } = {}): Promise<void> {
     if (this.closed) return;
+
+    if (opts.drain !== false && this.drainedGeneration !== this.generation) {
+      const drained = await this.drainOutbound();
+      logger.info({ sessionId: this.session?.id, ...drained }, 'LiveKit: drained before close');
+    }
+    if (this.closed) return; // a concurrent close() finished while this one was draining
     this.closed = true;
 
     logger.info({ sessionId: this.session?.id, room: this.room.name }, 'LiveKit: close() called, leaving room');
@@ -522,6 +541,7 @@ export class LiveKitConnection implements IClientConnection {
       await clock.sleep(Math.min(remainingMs, allowedMs));
     }
 
+    if (this.generation === generation) this.drainedGeneration = generation;
     return { pushedMs, elapsedMs: Math.round(elapsedMs), waitedMs: Math.round(clock.now() - startedAt), boundHit };
   }
 
