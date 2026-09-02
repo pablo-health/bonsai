@@ -744,10 +744,15 @@ export class FireRedVadWrapper {
     this.framesProcessed += 1;
     if (this.framesProcessed % 100 === 0) {
       const behind = this.framesQueued - this.framesProcessed;
-      logger.info({
-        framesProcessed: this.framesProcessed, behind, lagMs: behind * FBANK_FRAME_SHIFT_MS,
-        avgRunMs: Math.round((this.runMsTotal / 100) * 10) / 10,
-      }, 'FireRedVAD inference pace');
+      // A second or more of lag is audible and means every decision is arriving late; that is
+      // worth a line every second. The healthy case is one line a minute.
+      const stalled = behind >= 100;
+      if (stalled || this.framesProcessed % 6000 === 0) {
+        logger[stalled ? 'warn' : 'info']({
+          framesProcessed: this.framesProcessed, behind, lagMs: behind * FBANK_FRAME_SHIFT_MS,
+          avgRunMs: Math.round((this.runMsTotal / 100) * 10) / 10,
+        }, stalled ? 'FireRedVAD inference is behind the audio' : 'FireRedVAD inference pace');
+      }
       this.runMsTotal = 0;
     }
     const prob = (result.probs.data as Float32Array)[0];

@@ -2387,15 +2387,17 @@ export class ConversationRunner {
       // Queue depth at INFO: a handler that never settles blocks every later VAD event silently,
       // and on 2026-09-02 that was one of two remaining explanations for a lost first utterance.
       vadEventsPending += 1;
-      logger.info({ conversationId, name, pending: vadEventsPending, status: this.conversation.status }, 'VAD event queued');
+      const queuedAt = Date.now();
+      logger.debug({ conversationId, name, pending: vadEventsPending, status: this.conversation.status }, 'VAD event queued');
       vadEventQueue = vadEventQueue.then(async () => {
-        logger.info({ conversationId, name, status: this.conversation.status }, 'VAD event running');
+        const waitedMs = Date.now() - queuedAt;
+        // Waiting behind another handler is the shape of the bug this exists to catch.
+        if (waitedMs > 500) logger.warn({ conversationId, name, waitedMs, status: this.conversation.status }, 'VAD event waited behind the queue');
         await fn();
       }).catch(err => {
         logger.error({ conversationId, name, error: err instanceof Error ? err.message : String(err) }, `VAD event handler error for conversation ${conversationId}`);
       }).finally(() => {
         vadEventsPending -= 1;
-        logger.info({ conversationId, name, pending: vadEventsPending }, 'VAD event done');
       });
     };
 
