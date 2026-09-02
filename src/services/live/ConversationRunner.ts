@@ -2382,19 +2382,30 @@ export class ConversationRunner {
     // starting the ASR provider, which would cause audio to be forwarded to an inactive ASR
     // and 'end_of_utterance' to return early (stuck in receiving_user_voice).
     let vadEventQueue: Promise<void> = Promise.resolve();
-    const enqueueVadEvent = (fn: () => Promise<void>) => {
-      vadEventQueue = vadEventQueue.then(fn).catch(err => {
-        logger.error({ conversationId, error: err instanceof Error ? err.message : String(err) }, `VAD event handler error for conversation ${conversationId}`);
+    let vadEventsPending = 0;
+    const enqueueVadEvent = (name: string, fn: () => Promise<void>) => {
+      // Queue depth at INFO: a handler that never settles blocks every later VAD event silently,
+      // and on 2026-09-02 that was one of two remaining explanations for a lost first utterance.
+      vadEventsPending += 1;
+      logger.info({ conversationId, name, pending: vadEventsPending, status: this.conversation.status }, 'VAD event queued');
+      vadEventQueue = vadEventQueue.then(async () => {
+        logger.info({ conversationId, name, status: this.conversation.status }, 'VAD event running');
+        await fn();
+      }).catch(err => {
+        logger.error({ conversationId, name, error: err instanceof Error ? err.message : String(err) }, `VAD event handler error for conversation ${conversationId}`);
+      }).finally(() => {
+        vadEventsPending -= 1;
+        logger.info({ conversationId, name, pending: vadEventsPending }, 'VAD event done');
       });
     };
 
-    this.vadProcessor.on('speech_start', () => enqueueVadEvent(() => this.handleVadSpeechStart()));
+    this.vadProcessor.on('speech_start', () => enqueueVadEvent('speech_start', () => this.handleVadSpeechStart()));
     // 'data' (batch utterance audio) is intentionally not wired: audio is streamed live to ASR
     // via the inbound converter / receiveUserVoiceData path while state === 'receiving_user_voice'.
     this.vadProcessor.on('utterance_audio', (audio: Float32Array) => {
       this.smartTurnAudioBuffer = audio;
     });
-    this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent(() => this.handleVadEndOfUtterance()));
+    this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent('end_of_utterance', () => this.handleVadEndOfUtterance()));
 
     // The room, measured in the frames the VAD says are not the caller. Published per 200 ms
     // block so the template context can read {{noise.band}}; logged only when the band changes.

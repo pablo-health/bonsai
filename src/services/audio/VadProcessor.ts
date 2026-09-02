@@ -195,6 +195,9 @@ export class VadProcessor extends EventEmitter {
     logger.info({ options: fireredConfig }, 'FireRedVadWrapper init');
     this.vad = new FireRedVadWrapper(this.sampleRate, fireredConfig, {
       onSpeechStart: () => {
+        // At INFO on purpose: on 2026-09-02 every phone call lost its first utterance and the
+        // question "did the VAD fire at all" could not be answered from the log.
+        logger.info({ listeners: this.listenerCount('speech_start') }, 'VAD speech_start emitted');
         this.emit('speech_start');
       },
       onSpeechEnd: (audio: Float32Array) => {
