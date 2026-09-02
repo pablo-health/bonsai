@@ -202,6 +202,11 @@ export class VadProcessor extends EventEmitter {
         this.emit('data', float32ToPcm16(audio));
         this.emit('end_of_utterance');
       },
+      // Per-frame speech probability with the 16 kHz PCM16 frame it was scored on. Listened to
+      // by the noise-floor tracker; a hundred events a second, so listeners must be cheap.
+      onFrame: (probability: number, frame: Buffer) => {
+        this.emit('frame', probability, frame);
+      },
     });
     await this.vad.init();
     await this.vad.initResampler(this.sampleRate);

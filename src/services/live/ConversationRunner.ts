@@ -25,6 +25,7 @@ import { callerFromUserId } from "./callerNumber";
 import { decideCallEnding, endsWithAQuestion, isNonAnswer, CLOSING_QUESTION, MAX_END_VETOES } from "./callEnding";
 import { AsrFeedTap } from "./AsrFeedTap";
 import { isNearField } from "../audio/proximity";
+import { NoiseFloorTracker, publishNoise, forgetNoise, type NoiseBand } from "../audio/NoiseFloorTracker";
 import { parseIntakeDefinition, intakeState, turnLooksComplete } from "./intakeSequence";
 import { sanitiseFiller } from "./fillerSanity";
 import { ITtsProvider } from "../providers/tts/ITtsProvider";
@@ -339,6 +340,9 @@ export class ConversationRunner {
    * the veto cannot become a call that never ends.
    */
   private endVetoStreak = 0;
+  /** The room's level, read from the VAD's non-speech frames. Null until server VAD is up. */
+  private noiseTracker: NoiseFloorTracker | null = null;
+  private noiseBand: NoiseBand = 'quiet';
 
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
@@ -1289,6 +1293,10 @@ export class ConversationRunner {
             moderationDurationMs: this.turnData.moderationDurationMs ?? undefined,
             fillerPrompt: this.lastFillerPrompt ?? undefined,
             fillerSentence: this.turnData.fillerSentence ?? undefined,
+            // The room as of this turn, so a call's noise can be read back per turn from the DB.
+            noiseBand: this.noiseTracker ? this.noiseTracker.state().band : undefined,
+            noiseFloorRms: this.noiseTracker ? this.noiseTracker.state().floorRms : undefined,
+            noiseSnrDb: this.noiseTracker ? this.noiseTracker.state().snrDb : undefined,
           },
         };
         this.turnData.assistantMessageEventId = await this.saveAndSendEvent('message', messageEventData);
@@ -1679,6 +1687,8 @@ export class ConversationRunner {
     this.outboundConverter = null;
     this.vadProcessor?.destroy();
     this.vadProcessor = null;
+    this.noiseTracker = null;
+    forgetNoise(this.conversation.id);
     this.clearSmartTurnContinueTimer();
     this.smartTurnAudioBuffer = null;
 
@@ -2385,6 +2395,22 @@ export class ConversationRunner {
       this.smartTurnAudioBuffer = audio;
     });
     this.vadProcessor.on('end_of_utterance', () => enqueueVadEvent(() => this.handleVadEndOfUtterance()));
+
+    // The room, measured in the frames the VAD says are not the caller. Published per 200 ms
+    // block so the template context can read {{noise.band}}; logged only when the band changes.
+    // Not on the VAD event queue: it touches no turn state and must never delay a turn.
+    this.noiseTracker = new NoiseFloorTracker(sampleRate);
+    this.noiseBand = 'quiet';
+    this.vadProcessor.on('frame', (probability: number, frame: Buffer) => {
+      if (!this.noiseTracker) return;
+      if (!this.noiseTracker.push(probability, frame)) return;
+      const state = this.noiseTracker.state();
+      publishNoise(conversationId, state);
+      if (state.band !== this.noiseBand) {
+        logger.info({ conversationId, kind: 'noise_band', from: this.noiseBand, ...state }, `Room noise band changed: ${this.noiseBand} -> ${state.band}`);
+        this.noiseBand = state.band;
+      }
+    });
 
     logger.info({ conversationId, asrFormat, sampleRate, algorithm: serverVadConfig.algorithm ?? 'legacy' }, `Server VAD processor initialized for conversation ${conversationId}`);
   }

@@ -28,6 +28,12 @@ const FBANK_FRAME_SHIFT = Math.round(FBANK_FRAME_SHIFT_MS / 1000 * FBANK_SAMPLE_
 type FireRedVadCallbacks = {
   onSpeechStart: () => void;
   onSpeechEnd: (audio: Float32Array) => void;
+  /**
+   * Every frame, with the model's raw speech probability and the 10 ms of 16 kHz PCM16 it was
+   * computed on. The noise-floor tracker reads the room out of the frames this says are not
+   * speech; nothing else needs it. Optional, and must be cheap: it runs a hundred times a second.
+   */
+  onFrame?: (probability: number, frame: Buffer) => void;
 };
 
 type FireRedVadInitConfig = {
@@ -731,6 +737,7 @@ export class FireRedVadWrapper {
     this.cache.set(newCache);
 
     const stateResult = this.stateMachine.processOneFrame(prob);
+    this.callbacks.onFrame?.(prob, frame);
 
     // Store audio in ring buffer for pre-roll (every frame)
     this.storeAudioRing(float32);

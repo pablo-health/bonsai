@@ -12,6 +12,7 @@ import { IsolatedScriptExecutor } from "./IsolatedScriptExecutor";
 import { HistoryBuilder } from "./HistoryBuilder";
 import { isActionActive } from "../../utils/actions";
 import { parseIntakeDefinition, intakeState, type IntakeState } from "./intakeSequence";
+import { noiseFor, type NoiseState } from "../audio/NoiseFloorTracker";
 import { ActionClassificationResult } from "../../types/classification";
 import type { KnowledgeCategoryResponse } from "../../http/contracts/knowledge";
 import type { TimeContext, CalendarDay } from "../../types/TimeContext";
@@ -134,6 +135,13 @@ export type ConversationContext = {
    * that has not opted in.
    */
   intake?: IntakeState;
+
+  /**
+   * How loud the room is, from the VAD's non-speech frames, on a voice call with server VAD.
+   * `noise.band` is 'quiet' | 'hard' | 'noisy' on thresholds measured against the 2026-08
+   * corpus (NoiseFloorTracker.ts). Undefined on text channels and before the first block.
+   */
+  noise?: NoiseState;
 
   /** User profile data */
   userProfile: Record<string, any>;
@@ -554,6 +562,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: stage?.agent?.prompt,
@@ -619,6 +628,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -697,6 +707,7 @@ export class ConversationContextBuilder {
        vars: conversation.stageVars[conversation.stageId] || {},
        stageVars: conversation.stageVars,
        intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
        userProfile: user?.profile || {},
        consts: project?.constants || {},
        agent: (stage as any).agent?.prompt,
@@ -766,6 +777,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -854,6 +866,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -938,6 +951,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -1110,6 +1124,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: user?.profile || {},
       consts: project?.constants || {},
       agent: (stage as any).agent?.prompt,
@@ -1185,6 +1200,7 @@ export class ConversationContextBuilder {
       vars: conversation.stageVars[conversation.stageId] || {},
       stageVars: conversation.stageVars,
       intake: this.buildIntakeContext(stage, conversation.stageVars[conversation.stageId] || {}),
+      noise: noiseFor(conversation.id),
       userProfile: userProfile || {}, // Not loaded in raw context
       consts,
       history: [], // Not loaded in raw context
