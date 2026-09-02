@@ -1704,11 +1704,15 @@ export class LiveKitChannelHost {
       if (eventType !== 'conversation_end' && eventType !== 'conversation_aborted') return;
       logger.info({ roomName, eventType }, 'LiveKit: the conversation is over, hanging up once the goodbye has played');
 
-      // Waits for the goodbye to drain, exactly as LiveKitConnection's own handler does - the
-      // sentence is still in the audio queue when this event arrives, and dropping the leg now
-      // would cut it off mid-word, which is a worse ending than none.
-      void audioSource.waitForPlayout()
-        .then(async () => {
+      // Waits for the goodbye to REACH THE CALLER, exactly as LiveKitConnection's own handler
+      // does. Not `waitForPlayout` alone: that reports the source's queue, which reads empty
+      // between frames while a chunk loop still holds the rest of the sentence, and says nothing
+      // about the leg past the source. On 2026-08-31 it resolved 300ms after the last byte of
+      // "Take care." was synthesised, and the caller heard the goodbye cut off.
+      const connection = this.activeCalls.get(roomName)?.connection;
+      void (connection ? connection.drainOutbound() : audioSource.waitForPlayout().then(() => undefined))
+        .then(async (drained) => {
+          if (drained) logger.info({ roomName, ...drained }, 'LiveKit: goodbye drained');
           // REMOVING THE CALLER IS WHAT HANGS UP THE PHONE. The connection's handler calls
           // room.disconnect(), which disconnects the AGENT and nothing else: the caller's SIP
           // participant stays, the room stays alive, and the carrier holds the line. From the

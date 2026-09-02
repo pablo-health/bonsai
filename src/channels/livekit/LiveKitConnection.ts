@@ -59,6 +59,37 @@ const QUEUE_HIGH_WATER_MS = 800;
 const STALL_MS = 400;
 
 /**
+ * How long after the source has played out a goodbye the line is held before it is dropped.
+ *
+ * `waitForPlayout` answers for the source's own queue and nothing past it: the WebRTC leg, the
+ * SIP bridge and the carrier each hold a little audio in flight, and none of it is visible here.
+ * On 2026-08-31 the caller was removed 300ms after the last byte of "Take care." was synthesised,
+ * and heard it cut off. A measured guess, deliberately generous - re-measure it against a
+ * dual-channel Twilio recording (`hear_it.py --collect`) rather than tuning it by ear.
+ */
+export const PSTN_TAIL_MS = 700;
+
+/**
+ * The most any drain will wait, whatever the accounting says.
+ *
+ * A stuck counter or a source that never reports empty must not leave the line open forever with
+ * nobody listening. Long enough for the longest goodbye this line speaks, and short enough that
+ * a fault reads as a late hang-up rather than a dead line.
+ */
+export const DRAIN_BOUND_MS = 15_000;
+
+/** The clock the playout accounting reads. Replaced in tests so a drain can be measured without waiting it out. */
+export interface DrainClock {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const REAL_CLOCK: DrainClock = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+/**
  * Splits a PCM payload into transport-sized frames.
  *
  * Handing a whole vendor chunk to the source as ONE frame works right up until the vendor sends a
@@ -130,6 +161,22 @@ export class LiveKitConnection implements IClientConnection {
   private hasSpoken = false;
 
   /**
+   * Audio captured into the source since the current turn's first frame, in milliseconds, and
+   * the wall-clock at which that first frame went in. Together they say how much of the turn
+   * can possibly have played: the source paces to real time, so what has played is bounded by
+   * elapsed wall-clock, and the difference is what is still to come.
+   */
+  private pushedMs = 0;
+  private firstCaptureAt = 0;
+  /**
+   * Chunk loops still handing frames to the source. `waitForPlayout` sees the source's queue and
+   * nothing else, so between one frame and the next the queue can read empty while a loop still
+   * holds seconds of a sentence. A drain has to wait for these first.
+   */
+  private inFlightChunks = 0;
+  private inFlightWaiters: Array<() => void> = [];
+
+  /**
    * Whether it is safe to write non-conversational audio into this connection right now.
    *
    * False while the agent is mid-turn, and false before it has said anything at all. Both
@@ -167,6 +214,8 @@ export class LiveKitConnection implements IClientConnection {
      * recording that will not stop is worse than never playing one.
      */
     private readonly onUserInterrupt?: () => void,
+    /** Injected for tests; the default is the real clock. Drives the playout accounting. */
+    private readonly clock: DrainClock = REAL_CLOCK,
   ) {}
 
   /**
@@ -201,6 +250,12 @@ export class LiveKitConnection implements IClientConnection {
         if (msg.flushBuffer !== false) this.flush();
         this.lastFrameAt = 0;
         this.worstGapMs = 0;
+        // A filler turn (flushBuffer false) continues into the reply, so its audio counts toward
+        // the same turn; only a fresh turn restarts the accounting.
+        if (msg.flushBuffer !== false) {
+          this.pushedMs = 0;
+          this.firstCaptureAt = 0;
+        }
         break;
       }
       case 'abort_ai_generation_output': {
@@ -228,13 +283,16 @@ export class LiveKitConnection implements IClientConnection {
         // mid-sentence: the whole point of flushing is that what was already generated does not
         // keep playing, and a loop that ignored it would reintroduce exactly that.
         const generation = this.generation;
+        this.inFlightChunks += 1;
         try {
           for (const frame of pcmToAudioFrames(msg.audioData, pcmSampleRate(msg.audioFormat))) {
             if (this.muted || this.generation !== generation) break;
             await this.waitForQueueRoom(generation);
             if (this.muted || this.generation !== generation) break;
             this.noteFrameTiming();
+            if (this.firstCaptureAt === 0) this.firstCaptureAt = this.clock.now();
             await this.audioSource.captureFrame(frame);
+            this.pushedMs += (frame.samplesPerChannel * 1000) / frame.sampleRate;
           }
         } catch (error) {
           // The facts that distinguish the causes, because the FFI error text does not: an
@@ -249,6 +307,13 @@ export class LiveKitConnection implements IClientConnection {
             queuedMs: this.audioSource.queuedDuration,
             muted: this.muted,
           }, 'LiveKit: captureFrame failed, dropping the rest of this chunk');
+        } finally {
+          this.inFlightChunks -= 1;
+          if (this.inFlightChunks === 0) {
+            const waiters = this.inFlightWaiters;
+            this.inFlightWaiters = [];
+            for (const wake of waiters) wake();
+          }
         }
         break;
       }
@@ -270,10 +335,10 @@ export class LiveKitConnection implements IClientConnection {
         if (msg.eventType !== 'conversation_end') break;
 
         const generation = this.generation;
-        this.audioSource.waitForPlayout()
-          .then(async () => {
+        this.drainOutbound()
+          .then(async (drained) => {
             if (this.closed || generation !== this.generation) return;
-            logger.info({ sessionId: this.session?.id }, 'LiveKit: conversation ended, hanging up');
+            logger.info({ sessionId: this.session?.id, ...drained }, 'LiveKit: conversation ended, hanging up');
             await this.close();
           })
           .catch((error) => logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: could not hang up after the conversation ended'));
@@ -397,6 +462,67 @@ export class LiveKitConnection implements IClientConnection {
       if (gap > this.worstGapMs) this.worstGapMs = gap;
     }
     this.lastFrameAt = now;
+  }
+
+  /**
+   * Waits until everything the agent has said this turn has actually reached the caller's ear.
+   *
+   * Three waits, in order, each covering something the one before cannot see:
+   * 1. Chunk loops still handing frames to the source. The source's queue can read empty
+   *    between frames while a loop holds the rest of a sentence.
+   * 2. `waitForPlayout`, the source's own queue draining.
+   * 3. The remainder implied by the accounting - audio captured minus wall-clock elapsed since
+   *    the first frame - plus PSTN_TAIL_MS for what sits in flight past the source.
+   *
+   * Bounded by DRAIN_BOUND_MS in total, so a fault here is a late hang-up and never a line left
+   * open with nobody on it. Abandons early, without the tail, if the turn is superseded: a
+   * barge-in has already flushed whatever this was waiting for.
+   *
+   */
+  async drainOutbound(): Promise<{ pushedMs: number; elapsedMs: number; waitedMs: number; boundHit: boolean }> {
+    const clock = this.clock;
+    const generation = this.generation;
+    const startedAt = clock.now();
+    const deadline = startedAt + DRAIN_BOUND_MS;
+    let boundHit = false;
+
+    // 1. Loops still pushing.
+    while (this.inFlightChunks > 0 && this.generation === generation && !this.closed) {
+      if (clock.now() >= deadline) { boundHit = true; break; }
+      await Promise.race([
+        new Promise<void>((resolve) => this.inFlightWaiters.push(resolve)),
+        clock.sleep(Math.max(1, Math.min(CAPTURE_FRAME_MS * 5, deadline - clock.now()))),
+      ]);
+    }
+
+    // 2. The source's own queue. Polled against the deadline rather than raced against one long
+    //    sleep, so a playout that finishes first leaves no stray timer behind to flip the bound.
+    if (!boundHit && this.generation === generation && !this.closed) {
+      let playoutDone = false;
+      const playout = this.audioSource.waitForPlayout().then(
+        () => { playoutDone = true; },
+        (error) => {
+          logger.warn({ error, sessionId: this.session?.id }, 'LiveKit: waitForPlayout failed during drain');
+          playoutDone = true;
+        },
+      );
+      while (!playoutDone && this.generation === generation && !this.closed) {
+        if (clock.now() >= deadline) { boundHit = true; break; }
+        await Promise.race([playout, clock.sleep(Math.max(1, Math.min(CAPTURE_FRAME_MS * 5, deadline - clock.now())))]);
+      }
+    }
+
+    // 3. What the accounting says has not had time to play, plus the carrier's share.
+    const elapsedMs = this.firstCaptureAt === 0 ? 0 : clock.now() - this.firstCaptureAt;
+    const pushedMs = Math.round(this.pushedMs);
+    if (!boundHit && this.generation === generation && !this.closed) {
+      const remainingMs = Math.max(0, pushedMs - elapsedMs) + PSTN_TAIL_MS;
+      const allowedMs = Math.max(0, deadline - clock.now());
+      if (remainingMs > allowedMs) boundHit = true;
+      await clock.sleep(Math.min(remainingMs, allowedMs));
+    }
+
+    return { pushedMs, elapsedMs: Math.round(elapsedMs), waitedMs: Math.round(clock.now() - startedAt), boundHit };
   }
 
   /**
