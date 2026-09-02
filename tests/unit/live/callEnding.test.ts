@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'mocha';
 import { expect } from 'chai';
-import { decideCallEnding, endsWithAQuestion } from '../../../src/services/live/callEnding';
+import { decideCallEnding, endsWithAQuestion, isNonAnswer, MAX_END_VETOES } from '../../../src/services/live/callEnding';
 
 /**
  * On 2026-08-27 a call ended because one utterance was classified as the caller being finished.
@@ -17,10 +17,22 @@ describe('decideCallEnding', () => {
     expect(decideCallEnding('okay', false)).to.equal('confirm-first');
   });
 
-  it('confirms first when nothing was heard at all', () => {
-    expect(decideCallEnding(null, false)).to.equal('confirm-first');
-    expect(decideCallEnding('', false)).to.equal('confirm-first');
-    expect(decideCallEnding('[unintelligible]', false)).to.equal('confirm-first');
+  it('carries on when nothing was heard at all', () => {
+    // On 2026-09-01 a caller mid-way through spelling her surname was talked over, the turn came
+    // back as [unintelligible], and the classifier called her finished. A placeholder is the
+    // recogniser reporting no words - not a goodbye, and not a reason to ask "anything else?".
+    expect(decideCallEnding(null, false)).to.equal('ignore');
+    expect(decideCallEnding('', false)).to.equal('ignore');
+    expect(decideCallEnding('[unintelligible]', false)).to.equal('ignore');
+    expect(decideCallEnding('[silence]', false)).to.equal('ignore');
+    expect(decideCallEnding('  [Silence] ', false)).to.equal('ignore');
+  });
+
+  it('still ends on silence once the closing question has been put', () => {
+    // The closing question is the exit from the placeholder rule: a caller who says nothing to
+    // "is there anything else?" is done, and this is what keeps a silent line from never ending.
+    expect(decideCallEnding('[silence]', true)).to.equal('end');
+    expect(decideCallEnding('[unintelligible]', true, true)).to.equal('end');
   });
 
   it('ends straight away on a plain goodbye', () => {
@@ -96,5 +108,26 @@ describe('decideCallEnding cannot become a call that never ends', () => {
     // answering it would read as mid-exchange and the call could never be ended at all.
     expect(decideCallEnding('mm, I think so', true, true)).to.equal('end');
     expect(decideCallEnding(null, true, true)).to.equal('end');
+  });
+
+  it('bounds the veto so a call that keeps being waved on eventually gets the closing question', () => {
+    // The runner counts consecutive ignores against this. It is the exit from the ignore rule,
+    // so it must be small and it must exist.
+    expect(MAX_END_VETOES).to.be.a('number');
+    expect(MAX_END_VETOES).to.be.within(2, 5);
+  });
+});
+
+describe('isNonAnswer', () => {
+  it('recognises every placeholder the recogniser hands back', () => {
+    for (const p of ['[silence]', '[unintelligible]', '[unclear]', '[inaudible]', '[noise]', '', '   ', null, undefined]) {
+      expect(isNonAnswer(p), String(p)).to.equal(true);
+    }
+  });
+
+  it('does not mistake a short real answer for a placeholder', () => {
+    for (const a of ['L E.', 'Kurt', 'yes', 'no', '[laughs] sure']) {
+      expect(isNonAnswer(a), a).to.equal(false);
+    }
   });
 });

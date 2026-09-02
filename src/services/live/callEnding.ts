@@ -17,6 +17,32 @@ const EXPLICIT_FAREWELL =
   /\b(?:good\s?bye|bye now|bye bye|bye|take care|have a good (?:one|day|night)|that(?:'s| is) (?:all|everything|it)|that(?:'s| is) all i (?:needed|wanted)|no(?:pe)?,? (?:that(?:'s| is) (?:all|everything|it)|thank you|thanks|(?:i(?:'m| am) )?(?:good|all set)|you(?:'ve| have) covered it)|i(?:'m| am) all set|all set,? thanks|nothing else)\b/i;
 
 /**
+ * Transcripts that stand in for "nothing usable was heard".
+ *
+ * These are what the recogniser hands back when a turn produced no words it believed in. They
+ * are not the caller's words at all, so they cannot be evidence of anything - least of all that
+ * the caller wants to leave. The same set that the intake refuses to store as a slot value.
+ */
+const NON_ANSWERS = new Set(['[silence]', '[unclear]', '[unintelligible]', '[inaudible]', '[noise]']);
+
+/** Whether a transcript is a recogniser placeholder rather than something the caller said. */
+export function isNonAnswer(utterance: string | null | undefined): boolean {
+  const text = (utterance ?? '').trim();
+  return text === '' || NON_ANSWERS.has(text.toLowerCase());
+}
+
+/**
+ * How many consecutive end requests the runner may wave away before it stops trusting its own
+ * veto and asks the closing question instead.
+ *
+ * The veto exists because the classifier is too generous about endings. But a veto with no exit
+ * is a call that cannot end - the mistake this module has already made once, in the other
+ * direction. Three vetoes in a row without a real answer arriving means the exchange is not
+ * progressing, and the closing question has an exit: answering it ends the call.
+ */
+export const MAX_END_VETOES = 3;
+
+/**
  * What to do when an action asks to end the call.
  *
  * `end_conversation` is irreversible in the way that matters on a phone: the caller has to dial
@@ -57,6 +83,13 @@ export function decideCallEnding(
   // and the call could never end - a suppression path with no exit, which is the same mistake
   // this file was written to correct.
   if (alreadyAsked) return 'end';
+
+  // Nothing usable was heard. A placeholder is the recogniser's report that it has no words,
+  // and on 2026-09-01 a `[unintelligible]` turn - a caller mid-way through spelling her surname,
+  // talked over by the agent - was classified as her being finished. Silence is never a goodbye.
+  // It is also never a reason to ask "is there anything else?", which would answer a question
+  // nobody asked; the silence ladder already re-prompts, so the right move is to carry on.
+  if (isNonAnswer(lastUserUtterance)) return 'ignore';
 
   if (agentAskedAQuestion) return 'ignore';
 

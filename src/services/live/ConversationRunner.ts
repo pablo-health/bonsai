@@ -22,7 +22,7 @@ import { buildLlmUsage, LlmProviderInfo, LlmUsageMetadata } from '../../utils/ll
 import { IAsrProvider, TextChunk } from "../providers/asr/IAsrProvider";
 import { assessTranscriptConfidence } from "./asrNoiseGate";
 import { callerFromUserId } from "./callerNumber";
-import { decideCallEnding, endsWithAQuestion, CLOSING_QUESTION } from "./callEnding";
+import { decideCallEnding, endsWithAQuestion, isNonAnswer, CLOSING_QUESTION, MAX_END_VETOES } from "./callEnding";
 import { AsrFeedTap } from "./AsrFeedTap";
 import { isNearField } from "../audio/proximity";
 import { parseIntakeDefinition, intakeState, turnLooksComplete } from "./intakeSequence";
@@ -333,6 +333,12 @@ export class ConversationRunner {
    * barge-in: do the cheap reversible thing first.
    */
   private endConfirmationAsked = false;
+  /**
+   * Consecutive end requests waved away by {@link decideCallEnding}. Reset whenever a turn passes
+   * without an end request. At MAX_END_VETOES the next one is confirmed instead of ignored, so
+   * the veto cannot become a call that never ends.
+   */
+  private endVetoStreak = 0;
 
   /** True when a user barge-in has been detected and we are accumulating continued speech. */
   private isBargeIn = false;
@@ -2207,24 +2213,52 @@ export class ConversationRunner {
     }
 
     if (outcome.shouldEndConversation) {
-      const ending = decideCallEnding(
+      let ending = decideCallEnding(
         this.lastUserUtterance,
         this.endConfirmationAsked,
         endsWithAQuestion(this.lastAgentUtterance),
       );
 
+      // A veto needs an exit. Ignoring the request forever is a call that cannot end, which is
+      // the mistake this file has already made once in the other direction. After enough
+      // consecutive vetoes the closing question is put instead, and answering it ends the call.
+      if (ending === 'ignore' && this.endVetoStreak >= MAX_END_VETOES) {
+        logger.info({ conversationId, endVetoStreak: this.endVetoStreak }, 'End request vetoed too many times in a row - confirming instead');
+        ending = 'confirm-first';
+      }
+
       if (ending === 'ignore') {
-        // The caller was answering something the agent asked. Carry on with the intake rather
-        // than either hanging up or derailing it with "is there anything else?".
+        // The caller was answering something the agent asked, or nothing usable was heard. Carry
+        // on with the intake rather than either hanging up or derailing it with "is there
+        // anything else?". The reply the action generates re-asks the open question by itself,
+        // because the prompt still has the slot open.
+        //
+        // THE VETO HAS TO CLEAR THE FLAG. On 2026-09-01 this branch logged its decision and
+        // returned, and generateResponse read `outcome.shouldEndConversation` off the same object
+        // a moment later and scheduled the hang-up anyway. The caller was spelling her surname.
+        this.endVetoStreak += 1;
+        outcome.shouldEndConversation = false;
+        outcome.endReason = undefined;
         logger.info({
           conversationId,
+          rule: isNonAnswer(this.lastUserUtterance) ? 'nothing-heard' : 'answering-a-question',
+          endVetoStreak: this.endVetoStreak,
           lastAgentUtterance: this.lastAgentUtterance?.slice(-120),
           lastUserUtterance: this.lastUserUtterance,
-        }, 'Asked to end the call while the caller was answering a question - ignoring');
+        }, 'Asked to end the call mid-exchange - ignoring, the reply re-asks');
         return true;
       }
 
       if (ending === 'confirm-first') {
+        // Same rule: the confirmation replaces the hang-up, so the flag must not survive to
+        // generateResponse or the closing question gets asked on the way out the door.
+        this.endVetoStreak = 0;
+        outcome.shouldEndConversation = false;
+        outcome.endReason = undefined;
+        // And the action's own reply is a goodbye - that is what "the caller is finished"
+        // generates - which would follow the closing question and contradict it. The question
+        // is the whole response to this turn.
+        outcome.shouldGenerateResponse = false;
         // Not a goodbye, and nobody has been asked. On 2026-08-27 a single misheard sentence -
         // "I got the fucking apartment." - was classified as the caller being finished and the
         // call was ended on them, having taken nothing and given nothing. So ask, and let the
@@ -2247,14 +2281,17 @@ export class ConversationRunner {
         return true;
       }
 
-      logger.info({ conversationId }, `Conversation marked for ending by action execution`);
+      logger.info({ conversationId, rule: this.endConfirmationAsked ? 'closing-question-answered' : 'explicit-farewell' }, `Conversation marked for ending by action execution`);
+      this.endVetoStreak = 0;
       this.stageData.shouldEndConversation = true; // Flag to indicate conversation should end after current processing completes
       return true;
     }
 
     // The caller answered the closing question with something other than an ending, so the call
-    // is live again and the next request to end it starts from scratch.
+    // is live again and the next request to end it starts from scratch. A turn with no end
+    // request at all also breaks a veto streak: the exchange is progressing.
     this.endConfirmationAsked = false;
+    this.endVetoStreak = 0;
 
     logger.debug({ conversationId, hasModifiedVars: outcome.hasModifiedVars, hasModifiedUserInput: outcome.hasModifiedUserInput, hasModifiedUserProfile: outcome.hasModifiedUserProfile, shouldEndConversation: outcome.shouldEndConversation, shouldAbortConversation: outcome.shouldAbortConversation }, `Action outcome applied successfully`);
     return true;
