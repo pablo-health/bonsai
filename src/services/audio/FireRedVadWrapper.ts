@@ -639,6 +639,14 @@ export class FireRedVadWrapper {
 
   private pendingBuffer: Buffer = Buffer.alloc(0);
   private processingQueue: Promise<void> = Promise.resolve();
+  /**
+   * How far the inference chain is behind the audio. One ONNX run per 10 ms frame; if a run
+   * averages more than 10 ms the chain never catches up, every decision arrives later and later,
+   * and a speech start can be reported after the utterance has ended. Logged every 100 frames.
+   */
+  private framesQueued = 0;
+  private framesProcessed = 0;
+  private runMsTotal = 0;
 
   private isCollecting = false;
   private speechAudioFloat: Float32Array = new Float32Array(0);
@@ -707,6 +715,7 @@ export class FireRedVadWrapper {
       const frame = this.pendingBuffer.subarray(0, FIRERED_FRAME_SAMPLES * 2);
       this.pendingBuffer = this.pendingBuffer.subarray(FIRERED_FRAME_SAMPLES * 2);
 
+      this.framesQueued += 1;
       this.processingQueue = this.processingQueue.then(() =>
         this.processFrame(frame),
       ).catch((err) => {
@@ -729,7 +738,18 @@ export class FireRedVadWrapper {
       caches_in: new ort.Tensor('float32', this.cache, [FIRERED_CACHE_LAYERS, 1, FIRERED_CACHE_HIDDEN, FIRERED_CACHE_LEN]),
     };
 
+    const runStarted = Date.now();
     const result = await this.session.run(inputs);
+    this.runMsTotal += Date.now() - runStarted;
+    this.framesProcessed += 1;
+    if (this.framesProcessed % 100 === 0) {
+      const behind = this.framesQueued - this.framesProcessed;
+      logger.info({
+        framesProcessed: this.framesProcessed, behind, lagMs: behind * FBANK_FRAME_SHIFT_MS,
+        avgRunMs: Math.round((this.runMsTotal / 100) * 10) / 10,
+      }, 'FireRedVAD inference pace');
+      this.runMsTotal = 0;
+    }
     const prob = (result.probs.data as Float32Array)[0];
     const newCache = result.caches_out.data as Float32Array;
 
